@@ -1,17 +1,16 @@
-from typing import Any, List
+from typing import Any, List, Dict
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, HTTPException, UploadFile, File, status, Depends
 
-from app import crud, schemas
-from app.db.session import get_db
+from app.models.supabase_models import Producto as ProductoModel
+from app import schemas
+from app.db.supabase_client import get_supabase_client
 
 router = APIRouter()
 
 
 @router.get("/", response_model=List[schemas.Producto])
-def get_productos(
-    db: Session = Depends(get_db),
+async def get_productos(
     skip: int = 0,
     limit: int = 100,
     only_active: bool = True,
@@ -19,93 +18,131 @@ def get_productos(
     """
     Obtener listado de productos en stock
     """
-    productos = crud.producto.get_multi(
-        db, skip=skip, limit=limit, only_active=only_active
-    )
-    return productos
+    supabase = get_supabase_client()
+    query = supabase.table("productos").select("*")
+    
+    if only_active:
+        query = query.eq("activo", True)
+    
+    response = query.range(skip, skip + limit - 1).execute()
+    return response.data
 
 
 @router.post("/", response_model=schemas.Producto)
-def create_producto(
+async def create_producto(
     *,
-    db: Session = Depends(get_db),
     producto_in: schemas.ProductoCreate,
 ) -> Any:
     """
     Crear un nuevo producto
     """
+    supabase = get_supabase_client()
+    
+    # Check if product code already exists
     if producto_in.codigo:
-        producto = crud.producto.get_by_codigo(db, codigo=producto_in.codigo)
-        if producto:
+        response = supabase.table("productos").select("*").eq("codigo", producto_in.codigo).execute()
+        if response.data and len(response.data) > 0:
             raise HTTPException(
                 status_code=400,
                 detail="Ya existe un producto con este código.",
             )
-    producto = crud.producto.create(db, obj_in=producto_in)
-    return producto
+    
+    # Create product
+    producto_data = producto_in.model_dump()
+    response = supabase.table("productos").insert(producto_data).execute()
+    
+    if not response.data or len(response.data) == 0:
+        raise HTTPException(
+            status_code=500,
+            detail="Error al crear el producto",
+        )
+    
+    return response.data[0]
 
 
 @router.get("/{producto_id}", response_model=schemas.Producto)
-def get_producto(
+async def get_producto(
     *,
-    db: Session = Depends(get_db),
     producto_id: int,
 ) -> Any:
     """
     Obtener un producto por ID
     """
-    producto = crud.producto.get(db, producto_id=producto_id)
-    if not producto:
+    supabase = get_supabase_client()
+    response = supabase.table("productos").select("*").eq("id", producto_id).execute()
+    
+    if not response.data or len(response.data) == 0:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Producto no encontrado",
         )
-    return producto
+    
+    return response.data[0]
 
 
 @router.put("/{producto_id}", response_model=schemas.Producto)
-def update_producto(
+async def update_producto(
     *,
-    db: Session = Depends(get_db),
     producto_id: int,
     producto_in: schemas.ProductoUpdate,
 ) -> Any:
     """
     Actualizar un producto
     """
-    producto = crud.producto.get(db, producto_id=producto_id)
-    if not producto:
+    supabase = get_supabase_client()
+    
+    # Check if product exists
+    response = supabase.table("productos").select("*").eq("id", producto_id).execute()
+    if not response.data or len(response.data) == 0:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Producto no encontrado",
         )
-    producto = crud.producto.update(db, db_obj=producto, obj_in=producto_in)
-    return producto
+    
+    # Update product
+    producto_data = producto_in.model_dump(exclude_unset=True)
+    response = supabase.table("productos").update(producto_data).eq("id", producto_id).execute()
+    
+    if not response.data or len(response.data) == 0:
+        raise HTTPException(
+            status_code=500,
+            detail="Error al actualizar el producto",
+        )
+    
+    return response.data[0]
 
 
 @router.delete("/{producto_id}", response_model=schemas.Producto)
-def delete_producto(
+async def delete_producto(
     *,
-    db: Session = Depends(get_db),
     producto_id: int,
 ) -> Any:
     """
     Eliminar un producto
     """
-    producto = crud.producto.get(db, producto_id=producto_id)
-    if not producto:
+    supabase = get_supabase_client()
+    
+    # Check if product exists
+    response = supabase.table("productos").select("*").eq("id", producto_id).execute()
+    if not response.data or len(response.data) == 0:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Producto no encontrado",
         )
-    producto = crud.producto.remove(db, producto_id=producto_id)
-    return producto
+    
+    # Delete product (or mark as inactive)
+    # Option 1: Physical deletion
+    # response = supabase.table("productos").delete().eq("id", producto_id).execute()
+    
+    # Option 2: Logical deletion (recommended)
+    response = supabase.table("productos").update({"activo": False}).eq("id", producto_id).execute()
+    
+    return response.data[0]
 
 
 @router.post("/importar")
 async def importar_productos(
     file: UploadFile = File(...),
-    db: Session = Depends(get_db),
 ) -> Any:
     """
     Importar productos desde un archivo Excel

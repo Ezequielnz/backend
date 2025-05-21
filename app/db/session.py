@@ -1,20 +1,31 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+import ssl
 
 from app.core.config import settings
 
-# Usar la URL de la base de datos de la configuración
+# Get the database URL from settings
 SQLALCHEMY_DATABASE_URL = settings.DATABASE_URL
 
-# Configuración del motor de base de datos
+# Configure database engine
 connect_args = {}
 if SQLALCHEMY_DATABASE_URL.startswith("sqlite"):
-    # Sólo para SQLite, necesitamos este argumento
+    # Only for SQLite, we need this argument
     connect_args = {"check_same_thread": False}
+elif SQLALCHEMY_DATABASE_URL.startswith("postgresql"):
+    # For PostgreSQL with Supabase Session Pooler, configure SSL
+    connect_args = {
+        "sslmode": "require",
+        "ssl_context": ssl.create_default_context()
+    }
 
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL, 
-    connect_args=connect_args
+    connect_args=connect_args,
+    pool_size=5,  # Connection pool size
+    max_overflow=10,  # Maximum overflow connections
+    pool_timeout=30,  # Timeout for getting a connection from the pool
+    pool_recycle=1800  # Recycle connections after 30 minutes
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
