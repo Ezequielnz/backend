@@ -3,7 +3,7 @@ from typing import List, Optional
 from sqlalchemy.orm import Session
 
 from app.models.producto import Producto
-from app.schemas.producto import ProductoCreate, ProductoUpdate
+from app.types.producto import ProductoCreate, ProductoUpdate
 
 
 def get(db: Session, producto_id: int) -> Optional[Producto]:

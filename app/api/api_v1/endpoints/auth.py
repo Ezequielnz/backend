@@ -9,11 +9,12 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.responses import JSONResponse, RedirectResponse
-from pydantic import BaseModel, EmailStr, ValidationError
+from pydantic import EmailStr, ValidationError
 import jwt
 
 from app.db.supabase_client import get_supabase_client
 from app.core.config import settings
+from app.types.auth import Token, UserLogin, UserSignUp
 
 router = APIRouter()
 
@@ -22,24 +23,6 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
 # JWT Secret para firma de tokens (en producción debería estar en variables de entorno)
 JWT_SECRET = "micropymes_secret_key"
-
-class Token(BaseModel):
-    access_token: str
-    token_type: str
-
-
-class UserLogin(BaseModel):
-    email: EmailStr
-    password: str
-
-
-class UserSignUp(BaseModel):
-    email: EmailStr
-    password: str
-    nombre: str
-    apellido: str
-    rol: str = "usuario"  # Default role
-
 
 def generate_token(user_id: str, email: str) -> str:
     """Generar un token JWT para el usuario"""

@@ -3,13 +3,13 @@ from typing import Any, List, Dict
 from fastapi import APIRouter, HTTPException, UploadFile, File, status, Depends
 
 from app.models.supabase_models import Producto as ProductoModel
-from app import schemas
+from app import types
 from app.db.supabase_client import get_supabase_client
 
 router = APIRouter()
 
 
-@router.get("/", response_model=List[schemas.Producto])
+@router.get("/", response_model=List[types.Producto])
 async def get_productos(
     skip: int = 0,
     limit: int = 100,
@@ -28,10 +28,10 @@ async def get_productos(
     return response.data
 
 
-@router.post("/", response_model=schemas.Producto)
+@router.post("/", response_model=types.Producto)
 async def create_producto(
     *,
-    producto_in: schemas.ProductoCreate,
+    producto_in: types.ProductoCreate,
 ) -> Any:
     """
     Crear un nuevo producto
@@ -60,7 +60,7 @@ async def create_producto(
     return response.data[0]
 
 
-@router.get("/{producto_id}", response_model=schemas.Producto)
+@router.get("/{producto_id}", response_model=types.Producto)
 async def get_producto(
     *,
     producto_id: int,
@@ -80,11 +80,11 @@ async def get_producto(
     return response.data[0]
 
 
-@router.put("/{producto_id}", response_model=schemas.Producto)
+@router.put("/{producto_id}", response_model=types.Producto)
 async def update_producto(
     *,
     producto_id: int,
-    producto_in: schemas.ProductoUpdate,
+    producto_in: types.ProductoUpdate,
 ) -> Any:
     """
     Actualizar un producto
@@ -112,7 +112,7 @@ async def update_producto(
     return response.data[0]
 
 
-@router.delete("/{producto_id}", response_model=schemas.Producto)
+@router.delete("/{producto_id}", response_model=types.Producto)
 async def delete_producto(
     *,
     producto_id: int,
