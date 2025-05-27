@@ -9,6 +9,12 @@ from app.api.api_v1.endpoints import productos as productos_router
 from app.api.api_v1.endpoints import clientes as clientes_router
 # Import new endpoint module for reports
 from app.api.api_v1.endpoints import reportes as reportes_router
+# Import new endpoint modules for subscription system
+from app.api.api_v1.endpoints import planes as planes_router
+from app.api.api_v1.endpoints import suscripciones as suscripciones_router
+from app.api.api_v1.endpoints import webhooks as webhooks_router
+# Import new endpoint module for onboarding
+from app.api.api_v1.endpoints import onboarding as onboarding_router
 
 api_router = APIRouter()
 
@@ -27,6 +33,13 @@ api_router.include_router(productos_router.router, prefix="/productos", tags=["p
 api_router.include_router(clientes_router.router, prefix="/clientes", tags=["clientes"])
 # Add new router for reports
 api_router.include_router(reportes_router.router, prefix="/reportes", tags=["reportes"])
+
+# Add new routers for subscription system
+api_router.include_router(planes_router.router, prefix="/planes", tags=["planes"])
+api_router.include_router(suscripciones_router.router, prefix="/suscripciones", tags=["suscripciones"])
+api_router.include_router(webhooks_router.router, prefix="/webhooks", tags=["webhooks"])
+# Add new router for onboarding
+api_router.include_router(onboarding_router.router, prefix="/onboarding", tags=["onboarding"])
 
 # Note on /stock vs /productos:
 # The existing `stock.router` is at prefix "/stock".

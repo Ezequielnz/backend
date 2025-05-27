@@ -5,7 +5,8 @@ import sys
 from app.api.api_v1.api import api_router
 from app.core.config import settings
 from app.db.supabase_client import get_supabase_client, check_supabase_connection
-from app.api.middleware.supabase_auth import SupabaseAuthMiddleware # Import the middleware
+from app.api.middleware.supabase_auth import SupabaseAuthMiddleware
+from app.api.middleware.plan_limits import PlanLimitsMiddleware # Import PlanLimitsMiddleware
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -24,6 +25,10 @@ app.add_middleware(
 # Add SupabaseAuthMiddleware
 # This middleware will process requests and make request.state.supabase_user available
 app.add_middleware(SupabaseAuthMiddleware)
+
+# Add PlanLimitsMiddleware (placeholder) - runs after SupabaseAuthMiddleware
+# This middleware is currently a placeholder and will just log information.
+app.add_middleware(PlanLimitsMiddleware)
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
 
