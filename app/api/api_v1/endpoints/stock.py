@@ -2,6 +2,9 @@ from typing import Any, List, Dict
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, status, Depends
 
+# Import dependencies and schemas
+from app.api import deps
+from app.schemas.usuario import Usuario as CurrentUserSchema # To type hint current_user
 from app.models.supabase_models import Producto as ProductoModel
 from app import schemas
 from app.db.supabase_client import get_supabase_client
@@ -14,9 +17,10 @@ async def get_productos(
     skip: int = 0,
     limit: int = 100,
     only_active: bool = True,
+    current_user: CurrentUserSchema = Depends(deps.get_current_user) # Protected
 ) -> Any:
     """
-    Obtener listado de productos en stock
+    Obtener listado de productos en stock. Requiere autenticación.
     """
     supabase = get_supabase_client()
     query = supabase.table("productos").select("*")
@@ -32,9 +36,10 @@ async def get_productos(
 async def create_producto(
     *,
     producto_in: schemas.ProductoCreate,
+    current_user: CurrentUserSchema = Depends(deps.get_current_user) # Protected
 ) -> Any:
     """
-    Crear un nuevo producto
+    Crear un nuevo producto. Requiere autenticación.
     """
     supabase = get_supabase_client()
     
@@ -64,9 +69,10 @@ async def create_producto(
 async def get_producto(
     *,
     producto_id: int,
+    current_user: CurrentUserSchema = Depends(deps.get_current_user) # Protected
 ) -> Any:
     """
-    Obtener un producto por ID
+    Obtener un producto por ID. Requiere autenticación.
     """
     supabase = get_supabase_client()
     response = supabase.table("productos").select("*").eq("id", producto_id).execute()
@@ -85,9 +91,10 @@ async def update_producto(
     *,
     producto_id: int,
     producto_in: schemas.ProductoUpdate,
+    current_user: CurrentUserSchema = Depends(deps.get_current_user) # Protected
 ) -> Any:
     """
-    Actualizar un producto
+    Actualizar un producto. Requiere autenticación.
     """
     supabase = get_supabase_client()
     
@@ -116,9 +123,10 @@ async def update_producto(
 async def delete_producto(
     *,
     producto_id: int,
+    current_user: CurrentUserSchema = Depends(deps.get_current_user) # Protected
 ) -> Any:
     """
-    Eliminar un producto
+    Eliminar un producto. Requiere autenticación.
     """
     supabase = get_supabase_client()
     
@@ -143,9 +151,10 @@ async def delete_producto(
 @router.post("/importar")
 async def importar_productos(
     file: UploadFile = File(...),
+    current_user: CurrentUserSchema = Depends(deps.get_current_user) # Protected
 ) -> Any:
     """
-    Importar productos desde un archivo Excel
+    Importar productos desde un archivo Excel. Requiere autenticación.
     """
     # Aquí iría la lógica para importar productos desde Excel
     # Por ahora devolvemos una respuesta básica

@@ -14,6 +14,8 @@ import jwt
 
 from app.db.supabase_client import get_supabase_client
 from app.core.config import settings
+from app.api import deps # Import deps module
+from app.schemas.usuario import Usuario as UserSchema # Import the User schema
 
 router = APIRouter()
 
@@ -194,36 +196,23 @@ async def signup(user_data: UserSignUp) -> Any:
             detail=f"Error al crear usuario: {str(e)}",
         )
 
+# The old /me endpoint is replaced by this new one
+# @router.get("/me", response_model=dict)
+# async def read_users_me(token: str = Depends(oauth2_scheme)) -> Any:
+# ... (old implementation removed) ...
 
-@router.get("/me", response_model=dict)
-async def read_users_me(token: str = Depends(oauth2_scheme)) -> Any:
+@router.get("/me", response_model=UserSchema) # Use the User schema from app.schemas.usuario
+async def read_current_user_me(
+    current_user: UserSchema = Depends(deps.get_current_user) # Use the new dependency
+) -> Any:
     """
-    Get current user info
+    Get current authenticated user's information.
+    The user information is retrieved by the get_current_user dependency,
+    which combines Supabase Auth data with data from the 'usuarios' table.
     """
-    try:
-        supabase = get_supabase_client()
-        
-        # Obtener información del usuario con el token
-        response = supabase.auth.get_user(token)
-        
-        if not response.user:
-            raise Exception("Usuario no encontrado en Supabase")
-        
-        # Obtener información adicional del usuario de la tabla usuarios
-        user_id = response.user.id
-        user_info_response = supabase.table("usuarios").select("*").eq("id", user_id).execute()
-        
-        if not user_info_response.data or len(user_info_response.data) == 0:
-            return {"email": response.user.email}
-        
-        return user_info_response.data[0]
-    except Exception as e:
-        print(f"Get user error: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Error de autenticación: {str(e)}",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    # current_user already contains the combined data as per get_current_user logic
+    # No need to fetch from Supabase here again.
+    return current_user
 
 
 @router.get("/activate/{email}")

@@ -33,11 +33,14 @@ class ProductoUpdate(ProductoBase):
     categoria_id: Optional[int] = None
 
 
+from app.schemas.categoria import Categoria as CategoriaSchema # Import Categoria schema
+
 # Propiedades al leer desde la base de datos
 class Producto(ProductoBase):
     id: int
     creado_en: Optional[datetime] = None
     actualizado_en: Optional[datetime] = None
+    categoria: Optional[CategoriaSchema] = None # For nested category details
 
     class Config:
         from_attributes = True 

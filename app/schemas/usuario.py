@@ -3,6 +3,7 @@ from pydantic import BaseModel, EmailStr
 from datetime import datetime
 
 
+from uuid import UUID # Import UUID
 # Shared properties
 class UsuarioBase(BaseModel):
     email: EmailStr
@@ -27,7 +28,7 @@ class UsuarioUpdate(UsuarioBase):
 
 # Properties shared by models stored in DB
 class UsuarioInDBBase(UsuarioBase):
-    id: int
+    id: str # Changed from int to str to accommodate Supabase UUIDs
     creado_en: Optional[datetime] = None
     ultimo_acceso: Optional[datetime] = None
 

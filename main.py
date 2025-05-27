@@ -5,6 +5,7 @@ import sys
 from app.api.api_v1.api import api_router
 from app.core.config import settings
 from app.db.supabase_client import get_supabase_client, check_supabase_connection
+from app.api.middleware.supabase_auth import SupabaseAuthMiddleware # Import the middleware
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -19,6 +20,10 @@ app.add_middleware(
     allow_methods=["*"],  # Permitir todos los métodos
     allow_headers=["*"],  # Permitir todos los headers
 )
+
+# Add SupabaseAuthMiddleware
+# This middleware will process requests and make request.state.supabase_user available
+app.add_middleware(SupabaseAuthMiddleware)
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
 
