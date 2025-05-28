@@ -1,13 +1,17 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Depends, Query
+from typing import Optional
+from app.dependencies import verify_task_view_permission
 
 router = APIRouter()
 
-@router.get("/")
-async def get_tareas():
+@router.get("/", dependencies=[Depends(verify_task_view_permission)])
+async def get_tareas(negocio_id: str = Query(..., description="ID del negocio para filtrar tareas")):
     """
-    Obtener listado de tareas
+    Obtener listado de tareas para un negocio específico (requiere permiso puede_ver_tareas)
     """
-    return {"message": "Listado de tareas"}
+    # Here you would add the logic to fetch tasks filtered by negocio_id
+    # For now, it just returns a success message if the dependency passes
+    return {"message": f"Listado de tareas para el negocio {negocio_id}"}
 
 @router.post("/")
 async def create_tarea():

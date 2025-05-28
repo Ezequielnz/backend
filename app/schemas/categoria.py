@@ -1,11 +1,12 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
 
 class CategoriaBase(BaseModel):
     """Base schema for category data."""
-    nombre: str = Field(..., min_length=1, max_length=100)
-    descripcion: Optional[str] = Field(None, max_length=500)
+    nombre: str
+    descripcion: Optional[str] = None
+    negocio_id: str  # Required field to link with business
 
 class CategoriaCreate(CategoriaBase):
     """Schema for creating a new category."""
@@ -13,12 +14,14 @@ class CategoriaCreate(CategoriaBase):
 
 class CategoriaUpdate(BaseModel):
     """Schema for updating a category."""
-    nombre: Optional[str] = Field(None, min_length=1, max_length=100)
-    descripcion: Optional[str] = Field(None, max_length=500)
+    nombre: Optional[str] = None
+    descripcion: Optional[str] = None
 
 class Categoria(CategoriaBase):
     """Schema for category response."""
     id: str
+    created_at: datetime
+    updated_at: Optional[datetime] = None
 
     class Config:
-        from_attributes = True 
+        from_attributes = True  # Para compatibilidad con SQLAlchemy/ORM 

@@ -12,6 +12,7 @@ class ProductoBase(BaseModel):
     stock_minimo: int = Field(..., ge=0)
     categoria_id: str = Field(..., description="UUID de la categoría")
     codigo: Optional[str] = Field(None, max_length=50)
+    negocio_id: str = Field(..., description="UUID del negocio")
 
 class ProductoCreate(ProductoBase):
     """Schema for creating a new product."""
@@ -28,6 +29,7 @@ class ProductoUpdate(BaseModel):
     categoria_id: Optional[str] = Field(None, description="UUID de la categoría")
     codigo: Optional[str] = Field(None, max_length=50)
     activo: Optional[bool] = None
+    negocio_id: Optional[str] = Field(None, description="UUID del negocio")
 
 class Producto(ProductoBase):
     """Schema for product response."""

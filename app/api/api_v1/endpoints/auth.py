@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Optional
 import uuid
 import json
 import time
@@ -42,50 +42,81 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()) -> Any:
     OAuth2 compatible token login, get an access token for future requests
     """
     try:
+        print("=== Iniciando proceso de login ===")
+        print(f"Email recibido: {form_data.username}")
+        
         # Iniciar sesión con Supabase
         supabase = get_supabase_client()
         
-        print(f"Intentando iniciar sesión con Supabase: {form_data.username}")
-        # Use Supabase Auth to sign in the user
-        response = supabase.auth.sign_in_with_password({
-            "email": form_data.username,
-            "password": form_data.password,
-        })
-        
-        access_token = response.session.access_token
-        print("✅ Inicio de sesión exitoso con Supabase")
-        
-        # Actualizar último acceso del usuario
+        print("Intentando iniciar sesión con Supabase...")
         try:
-            user_id = response.user.id
-            now = datetime.now(timezone.utc).isoformat()
+            # Use Supabase Auth to sign in the user
+            response = supabase.auth.sign_in_with_password({
+                "email": form_data.username,
+                "password": form_data.password,
+            })
             
-            # Actualizar campo ultimo_acceso
-            supabase.table("usuarios").update({"ultimo_acceso": now}).eq("id", user_id).execute()
-            print(f"Actualizado último acceso para usuario {user_id}")
-        except Exception as e:
-            print(f"Error al actualizar último acceso: {str(e)}")
-        
-        return {
-            "access_token": access_token,
-            "token_type": "bearer"
-        }
+            if not response or not response.session:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Credenciales inválidas",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            
+            print("✅ Respuesta de Supabase recibida")
+            print(f"Usuario ID: {response.user.id if response.user else 'No ID'}")
+            print(f"¿Tiene sesión?: {bool(response.session)}")
+            
+            access_token = response.session.access_token
+            print("✅ Token de acceso obtenido")
+            
+            # Actualizar último acceso del usuario
+            try:
+                user_id = response.user.id
+                now = datetime.now(timezone.utc).isoformat()
+                
+                # Actualizar campo ultimo_acceso
+                supabase.table("usuarios").update({"ultimo_acceso": now}).eq("id", user_id).execute()
+                print(f"✅ Actualizado último acceso para usuario {user_id}")
+            except Exception as e:
+                print(f"⚠️ Error al actualizar último acceso: {str(e)}")
+            
+            return {
+                "access_token": access_token,
+                "token_type": "bearer"
+            }
+        except Exception as supabase_error:
+            print(f"❌ Error en Supabase Auth: {str(supabase_error)}")
+            print(f"Tipo de error: {type(supabase_error)}")
+            
+            error_message = str(supabase_error)
+            if "Email not confirmed" in error_message:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Email no confirmado. Por favor revisa tu correo electrónico para activar tu cuenta.",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            elif "Invalid login credentials" in error_message:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Credenciales inválidas",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail=f"Error al iniciar sesión: {error_message}",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"Login error: {str(e)}")
-        
-        # Mejorar el mensaje de error para "Email not confirmed"
-        error_message = str(e)
-        if "Email not confirmed" in error_message:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Email no confirmado. Por favor revisa tu correo electrónico para activar tu cuenta.",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        
+        print(f"❌ Error general en login: {str(e)}")
+        print(f"Tipo de error: {type(e)}")
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Error al iniciar sesión: {error_message}",
-            headers={"WWW-Authenticate": "Bearer"},
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error interno del servidor",
         )
 
 
@@ -177,33 +208,37 @@ async def signup(user_data: UserSignUp) -> Any:
 
 
 @router.get("/me", response_model=dict)
-async def read_users_me(token: str = Depends(oauth2_scheme)) -> Any:
+async def read_users_me(request: Request) -> Any:
     """
-    Get current user info
+    Get current user info.
     """
     try:
+        # User is already authenticated by the auth_middleware and attached to request.state.user
+        user = request.state.user
+
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User not authenticated.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
         supabase = get_supabase_client()
-        
-        # Obtener información del usuario con el token
-        response = supabase.auth.get_user(token)
-        
-        if not response.user:
-            raise Exception("Usuario no encontrado en Supabase")
-        
+
         # Obtener información adicional del usuario de la tabla usuarios
-        user_id = response.user.id
-        user_info_response = supabase.table("usuarios").select("*").eq("id", user_id).execute()
-        
-        if not user_info_response.data or len(user_info_response.data) == 0:
-            return {"email": response.user.email}
-        
-        return user_info_response.data[0]
+        user_info_response = supabase.table("usuarios").select("*").eq("id", user.id).execute()
+
+        user_data = {"email": user.email, "id": user.id}
+        if user_info_response.data and len(user_info_response.data) > 0:
+            user_data.update(user_info_response.data[0])
+
+        return user_data
+
     except Exception as e:
         print(f"Get user error: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Error de autenticación: {str(e)}",
-            headers={"WWW-Authenticate": "Bearer"},
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving user data: {str(e)}",
         )
 
 
