@@ -136,8 +136,6 @@ async def signup(user_data: UserSignUp) -> Any:
             "email": user_data.email,
             "nombre": user_data.nombre,
             "apellido": user_data.apellido,
-            "rol": user_data.rol,
-            "permisos": [],
             "creado_en": now,
             "ultimo_acceso": now
         }
