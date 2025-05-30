@@ -6,7 +6,6 @@ class CategoriaBase(BaseModel):
     """Base schema for category data."""
     nombre: str
     descripcion: Optional[str] = None
-    negocio_id: str  # Required field to link with business
 
 class CategoriaCreate(CategoriaBase):
     """Schema for creating a new category."""
@@ -20,6 +19,7 @@ class CategoriaUpdate(BaseModel):
 class Categoria(CategoriaBase):
     """Schema for category response."""
     id: str
+    negocio_id: str  # This will be included in responses
     created_at: datetime
     updated_at: Optional[datetime] = None
 

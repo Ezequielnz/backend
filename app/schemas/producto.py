@@ -6,17 +6,23 @@ class ProductoBase(BaseModel):
     """Base schema for product data."""
     nombre: str = Field(..., min_length=1, max_length=100)
     descripcion: Optional[str] = Field(None, max_length=500)
-    precio_compra: float = Field(..., gt=0)
+    precio_compra: Optional[float] = Field(None, gt=0)
     precio_venta: float = Field(..., gt=0)
     stock_actual: int = Field(..., ge=0)
-    stock_minimo: int = Field(..., ge=0)
-    categoria_id: str = Field(..., description="UUID de la categoría")
+    stock_minimo: Optional[int] = Field(0, ge=0)
+    categoria_id: Optional[str] = Field(None, description="UUID de la categoría")
     codigo: Optional[str] = Field(None, max_length=50)
-    negocio_id: str = Field(..., description="UUID del negocio")
 
-class ProductoCreate(ProductoBase):
+class ProductoCreate(BaseModel):
     """Schema for creating a new product."""
-    pass
+    nombre: str = Field(..., min_length=1, max_length=100)
+    descripcion: Optional[str] = Field(None, max_length=500)
+    precio_compra: Optional[float] = Field(None, gt=0)
+    precio_venta: float = Field(..., gt=0)
+    stock_actual: int = Field(..., ge=0)
+    stock_minimo: Optional[int] = Field(0, ge=0)
+    categoria_id: Optional[str] = Field(None, description="UUID de la categoría")
+    codigo: Optional[str] = Field(None, max_length=50)
 
 class ProductoUpdate(BaseModel):
     """Schema for updating a product."""
@@ -29,12 +35,12 @@ class ProductoUpdate(BaseModel):
     categoria_id: Optional[str] = Field(None, description="UUID de la categoría")
     codigo: Optional[str] = Field(None, max_length=50)
     activo: Optional[bool] = None
-    negocio_id: Optional[str] = Field(None, description="UUID del negocio")
 
 class Producto(ProductoBase):
     """Schema for product response."""
     id: str
-    activo: bool = True
+    negocio_id: str = Field(..., description="UUID del negocio")
+    activo: bool = Field(default=True, description="Indica si el producto está activo")
     creado_en: datetime
     actualizado_en: datetime
 

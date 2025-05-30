@@ -83,18 +83,19 @@ async def create_product(
     request: Request,
 ) -> Any:
     """
-    Create a new product for a specific category within a business (requires puede_editar_productos).
+    Create a new product for a specific business, optionally within a category (requires puede_editar_productos).
     """
     supabase = get_supabase_client()
 
     try:
-        # Verify that the category exists and belongs to the business
-        category_response = supabase.table("categorias").select("id").eq("id", product_in.categoria_id).eq("negocio_id", business_id).execute()
-        if not category_response.data:
-             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Categoría especificada no encontrada o no pertenece a este negocio.",
-            )
+        # Verify that the category exists and belongs to the business (only if categoria_id is provided)
+        if product_in.categoria_id:
+            category_response = supabase.table("categorias").select("id").eq("id", product_in.categoria_id).eq("negocio_id", business_id).execute()
+            if not category_response.data:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Categoría especificada no encontrada o no pertenece a este negocio.",
+                )
 
         product_data = product_in.model_dump()
         product_data["negocio_id"] = business_id
@@ -115,7 +116,7 @@ async def create_product(
         print(f"Error al crear producto: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error al crear producto: {str(e)}",
+            detail=f"Error al crear producto: {str(e)}"
         )
 
 @router.get("/{product_id}", response_model=Producto,
