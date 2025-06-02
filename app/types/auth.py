@@ -26,4 +26,9 @@ class User(UserBase):
     ultimo_acceso: str
 
     class Config:
-        from_attributes = True 
+        from_attributes = True
+
+class SignUpResponse(BaseModel):
+    message: str
+    email: str
+    requires_confirmation: bool = True 

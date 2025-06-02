@@ -14,7 +14,7 @@ import jwt
 
 from app.db.supabase_client import get_supabase_client
 from app.core.config import settings
-from app.types.auth import Token, UserLogin, UserSignUp
+from app.types.auth import Token, UserLogin, UserSignUp, SignUpResponse
 
 router = APIRouter()
 
@@ -92,9 +92,12 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()) -> Any:
             error_message = str(supabase_error)
             if "Email not confirmed" in error_message:
                 raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Email no confirmado. Por favor revisa tu correo electrónico para activar tu cuenta.",
-                    headers={"WWW-Authenticate": "Bearer"},
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "message": "Email no confirmado. Por favor revisa tu correo electrónico para activar tu cuenta.",
+                        "error_type": "email_not_confirmed",
+                        "email": form_data.username
+                    }
                 )
             elif "Invalid login credentials" in error_message:
                 raise HTTPException(
@@ -133,7 +136,7 @@ async def options_signup():
     )
 
 
-@router.post("/signup")
+@router.post("/signup", response_model=SignUpResponse)
 async def signup(user_data: UserSignUp) -> Any:
     """
     Create new user with the given data
@@ -175,31 +178,30 @@ async def signup(user_data: UserSignUp) -> Any:
         response = supabase.table("usuarios").insert(user_profile).execute()
         print(f"Perfil creado en tabla usuarios: {response.data}")
         
-        # Iniciar sesión inmediatamente después del registro para obtener un token
-        print("Iniciando sesión para obtener token de acceso...")
-        login_response = supabase.auth.sign_in_with_password({
-            "email": user_data.email,
-            "password": user_data.password,
-        })
+        # NO intentar hacer login automáticamente
+        # Devolver respuesta indicando que debe confirmar el email
+        print("✅ Usuario registrado exitosamente. Esperando confirmación de email.")
         
-        if not login_response or not login_response.session:
-            # Si no podemos obtener un token, aún así el registro fue exitoso
-            # Devolvemos un mensaje indicando que el usuario debe confirmar su email
-            return {
-                "detail": "Usuario registrado correctamente. Por favor revisa tu email para confirmar la cuenta.",
-                "user_id": user_id
-            }
+        return SignUpResponse(
+            message="Usuario registrado correctamente. Por favor revisa tu email para confirmar la cuenta antes de iniciar sesión.",
+            email=user_data.email,
+            requires_confirmation=True
+        )
         
-        # Retornar token de autenticación si el inicio de sesión fue exitoso
-        return {
-            "access_token": login_response.session.access_token,
-            "token_type": "bearer"
-        }
     except Exception as e:
         print(f"Registration error: {str(e)}")
         print(traceback.format_exc())
         exc_type, exc_obj, exc_tb = sys.exc_info()
         print(f"Excepción en línea {exc_tb.tb_lineno}")
+        
+        # Manejar errores específicos de Supabase
+        error_message = str(e)
+        if "User already registered" in error_message or "already been registered" in error_message:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Este email ya está registrado. Si no has confirmado tu cuenta, revisa tu correo electrónico.",
+            )
+        
         # Handle potential errors
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -301,4 +303,135 @@ async def confirm_redirect():
     a nuestra aplicación frontend en el puerto correcto.
     """
     # Redirigir al endpoint de confirmación en el frontend
-    return RedirectResponse(url="http://localhost:5173/confirm-email") 
+    return RedirectResponse(url="http://localhost:5173/confirm-email")
+
+
+@router.get("/check-confirmation/{email}")
+async def check_email_confirmation(email: str) -> Any:
+    """
+    Verificar si un email ha sido confirmado
+    """
+    try:
+        supabase = get_supabase_client()
+        
+        # Buscar usuario en la tabla usuarios
+        user_response = supabase.table("usuarios").select("id, email").eq("email", email).execute()
+        
+        if not user_response.data or len(user_response.data) == 0:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Usuario no encontrado"
+            )
+        
+        # Intentar hacer login para verificar si el email está confirmado
+        # Si el email no está confirmado, Supabase dará error
+        try:
+            # Usamos una contraseña temporal para verificar el estado
+            # El error nos dirá si es por email no confirmado o credenciales inválidas
+            test_response = supabase.auth.sign_in_with_password({
+                "email": email,
+                "password": "test_password_for_verification"
+            })
+            
+            # Si llegamos aquí, significa que las credenciales son válidas
+            # pero esto no debería pasar con una contraseña de prueba
+            return {
+                "email": email,
+                "is_confirmed": True,
+                "message": "Email confirmado"
+            }
+            
+        except Exception as auth_error:
+            error_message = str(auth_error)
+            
+            if "Email not confirmed" in error_message:
+                return {
+                    "email": email,
+                    "is_confirmed": False,
+                    "message": "Email no confirmado. Por favor revisa tu correo electrónico."
+                }
+            elif "Invalid login credentials" in error_message:
+                # Si el error es de credenciales inválidas, significa que el email SÍ está confirmado
+                # pero la contraseña de prueba es incorrecta (que es lo esperado)
+                return {
+                    "email": email,
+                    "is_confirmed": True,
+                    "message": "Email confirmado"
+                }
+            else:
+                # Otro tipo de error
+                return {
+                    "email": email,
+                    "is_confirmed": False,
+                    "message": f"Error al verificar confirmación: {error_message}"
+                }
+                
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error al verificar confirmación de email: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error interno del servidor"
+        )
+
+
+@router.post("/resend-confirmation")
+async def resend_confirmation_email(email_data: dict) -> Any:
+    """
+    Reenviar email de confirmación
+    """
+    try:
+        email = email_data.get("email")
+        if not email:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email es requerido"
+            )
+        
+        supabase = get_supabase_client()
+        
+        # Verificar que el usuario existe
+        user_response = supabase.table("usuarios").select("id, email").eq("email", email).execute()
+        
+        if not user_response.data or len(user_response.data) == 0:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Usuario no encontrado"
+            )
+        
+        # Reenviar email de confirmación
+        try:
+            resend_response = supabase.auth.resend({
+                "type": "signup",
+                "email": email
+            })
+            
+            return {
+                "message": "Email de confirmación reenviado correctamente",
+                "email": email
+            }
+            
+        except Exception as resend_error:
+            error_message = str(resend_error)
+            
+            if "Email already confirmed" in error_message:
+                return {
+                    "message": "El email ya está confirmado",
+                    "email": email,
+                    "already_confirmed": True
+                }
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Error al reenviar confirmación: {error_message}"
+                )
+                
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error al reenviar confirmación: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error interno del servidor"
+        ) 
