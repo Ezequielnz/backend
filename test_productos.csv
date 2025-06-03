@@ -1,0 +1,6 @@
+Nombre,Descripcion,Codigo,Precio Venta,Precio Compra,Stock Actual,Stock Minimo,Categoria
+"Laptop HP","Laptop HP Pavilion 15 pulgadas","LAP001","1200.00","1000.00","10","2","Electrónicos"
+"Mouse Inalámbrico","Mouse inalámbrico Logitech","MOU001","25.99","18.00","50","10","Accesorios"
+"Teclado Mecánico","Teclado mecánico RGB","TEC001","89.99","65.00","20","5","Accesorios"
+"Monitor 24""","Monitor LED 24 pulgadas Full HD","MON001","299.99","220.00","8","3","Electrónicos"
+"Silla Oficina","Silla ergonómica para oficina","SIL001","150.00","120.00","15","3","Muebles" 
