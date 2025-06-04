@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     # Supabase settings - usar los valores de .env o los predeterminados
     SUPABASE_URL: str = os.getenv("SUPABASE_URL", "https://aupmnxxauxasetwnqkma.supabase.co")
     SUPABASE_KEY: str = os.getenv("SUPABASE_KEY", "")
+    SUPABASE_ANON_KEY: str = os.getenv("SUPABASE_ANON_KEY", "")
+    SUPABASE_SERVICE_ROLE_KEY: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
     
     # Database connection settings for Supabase Pooler
     DB_USER: str = os.getenv("DB_USER", "postgres.aupmnxxauxasetwnqkma")

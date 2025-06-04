@@ -35,6 +35,32 @@ def get_supabase_client() -> Client:
         print(f"Tipo de error: {type(e)}")
         raise
 
+def get_supabase_anon_client() -> Client:
+    """
+    Create and return a Supabase client using the anon key for user registration.
+    This ensures auth.uid() is null during registration, allowing RLS policies to work correctly.
+    """
+    url = settings.SUPABASE_URL
+    # Use anon key instead of service key for registration
+    anon_key = os.getenv("SUPABASE_ANON_KEY", settings.SUPABASE_KEY)
+    
+    print("=== Creando cliente Supabase Anónimo ===")
+    print(f"URL: {url}")
+    print(f"ANON_KEY: {'*'*(len(anon_key)//4) if anon_key else 'No configurada'}")
+    
+    if not url or not anon_key:
+        raise ValueError("SUPABASE_URL o SUPABASE_ANON_KEY no están configurados")
+    
+    try:
+        # Crear cliente Supabase con anon key
+        client = create_client(url, anon_key)
+        print("✅ Cliente Supabase Anónimo creado exitosamente")
+        return client
+    except Exception as e:
+        print(f"❌ Error al crear cliente Supabase Anónimo: {str(e)}")
+        print(f"Tipo de error: {type(e)}")
+        raise
+
 def get_supabase_user_client(user_token: str) -> Client:
     """
     Create and return a Supabase client authenticated with the user's token.

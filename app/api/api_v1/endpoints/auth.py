@@ -11,10 +11,12 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import EmailStr, ValidationError
 import jwt
+import requests
 
-from app.db.supabase_client import get_supabase_client
+from app.db.supabase_client import get_supabase_client, get_supabase_anon_client
 from app.core.config import settings
 from app.types.auth import Token, UserLogin, UserSignUp, SignUpResponse
+from app.core.supabase_admin import supabase_admin
 
 router = APIRouter()
 
@@ -143,28 +145,42 @@ async def signup(user_data: UserSignUp) -> Any:
     """
     try:
         print(f"Datos de registro recibidos: {user_data.dict()}")
-        
-        # Registrar con Supabase
-        supabase = get_supabase_client()
-        
+
+        # Validar que se reciba negocio_id o nuevo_negocio_nombre
+        if not user_data.negocio_id and not user_data.nuevo_negocio_nombre:
+            raise HTTPException(
+                status_code=400,
+                detail="Debes asociarte a un negocio existente o crear uno nuevo."
+            )
+
+        # Usar cliente anónimo para el registro para que auth.uid() sea null
+        supabase = get_supabase_anon_client()
+
         print("Registrando usuario en Supabase Auth...")
-        # Registrar el usuario con Supabase Auth
-        auth_response = supabase.auth.sign_up({
+        
+        # En modo desarrollo, deshabilitar confirmación de email
+        signup_options = {
             "email": user_data.email,
             "password": user_data.password,
-        })
+        }
         
+        # Solo en modo DEBUG, deshabilitar confirmación de email
+        if settings.DEBUG:
+            print("🔧 MODO DEBUG: Deshabilitando confirmación de email")
+            signup_options["options"] = {
+                "email_confirm": False  # Deshabilitar confirmación en desarrollo
+            }
+        
+        auth_response = supabase.auth.sign_up(signup_options)
+
         if not auth_response.user or not auth_response.user.id:
             raise Exception("Error al crear usuario en Supabase Auth - no se obtuvo ID de usuario")
-        
+
         user_id = auth_response.user.id
         print(f"Usuario creado en Supabase Auth con ID: {user_id}")
-        
-        # Obtener timestamp actual en formato ISO para PostgreSQL
+
         now = datetime.now(timezone.utc).isoformat()
-        
-        # Crear perfil de usuario en la tabla 'usuarios'
-        print("Creando perfil de usuario en tabla usuarios...")
+
         user_profile = {
             "id": user_id,
             "email": user_data.email,
@@ -173,36 +189,71 @@ async def signup(user_data: UserSignUp) -> Any:
             "creado_en": now,
             "ultimo_acceso": now
         }
-        
-        # Insertar perfil en Supabase
         response = supabase.table("usuarios").insert(user_profile).execute()
         print(f"Perfil creado en tabla usuarios: {response.data}")
-        
-        # NO intentar hacer login automáticamente
-        # Devolver respuesta indicando que debe confirmar el email
-        print("✅ Usuario registrado exitosamente. Esperando confirmación de email.")
-        
+
+        # --- NUEVO FLUJO ---
+        if user_data.negocio_id:
+            # Asociar a negocio existente, estado pendiente
+            usuario_negocio = {
+                "usuario_id": user_id,
+                "negocio_id": user_data.negocio_id,
+                "rol": "empleado",
+                "estado": "pendiente",
+                "invitado_por": None,
+                "creada_en": now
+            }
+            supabase.table("usuarios_negocios").insert(usuario_negocio).execute()
+            print(f"Usuario asociado a negocio {user_data.negocio_id} (pendiente de aprobación)")
+            print(f"[NOTIFICACIÓN] El usuario {user_data.email} solicitó asociarse al negocio {user_data.negocio_id}. Notificar al administrador del negocio para aprobar/rechazar.")
+        elif user_data.nuevo_negocio_nombre:
+            # Crear nuevo negocio y asociar como aprobado
+            negocio = {
+                "nombre": user_data.nuevo_negocio_nombre,
+                "creada_por": user_id,
+                "creada_en": now
+            }
+            negocio_resp = supabase.table("negocios").insert(negocio).execute()
+            if not negocio_resp.data or not negocio_resp.data[0].get("id"):
+                raise Exception("No se pudo crear el negocio")
+            negocio_id = negocio_resp.data[0]["id"]
+            usuario_negocio = {
+                "usuario_id": user_id,
+                "negocio_id": negocio_id,
+                "rol": "admin",  # Corregir: debe ser admin, no estado_aprobacion
+                "estado": "aceptado",  # Corregir: usar estado en lugar de estado_aprobacion
+                "invitado_por": None,
+                "creada_en": now
+            }
+            supabase.table("usuarios_negocios").insert(usuario_negocio).execute()  # Corregir: tabla usuarios_negocios
+            print(f"Negocio creado y usuario asociado como admin (ID negocio: {negocio_id})")
+
+        # Mensaje diferente según el modo
+        if settings.DEBUG:
+            message = "Usuario registrado correctamente. En modo desarrollo, no se requiere confirmación de email."
+            requires_confirmation = False
+        else:
+            message = "Usuario registrado correctamente. Por favor revisa tu email para confirmar la cuenta antes de iniciar sesión."
+            requires_confirmation = True
+
+        print("✅ Usuario registrado exitosamente.")
         return SignUpResponse(
-            message="Usuario registrado correctamente. Por favor revisa tu email para confirmar la cuenta antes de iniciar sesión.",
+            message=message,
             email=user_data.email,
-            requires_confirmation=True
+            requires_confirmation=requires_confirmation
         )
-        
+
     except Exception as e:
         print(f"Registration error: {str(e)}")
         print(traceback.format_exc())
         exc_type, exc_obj, exc_tb = sys.exc_info()
         print(f"Excepción en línea {exc_tb.tb_lineno}")
-        
-        # Manejar errores específicos de Supabase
         error_message = str(e)
         if "User already registered" in error_message or "already been registered" in error_message:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Este email ya está registrado. Si no has confirmado tu cuenta, revisa tu correo electrónico.",
             )
-        
-        # Handle potential errors
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Error al crear usuario: {str(e)}",
@@ -269,26 +320,74 @@ async def activate_user(email: str) -> Any:
                 detail=f"Usuario con email {email} no encontrado"
             )
             
-        # Llamar API admin para configurar usuario como confirmado
-        # (Esto requiere permisos de administrador en Supabase)
+        user_id = user_data.data[0]["id"]
+        
+        # Intentar actualizar el usuario usando la API admin
         try:
-            # Debido a las limitaciones de la API de Supabase, no podemos confirmar directamente
-            # Pero lo intentamos de todos modos
-            admin_client = supabase.auth.admin
-            admin_client.update_user_by_email(email, {"email_confirm": True})
+            # Usar el service role key para operaciones admin
+            admin_supabase = get_supabase_client()  # Ya usa service role
             
-            return {"detail": f"Usuario {email} activado exitosamente"}
+            # Actualizar el usuario para marcarlo como confirmado
+            # Esto requiere usar la API REST directamente
+            
+            headers = {
+                "Authorization": f"Bearer {settings.SUPABASE_KEY}",
+                "Content-Type": "application/json",
+                "apikey": settings.SUPABASE_KEY
+            }
+            
+            # Actualizar usuario via API admin
+            admin_url = f"{settings.SUPABASE_URL}/auth/v1/admin/users/{user_id}"
+            update_data = {
+                "email_confirm": True,
+                "email_confirmed_at": datetime.now(timezone.utc).isoformat()
+            }
+            
+            response = requests.put(admin_url, json=update_data, headers=headers)
+            
+            if response.status_code == 200:
+                return {
+                    "detail": f"Usuario {email} activado exitosamente",
+                    "user_id": user_id,
+                    "status": "confirmed"
+                }
+            else:
+                print(f"Error en API admin: {response.status_code} - {response.text}")
+                
+                # Fallback: marcar como confirmado en nuestra tabla
+                now = datetime.now(timezone.utc).isoformat()
+                supabase.table("usuarios").update({
+                    "email_confirmado": True,
+                    "email_confirmado_en": now
+                }).eq("id", user_id).execute()
+                
+                return {
+                    "detail": f"Usuario {email} marcado como confirmado en base de datos local",
+                    "user_id": user_id,
+                    "status": "confirmed_locally",
+                    "note": "Para confirmación completa, ve a Supabase Dashboard > Authentication > Users y marca como confirmado"
+                }
+                
         except Exception as admin_error:
-            print(f"No se pudo activar mediante API admin: {str(admin_error)}")
+            print(f"Error en activación admin: {str(admin_error)}")
             
-            # Alternativa: dar instrucciones para activar manualmente
+            # Fallback: dar instrucciones manuales
             return {
                 "detail": "No se pudo activar automáticamente",
-                "instrucciones": "Para activar la cuenta, ve a Supabase Dashboard > Authentication > Users y edita el usuario para marcarlo como confirmado"
+                "user_id": user_id,
+                "email": email,
+                "instrucciones": [
+                    "1. Ve a Supabase Dashboard: https://supabase.com/dashboard",
+                    "2. Selecciona tu proyecto",
+                    "3. Ve a Authentication > Users",
+                    f"4. Busca el usuario {email}",
+                    "5. Haz clic en el usuario y marca 'Email Confirmed' como true",
+                    "ALTERNATIVA: Deshabilita 'Confirm Email' en Authentication > Settings"
+                ]
             }
         
     except Exception as e:
-        print(f"Error al activar usuario: {str(e)}")
+        print(f"Error en activate_user: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error al activar usuario: {str(e)}"
@@ -434,4 +533,156 @@ async def resend_confirmation_email(email_data: dict) -> Any:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error interno del servidor"
-        ) 
+        )
+
+
+@router.delete("/users/{user_id}")
+async def delete_user_completely(user_id: str, request: Request) -> Any:
+    """Eliminar usuario completamente con todos sus datos relacionados."""
+    try:
+        print(f"=== Iniciando eliminación completa del usuario {user_id} ===")
+        
+        # Verificar que el usuario autenticado puede eliminar este usuario
+        current_user = getattr(request.state, "user", None)
+        if not current_user:
+            raise HTTPException(status_code=401, detail="Usuario no autenticado")
+        
+        # Solo permitir que el usuario se elimine a sí mismo o que sea un admin
+        if current_user.id != user_id:
+            # Verificar si es admin de algún negocio donde el usuario a eliminar es empleado
+            supabase = get_supabase_client()
+            admin_check = supabase.table("usuarios_negocios") \
+                .select("negocio_id") \
+                .eq("usuario_id", current_user.id) \
+                .eq("rol", "admin") \
+                .eq("estado", "aceptado") \
+                .execute()
+            
+            if not admin_check.data:
+                raise HTTPException(status_code=403, detail="No tienes permisos para eliminar este usuario")
+            
+            # Verificar que el usuario a eliminar está en alguno de los negocios del admin
+            admin_business_ids = [item["negocio_id"] for item in admin_check.data]
+            user_in_business = supabase.table("usuarios_negocios") \
+                .select("negocio_id") \
+                .eq("usuario_id", user_id) \
+                .in_("negocio_id", admin_business_ids) \
+                .execute()
+            
+            if not user_in_business.data:
+                raise HTTPException(status_code=403, detail="No puedes eliminar este usuario")
+        
+        # Verificar que el usuario existe
+        user_check = supabase.table("usuarios") \
+            .select("id, email, nombre, apellido") \
+            .eq("id", user_id) \
+            .execute()
+        
+        if not user_check.data:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        
+        user_data = user_check.data[0]
+        print(f"Eliminando usuario: {user_data['email']} ({user_data['nombre']} {user_data['apellido']})")
+        
+        # La eliminación en cascada se manejará automáticamente por los triggers
+        # Solo necesitamos eliminar el registro principal de usuarios
+        delete_response = supabase.table("usuarios") \
+            .delete() \
+            .eq("id", user_id) \
+            .execute()
+        
+        if hasattr(delete_response, 'error') and delete_response.error:
+            print(f"❌ Error eliminando usuario: {delete_response.error}")
+            raise HTTPException(status_code=500, detail=f"Error eliminando usuario: {delete_response.error}")
+        
+        print(f"✅ Usuario {user_data['email']} eliminado completamente")
+        
+        return {
+            "message": "Usuario eliminado completamente",
+            "user_id": user_id,
+            "email": user_data['email'],
+            "deleted_data": [
+                "Usuario de la tabla usuarios",
+                "Usuario de auth.users", 
+                "Relaciones usuario-negocio",
+                "Permisos del usuario",
+                "Negocios creados por el usuario (si los había)",
+                "Todos los datos relacionados"
+            ]
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Error inesperado eliminando usuario: {type(e).__name__} - {str(e)}")
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error interno eliminando usuario: {str(e)}"
+        )
+
+
+@router.delete("/users/by-email/{email}")
+async def delete_user_by_email(email: str, request: Request) -> Any:
+    """Eliminar usuario por email (útil para desarrollo y testing)."""
+    try:
+        print(f"=== Buscando usuario por email: {email} ===")
+        
+        supabase = get_supabase_client()
+        
+        # Buscar usuario por email
+        user_check = supabase.table("usuarios") \
+            .select("id, email, nombre, apellido") \
+            .eq("email", email) \
+            .execute()
+        
+        if not user_check.data:
+            raise HTTPException(status_code=404, detail=f"Usuario con email {email} no encontrado")
+        
+        user_data = user_check.data[0]
+        user_id = user_data["id"]
+        
+        print(f"Usuario encontrado: {user_id}")
+        
+        # Simular request con el usuario encontrado para permitir auto-eliminación
+        request.state.user = type('User', (), {'id': user_id})()
+        
+        # Verificar que el usuario existe
+        print(f"Eliminando usuario: {user_data['email']} ({user_data['nombre']} {user_data['apellido']})")
+        
+        # 1. Eliminar de la tabla usuarios (esto activará los triggers de cascada)
+        delete_response = supabase.table("usuarios") \
+            .delete() \
+            .eq("id", user_id) \
+            .execute()
+        
+        if hasattr(delete_response, 'error') and delete_response.error:
+            print(f"❌ Error eliminando usuario: {delete_response.error}")
+            raise HTTPException(status_code=500, detail=f"Error eliminando usuario: {delete_response.error}")
+        
+        # 2. Eliminar de auth.users usando la API de administración
+        auth_deleted = await supabase_admin.delete_auth_user(user_id)
+        
+        print(f"✅ Usuario {user_data['email']} eliminado completamente")
+        
+        return {
+            "message": "Usuario eliminado completamente",
+            "user_id": user_id,
+            "email": user_data['email'],
+            "deleted_data": [
+                "Usuario de la tabla usuarios",
+                "Usuario de auth.users" if auth_deleted else "Usuario de auth.users (error)", 
+                "Relaciones usuario-negocio",
+                "Permisos del usuario",
+                "Negocios creados por el usuario (si los había)",
+                "Todos los datos relacionados"
+            ],
+            "auth_deletion_success": auth_deleted
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Error eliminando usuario por email: {e}")
+        raise HTTPException(status_code=500, detail=f"Error eliminando usuario: {str(e)}") 

@@ -1,17 +1,18 @@
 from typing import Any, List
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Body
 from app.types.auth import User
 from app.api.deps import get_current_user
 from app.db.supabase_client import get_supabase_client # Revertir a cliente base
 from app.schemas.business import BusinessCreate, Business
 from supabase.lib.client_options import ClientOptions
+from datetime import datetime, timezone
 
 router = APIRouter()
 
 @router.post("/", status_code=status.HTTP_201_CREATED)
 async def create_business(business_data: BusinessCreate, request: Request) -> Any:
     """Create a new business and assign the creating user as admin."""
-    user = request.state.user
+    user = getattr(request.state, "user", None)
     # Asegurarse de que el usuario está autenticado (validado por middleware)
     if not user or not hasattr(user, 'id'): # Verificar que el objeto user tiene id
         raise HTTPException(
@@ -180,7 +181,7 @@ async def create_business(business_data: BusinessCreate, request: Request) -> An
 @router.get("/", response_model=List[Business])
 async def get_businesses(request: Request) -> Any:
     """Get all businesses for the current user."""
-    user = request.state.user
+    user = getattr(request.state, "user", None)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -192,11 +193,11 @@ async def get_businesses(request: Request) -> Any:
     try:
         print(f"🔍 Getting businesses for user: {user.id}")
         
-        # Get all businesses linked to the user through usuarios_negocios
-        # Select specific fields to match the Business model
+        # Get all business relationships for the user
         response = supabase.table("usuarios_negocios") \
-            .select("rol, negocios(id, nombre, creada_por, creada_en)") \
+            .select("rol, negocio_id") \
             .eq("usuario_id", user.id) \
+            .eq("estado", "aceptado") \
             .execute()
 
         print(f"🔍 Raw response from usuarios_negocios: {response.data}")
@@ -205,32 +206,41 @@ async def get_businesses(request: Request) -> Any:
             print("🔍 No business relationships found for user")
             return []
 
-        # Transform the response to match the Business model
+        # Get business data for each relationship
         businesses = []
         for item in response.data:
-            print(f"🔍 Processing item: {item}")
-            negocio_data = item.get("negocios")
-            if negocio_data:
+            print(f"🔍 Processing relationship: {item}")
+            negocio_id = item.get("negocio_id")
+            rol = item.get("rol")
+            
+            # Get business data separately
+            business_response = supabase.table("negocios") \
+                .select("id, nombre, creada_por, creada_en") \
+                .eq("id", negocio_id) \
+                .execute()
+            
+            if business_response.data:
+                negocio_data = business_response.data[0]
                 print(f"🔍 Found business data: {negocio_data}")
-                # Construir el objeto Business a partir de los datos de la respuesta
+                
+                # Construct the Business object
                 business_obj = {
                     "id": negocio_data.get("id"),
                     "nombre": negocio_data.get("nombre"),
                     "creada_por": negocio_data.get("creada_por"),
                     "creada_en": negocio_data.get("creada_en"),
-                    "rol": item.get("rol"),
-                    # Incluir campos opcionales si existen en la tabla y el modelo
+                    "rol": rol,
+                    # Include optional fields if they exist
                     "descripcion": negocio_data.get("descripcion"),
                     "direccion": negocio_data.get("direccion"),
                     "telefono": negocio_data.get("telefono"),
                     "email": negocio_data.get("email"),
                     "logo_url": negocio_data.get("logo_url"),
-                    # No incluir updated_at ya que no está en la tabla negocios
                 }
                 businesses.append(business_obj)
                 print(f"🔍 Added business to list: {business_obj}")
             else:
-                print(f"🔍 No business data found for item: {item}")
+                print(f"🔍 No business data found for negocio_id: {negocio_id}")
 
         print(f"🔍 Final businesses list: {businesses}")
         print(f"🔍 Total businesses found: {len(businesses)}")
@@ -246,7 +256,7 @@ async def get_businesses(request: Request) -> Any:
 @router.get("/{business_id}", response_model=Business)
 async def get_business_by_id(business_id: str, request: Request) -> Any:
     """Get a specific business by ID for the current user."""
-    user = request.state.user
+    user = getattr(request.state, "user", None)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -304,7 +314,7 @@ async def get_business_by_id(business_id: str, request: Request) -> Any:
 @router.delete("/{business_id}")
 async def delete_business(business_id: str, request: Request) -> Any:
     """Delete a business and all its related data."""
-    user = request.state.user
+    user = getattr(request.state, "user", None)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -520,4 +530,513 @@ async def repair_user_businesses(user_id: str, request: Request) -> Any:
         
     except Exception as e:
         print(f"🔧 REPAIR ERROR: {e}")
-        return {"error": str(e)} 
+        return {"error": str(e)}
+
+@router.get("/{business_id}/usuarios-pendientes")
+async def listar_usuarios_pendientes(business_id: str, request: Request) -> Any:
+    """Listar usuarios pendientes de aprobación para un negocio (solo admin o creador)."""
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="User not authenticated.")
+    
+    supabase = get_supabase_client()
+    
+    try:
+        # Verificar que el usuario es admin del negocio O el creador del negocio
+        admin_check = supabase.table("usuarios_negocios").select("rol").eq("usuario_id", user.id).eq("negocio_id", business_id).execute()
+        
+        # También verificar si es el creador del negocio
+        negocio_check = supabase.table("negocios").select("creada_por").eq("id", business_id).execute()
+        
+        is_admin = admin_check.data and admin_check.data[0].get("rol") == "admin"
+        is_creator = negocio_check.data and negocio_check.data[0].get("creada_por") == user.id
+        
+        if not is_admin and not is_creator:
+            raise HTTPException(status_code=403, detail="Solo el admin o creador del negocio puede ver usuarios pendientes.")
+        
+        # Obtener usuarios pendientes
+        pendientes = supabase.table("usuarios_negocios") \
+            .select("id, usuario_id, estado, creada_en") \
+            .eq("negocio_id", business_id) \
+            .eq("estado", "pendiente") \
+            .limit(20) \
+            .execute()
+        
+        if not pendientes.data:
+            return []
+        
+        # Obtener datos de usuarios en batch
+        usuario_ids = [p["usuario_id"] for p in pendientes.data]
+        usuarios_data = {}
+        
+        if usuario_ids:
+            usuarios_batch = supabase.table("usuarios") \
+                .select("id, nombre, apellido, email") \
+                .in_("id", usuario_ids) \
+                .execute()
+            
+            for usuario in usuarios_batch.data or []:
+                usuarios_data[usuario["id"]] = usuario
+        
+        # Construir resultado
+        result = []
+        for pendiente in pendientes.data:
+            pendiente_completo = pendiente.copy()
+            pendiente_completo["usuario"] = usuarios_data.get(pendiente["usuario_id"], {
+                "nombre": "", "apellido": "", "email": ""
+            })
+            result.append(pendiente_completo)
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error en listar_usuarios_pendientes: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error interno del servidor: {str(e)}")
+
+@router.post("/{business_id}/usuarios-pendientes/{usuario_negocio_id}/aprobar")
+async def aprobar_usuario_negocio(
+    business_id: str, 
+    usuario_negocio_id: str, 
+    permisos_data: dict = Body(default={}),
+    request: Request = None
+) -> Any:
+    """Aprobar usuario pendiente y configurar sus permisos por módulos."""
+    try:
+        print(f"=== Iniciando aprobación de usuario ===")
+        print(f"Business ID: {business_id}")
+        print(f"Usuario Negocio ID: {usuario_negocio_id}")
+        print(f"Permisos data: {permisos_data}")
+        
+        user = getattr(request.state, "user", None)
+        if not user:
+            raise HTTPException(status_code=401, detail="User not authenticated.")
+        
+        print(f"Usuario autenticado: {user.id}")
+        
+        supabase = get_supabase_client()
+        
+        # Verificar que el usuario es el creador del negocio (solo él puede aprobar)
+        print("Verificando permisos del creador del negocio...")
+        negocio_check = supabase.table("negocios").select("creada_por").eq("id", business_id).execute()
+        
+        if not negocio_check.data:
+            print(f"❌ Negocio no encontrado: {business_id}")
+            raise HTTPException(status_code=404, detail="Negocio no encontrado.")
+            
+        if negocio_check.data[0].get("creada_por") != user.id:
+            print(f"❌ Usuario {user.id} no es el creador del negocio. Creador: {negocio_check.data[0].get('creada_por')}")
+            raise HTTPException(status_code=403, detail="Solo el creador del negocio puede aprobar usuarios.")
+        
+        print("✅ Usuario autorizado para aprobar")
+        
+        # Verificar que el usuario está pendiente
+        print("Verificando usuario pendiente...")
+        usuario_check = supabase.table("usuarios_negocios") \
+            .select("id, usuario_id, estado") \
+            .eq("id", usuario_negocio_id) \
+            .eq("negocio_id", business_id) \
+            .eq("estado", "pendiente") \
+            .execute()
+        
+        if not usuario_check.data:
+            print(f"❌ Usuario pendiente no encontrado: {usuario_negocio_id}")
+            # Verificar si el usuario ya está aprobado
+            already_approved = supabase.table("usuarios_negocios") \
+                .select("id, usuario_id, estado") \
+                .eq("id", usuario_negocio_id) \
+                .eq("negocio_id", business_id) \
+                .execute()
+            
+            if already_approved.data and already_approved.data[0].get("estado") == "aceptado":
+                print(f"⚠️ Usuario ya está aprobado, verificando permisos...")
+                # Verificar si ya tiene permisos
+                existing_permisos = supabase.table("permisos_usuario_negocio") \
+                    .select("id") \
+                    .eq("usuario_negocio_id", usuario_negocio_id) \
+                    .execute()
+                
+                if existing_permisos.data:
+                    print(f"✅ Usuario ya tiene permisos configurados")
+                    # Obtener datos del usuario para la respuesta
+                    usuario_data = supabase.table("usuarios") \
+                        .select("nombre, apellido, email") \
+                        .eq("id", already_approved.data[0]["usuario_id"]) \
+                        .execute()
+                    
+                    return {
+                        "message": "Usuario ya estaba aprobado con permisos configurados",
+                        "usuario": usuario_data.data[0] if usuario_data.data else {},
+                        "permisos": existing_permisos.data[0] if existing_permisos.data else {}
+                    }
+                else:
+                    print(f"⚠️ Usuario aprobado pero sin permisos, creando permisos...")
+                    # Continuar con la creación de permisos para usuario ya aprobado
+                    usuario_check = already_approved
+            else:
+                raise HTTPException(status_code=404, detail="Usuario pendiente no encontrado.")
+        
+        print(f"✅ Usuario encontrado: {usuario_check.data[0]}")
+        
+        # Configurar permisos por módulos ANTES de aprobar
+        print("Configurando permisos...")
+        permisos_config = {
+            "usuario_negocio_id": usuario_negocio_id,
+            "recurso": "general",
+            "accion": "acceso",
+            "acceso_total": permisos_data.get("acceso_total", False),
+            
+            # Permisos de productos
+            "puede_ver_productos": permisos_data.get("puede_ver_productos", False),
+            "puede_editar_productos": permisos_data.get("puede_editar_productos", False),
+            "puede_eliminar_productos": permisos_data.get("puede_eliminar_productos", False),
+            
+            # Permisos de clientes
+            "puede_ver_clientes": permisos_data.get("puede_ver_clientes", False),
+            "puede_editar_clientes": permisos_data.get("puede_editar_clientes", False),
+            "puede_eliminar_clientes": permisos_data.get("puede_eliminar_clientes", False),
+            
+            # Permisos de categorías
+            "puede_ver_categorias": permisos_data.get("puede_ver_categorias", False),
+            "puede_editar_categorias": permisos_data.get("puede_editar_categorias", False),
+            "puede_eliminar_categorias": permisos_data.get("puede_eliminar_categorias", False),
+            
+            # Permisos de ventas
+            "puede_ver_ventas": permisos_data.get("puede_ver_ventas", False),
+            "puede_editar_ventas": permisos_data.get("puede_editar_ventas", False),
+            
+            # Permisos de stock
+            "puede_ver_stock": permisos_data.get("puede_ver_stock", False),
+            "puede_editar_stock": permisos_data.get("puede_editar_stock", False),
+            
+            # Permisos de facturación
+            "puede_ver_facturacion": permisos_data.get("puede_ver_facturacion", False),
+            "puede_editar_facturacion": permisos_data.get("puede_editar_facturacion", False),
+            
+            # Permisos de tareas (existentes)
+            "puede_ver_tareas": permisos_data.get("puede_ver_tareas", False),
+            "puede_asignar_tareas": permisos_data.get("puede_asignar_tareas", False),
+            "puede_editar_tareas": permisos_data.get("puede_editar_tareas", False),
+            
+            "creado_en": datetime.now(timezone.utc).isoformat()
+        }
+        
+        print(f"Configuración de permisos: {permisos_config}")
+        
+        # Verificar si ya existen permisos para evitar duplicados
+        existing_permisos = supabase.table("permisos_usuario_negocio") \
+            .select("id") \
+            .eq("usuario_negocio_id", usuario_negocio_id) \
+            .execute()
+        
+        if existing_permisos.data:
+            print("⚠️ Ya existen permisos, actualizando...")
+            # Actualizar permisos existentes
+            permisos_response = supabase.table("permisos_usuario_negocio") \
+                .update(permisos_config) \
+                .eq("usuario_negocio_id", usuario_negocio_id) \
+                .execute()
+        else:
+            print("Creando nuevos permisos...")
+            # Crear permisos nuevos
+            permisos_response = supabase.table("permisos_usuario_negocio") \
+                .insert(permisos_config) \
+                .execute()
+        
+        if hasattr(permisos_response, 'error') and permisos_response.error:
+            print(f"❌ Error creando/actualizando permisos: {permisos_response.error}")
+            raise HTTPException(status_code=500, detail=f"Error configurando permisos: {permisos_response.error}")
+        
+        print("✅ Permisos configurados exitosamente")
+        
+        # Aprobar usuario DESPUÉS de configurar permisos (solo si está pendiente)
+        if usuario_check.data[0].get("estado") == "pendiente":
+            print("Aprobando usuario...")
+            approval_response = supabase.table("usuarios_negocios") \
+                .update({"estado": "aceptado"}) \
+                .eq("id", usuario_negocio_id) \
+                .execute()
+            
+            if hasattr(approval_response, 'error') and approval_response.error:
+                print(f"❌ Error aprobando usuario: {approval_response.error}")
+                raise HTTPException(status_code=500, detail=f"Error aprobando usuario: {approval_response.error}")
+            
+            print("✅ Usuario aprobado exitosamente")
+        else:
+            print("✅ Usuario ya estaba aprobado")
+        
+        # Obtener datos del usuario aprobado para la respuesta
+        print("Obteniendo datos del usuario...")
+        usuario_data = supabase.table("usuarios") \
+            .select("nombre, apellido, email") \
+            .eq("id", usuario_check.data[0]["usuario_id"]) \
+            .execute()
+        
+        if hasattr(usuario_data, 'error') and usuario_data.error:
+            print(f"⚠️ Error obteniendo datos del usuario: {usuario_data.error}")
+        
+        print("✅ Aprobación completada exitosamente")
+        
+        return {
+            "message": "Usuario aprobado correctamente",
+            "usuario": usuario_data.data[0] if usuario_data.data else {},
+            "permisos": permisos_response.data[0] if permisos_response.data else {}
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Error inesperado en aprobación: {type(e).__name__} - {str(e)}")
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Error interno del servidor: {str(e)}"
+        )
+
+@router.post("/{business_id}/usuarios-pendientes/{usuario_negocio_id}/rechazar")
+async def rechazar_usuario_pendiente(business_id: str, usuario_negocio_id: str, request: Request) -> Any:
+    """Rechazar usuario pendiente (solo admin)."""
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="User not authenticated.")
+    supabase = get_supabase_client()
+    # Verificar que el usuario es admin del negocio
+    admin_check = supabase.table("usuarios_negocios").select("rol").eq("usuario_id", user.id).eq("negocio_id", business_id).execute()
+    if not admin_check.data or admin_check.data[0].get("rol") != "admin":
+        raise HTTPException(status_code=403, detail="Solo el admin puede rechazar usuarios.")
+    # Cambiar estado a rechazado en lugar de eliminar
+    supabase.table("usuarios_negocios").update({"estado": "rechazado"}).eq("id", usuario_negocio_id).execute()
+    return {"message": "Usuario rechazado", "usuario_negocio_id": usuario_negocio_id}
+
+@router.get("/public/buscar-negocios")
+async def buscar_negocios(nombre: str = "", id: str = "") -> Any:
+    supabase = get_supabase_client()
+    query = supabase.table("negocios").select("id, nombre")
+    if nombre:
+        query = query.ilike("nombre", f"%{nombre}%")
+    if id:
+        query = query.eq("id", id)
+    response = query.limit(20).execute()
+    return response.data or []
+
+@router.get("/{business_id}/notificaciones")
+async def obtener_notificaciones_negocio(business_id: str, request: Request) -> Any:
+    """Obtener notificaciones para el centro de notificaciones (usuarios pendientes, etc.)."""
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="User not authenticated.")
+    supabase = get_supabase_client()
+    
+    # Verificar que el usuario tiene acceso al negocio
+    access_check = supabase.table("usuarios_negocios").select("rol").eq("usuario_id", user.id).eq("negocio_id", business_id).execute()
+    if not access_check.data:
+        raise HTTPException(status_code=403, detail="No tienes acceso a este negocio.")
+    
+    # Verificar que el usuario es el creador del negocio (solo él ve notificaciones de aprobación)
+    negocio_check = supabase.table("negocios").select("creada_por").eq("id", business_id).execute()
+    if not negocio_check.data or negocio_check.data[0].get("creada_por") != user.id:
+        # Si no es el creador, devolver lista vacía (sin notificaciones de aprobación)
+        return []
+    
+    notificaciones = []
+    
+    # Obtener usuarios pendientes (solo para el creador del negocio)
+    pendientes = supabase.table("usuarios_negocios") \
+        .select("id, usuario_id, creada_en") \
+        .eq("negocio_id", business_id) \
+        .eq("estado", "pendiente") \
+        .execute()
+    
+    for pendiente in pendientes.data or []:
+        # Obtener datos del usuario
+        usuario_data = supabase.table("usuarios") \
+            .select("nombre, apellido, email") \
+            .eq("id", pendiente["usuario_id"]) \
+            .execute()
+        
+        if usuario_data.data:
+            usuario = usuario_data.data[0]
+            notificaciones.append({
+                "id": f"approval_{pendiente['id']}",
+                "type": "approval_request",
+                "title": "Solicitud de acceso pendiente",
+                "message": f"{usuario.get('nombre', '')} {usuario.get('apellido', '')} ({usuario.get('email', '')}) solicita acceso al negocio",
+                "time": pendiente.get("creada_en"),
+                "data": {
+                    "usuario_negocio_id": pendiente["id"],
+                    "business_id": business_id,
+                    "usuario_id": pendiente["usuario_id"]
+                }
+            })
+    
+    return notificaciones
+
+@router.get("/{business_id}/usuarios")
+async def listar_usuarios_negocio(business_id: str, request: Request) -> Any:
+    """Listar todos los usuarios asociados al negocio con sus permisos."""
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="User not authenticated.")
+    
+    supabase = get_supabase_client()
+    
+    try:
+        # Verificar que el usuario tiene acceso al negocio
+        access_check = supabase.table("usuarios_negocios").select("rol").eq("usuario_id", user.id).eq("negocio_id", business_id).execute()
+        if not access_check.data:
+            raise HTTPException(status_code=403, detail="No tienes acceso a este negocio.")
+        
+        # Obtener todos los usuarios del negocio con una sola consulta optimizada
+        usuarios_response = supabase.table("usuarios_negocios") \
+            .select("id, usuario_id, rol, estado, creada_en, invitado_por") \
+            .eq("negocio_id", business_id) \
+            .limit(50) \
+            .execute()
+        
+        if not usuarios_response.data:
+            return []
+        
+        # Obtener IDs de usuarios para consulta batch
+        usuario_ids = [u["usuario_id"] for u in usuarios_response.data]
+        usuario_negocio_ids = [u["id"] for u in usuarios_response.data]
+        
+        # Consulta batch para datos de usuarios
+        usuarios_data = {}
+        if usuario_ids:
+            usuarios_batch = supabase.table("usuarios") \
+                .select("id, nombre, apellido, email, ultimo_acceso") \
+                .in_("id", usuario_ids) \
+                .execute()
+            
+            for usuario in usuarios_batch.data or []:
+                usuarios_data[usuario["id"]] = usuario
+        
+        # Consulta batch para permisos
+        permisos_data = {}
+        if usuario_negocio_ids:
+            permisos_batch = supabase.table("permisos_usuario_negocio") \
+                .select("*") \
+                .in_("usuario_negocio_id", usuario_negocio_ids) \
+                .execute()
+            
+            for permiso in permisos_batch.data or []:
+                permisos_data[permiso["usuario_negocio_id"]] = permiso
+        
+        # Construir resultado
+        result = []
+        for usuario_negocio in usuarios_response.data:
+            usuario_completo = {
+                "id": usuario_negocio["id"],
+                "usuario_id": usuario_negocio["usuario_id"],
+                "rol": usuario_negocio["rol"],
+                "estado": usuario_negocio["estado"],
+                "creada_en": usuario_negocio["creada_en"],
+                "invitado_por": usuario_negocio["invitado_por"],
+                "usuario": usuarios_data.get(usuario_negocio["usuario_id"], {}),
+                "permisos": permisos_data.get(usuario_negocio["id"], {})
+            }
+            result.append(usuario_completo)
+        
+        return result
+        
+    except Exception as e:
+        print(f"Error en listar_usuarios_negocio: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error interno del servidor: {str(e)}")
+
+@router.put("/{business_id}/usuarios/{usuario_negocio_id}/permisos")
+async def actualizar_permisos_usuario(
+    business_id: str, 
+    usuario_negocio_id: str, 
+    permisos_data: dict = Body(...),
+    request: Request = None
+) -> Any:
+    """Actualizar permisos de un usuario del negocio (solo admin)."""
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="User not authenticated.")
+    
+    supabase = get_supabase_client()
+    
+    # Verificar que el usuario es admin del negocio
+    admin_check = supabase.table("usuarios_negocios").select("rol").eq("usuario_id", user.id).eq("negocio_id", business_id).execute()
+    if not admin_check.data or admin_check.data[0].get("rol") != "admin":
+        raise HTTPException(status_code=403, detail="Solo el admin puede modificar permisos.")
+    
+    # Verificar que el usuario_negocio_id pertenece al negocio
+    usuario_check = supabase.table("usuarios_negocios").select("id").eq("id", usuario_negocio_id).eq("negocio_id", business_id).execute()
+    if not usuario_check.data:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado en este negocio.")
+    
+    # Actualizar o crear permisos
+    existing_permisos = supabase.table("permisos_usuario_negocio") \
+        .select("id") \
+        .eq("usuario_negocio_id", usuario_negocio_id) \
+        .execute()
+    
+    # Preparar datos de permisos con campos obligatorios
+    permisos_update = {
+        "usuario_negocio_id": usuario_negocio_id,
+        "recurso": "general",  # Campo obligatorio
+        "accion": "acceso",    # Campo obligatorio
+        **permisos_data,
+        "actualizado_en": datetime.now(timezone.utc).isoformat()
+    }
+    
+    try:
+        if existing_permisos.data:
+            # Actualizar permisos existentes
+            response = supabase.table("permisos_usuario_negocio") \
+                .update(permisos_update) \
+                .eq("usuario_negocio_id", usuario_negocio_id) \
+                .execute()
+        else:
+            # Crear nuevos permisos
+            permisos_update["creado_en"] = datetime.now(timezone.utc).isoformat()
+            response = supabase.table("permisos_usuario_negocio") \
+                .insert(permisos_update) \
+                .execute()
+        
+        if hasattr(response, 'error') and response.error:
+            print(f"❌ Error actualizando permisos: {response.error}")
+            raise HTTPException(status_code=500, detail=f"Error actualizando permisos: {response.error}")
+        
+        return {"message": "Permisos actualizados correctamente", "permisos": response.data[0] if response.data else {}}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Error inesperado actualizando permisos: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error interno del servidor: {str(e)}")
+
+@router.delete("/{business_id}/usuarios/{usuario_negocio_id}")
+async def remover_usuario_negocio(business_id: str, usuario_negocio_id: str, request: Request) -> Any:
+    """Remover usuario del negocio (solo admin)."""
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="User not authenticated.")
+    
+    supabase = get_supabase_client()
+    
+    # Verificar que el usuario es admin del negocio
+    admin_check = supabase.table("usuarios_negocios").select("rol").eq("usuario_id", user.id).eq("negocio_id", business_id).execute()
+    if not admin_check.data or admin_check.data[0].get("rol") != "admin":
+        raise HTTPException(status_code=403, detail="Solo el admin puede remover usuarios.")
+    
+    # Verificar que el usuario_negocio_id pertenece al negocio
+    usuario_check = supabase.table("usuarios_negocios").select("id, usuario_id").eq("id", usuario_negocio_id).eq("negocio_id", business_id).execute()
+    if not usuario_check.data:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado en este negocio.")
+    
+    # No permitir que el admin se remueva a sí mismo
+    if usuario_check.data[0]["usuario_id"] == user.id:
+        raise HTTPException(status_code=400, detail="No puedes removerte a ti mismo del negocio.")
+    
+    # Eliminar permisos primero
+    supabase.table("permisos_usuario_negocio").delete().eq("usuario_negocio_id", usuario_negocio_id).execute()
+    
+    # Eliminar relación usuario-negocio
+    supabase.table("usuarios_negocios").delete().eq("id", usuario_negocio_id).execute()
+    
+    return {"message": "Usuario removido del negocio correctamente"} 
