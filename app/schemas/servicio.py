@@ -9,6 +9,7 @@ class ServicioBase(BaseModel):
     precio: float = Field(..., gt=0)
     duracion_minutos: Optional[int] = Field(None, ge=0)
     categoria_id: Optional[str] = Field(None, description="UUID de la categoría")
+    tipo: Optional[str] = Field(default="mensual", description="Tipo de servicio")
 
 class ServicioCreate(BaseModel):
     """Schema for creating a new service."""
@@ -17,6 +18,7 @@ class ServicioCreate(BaseModel):
     precio: float = Field(..., gt=0)
     duracion_minutos: Optional[int] = Field(None, ge=0)
     categoria_id: Optional[str] = Field(None, description="UUID de la categoría")
+    tipo: Optional[str] = Field(default="mensual", description="Tipo de servicio")
 
 class ServicioUpdate(BaseModel):
     """Schema for updating a service."""
@@ -25,6 +27,7 @@ class ServicioUpdate(BaseModel):
     precio: Optional[float] = Field(None, gt=0)
     duracion_minutos: Optional[int] = Field(None, ge=0)
     categoria_id: Optional[str] = Field(None, description="UUID de la categoría")
+    tipo: Optional[str] = Field(None, description="Tipo de servicio")
     activo: Optional[bool] = None
 
 class Servicio(ServicioBase):
@@ -32,6 +35,7 @@ class Servicio(ServicioBase):
     id: str
     negocio_id: str = Field(..., description="UUID del negocio")
     activo: bool = Field(default=True, description="Indica si el servicio está activo")
+    tipo: Optional[str] = Field(default="mensual", description="Tipo de servicio")
     creado_en: datetime
     actualizado_en: datetime
 
