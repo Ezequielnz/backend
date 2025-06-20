@@ -102,15 +102,16 @@ class Tarea(SupabaseModel):
 
 # Producto model
 class Producto(SupabaseModel):
-    id: Optional[int] = None
+    id: Optional[str] = None
+    negocio_id: str 
     codigo: Optional[str] = None
     nombre: str
     descripcion: Optional[str] = None
-    precio_compra: float
+    precio_compra: Optional[float] = None
     precio_venta: float
     stock_actual: int
-    stock_minimo: int
-    categoria_id: Optional[int] = None
+    stock_minimo: Optional[int] = None
+    categoria_id: Optional[str] = None
     activo: bool = True
     creado_en: Optional[datetime] = None
     actualizado_en: Optional[datetime] = None

@@ -9,31 +9,6 @@ from app.dependencies import PermissionDependency
 
 router = APIRouter()
 
-class ProductBase(BaseModel):
-    nombre: str
-    descripcion: Optional[str] = None
-    precio: float
-    stock: int
-    # Add other potential product fields here
-
-class ProductCreate(ProductBase):
-    categoria_id: str # Include category_id in create payload
-
-class ProductUpdate(BaseModel): # Use a separate model for update to make fields optional
-    nombre: Optional[str] = None
-    descripcion: Optional[str] = None
-    precio: Optional[float] = None
-    stock: Optional[int] = None
-    categoria_id: Optional[str] = None # Allow changing category
-
-class Product(ProductBase):
-    id: str
-    negocio_id: str
-    categoria_id: str
-
-    class Config:
-        from_attributes = True # or orm_mode = True for older Pydantic versions
-
 # Endpoint to list products for a specific business (optional filter by category)
 @router.get("/", response_model=List[Producto],
     dependencies=[Depends(PermissionDependency("puede_ver_productos"))]
