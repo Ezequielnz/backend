@@ -63,37 +63,39 @@ def get_supabase_anon_client() -> Client:
 
 def get_supabase_user_client(user_token: str) -> Client:
     """
-    Create and return a Supabase client authenticated with the user's token.
-    This client should be used for operations protected by RLS.
+    Create and return a Supabase client with user authentication.
+    This client will use the user's token for RLS-protected operations.
     """
     url = settings.SUPABASE_URL
-    key = settings.SUPABASE_KEY # Although user token is used for auth, anon key might still be needed for some features
+    # Use anon key for user client - this is the correct approach
+    anon_key = settings.SUPABASE_ANON_KEY or settings.SUPABASE_KEY
     
     print("=== Creando cliente Supabase con token de usuario ===")
     print(f"URL: {url}")
-    print(f"KEY: {'*'*(len(key)//4) if key else 'No configurada'}")
+    print(f"ANON_KEY: {'*'*(len(anon_key)//4) if anon_key else 'No configurada'}")
     print(f"Token de usuario (primeros 10 chars): {user_token[:10]}...")
     
-    if not url or not key:
-         raise ValueError("SUPABASE_URL o SUPABASE_KEY no están configurados")
+    if not url or not anon_key:
+         raise ValueError("SUPABASE_URL o SUPABASE_ANON_KEY no están configurados")
     
     try:
-        # Crear cliente Supabase y establecer el token de la sesión
-        client = create_client(url, key)
-        print("Intentando establecer sesión con token...")
-        client.auth.set_session(access_token=user_token, refresh_token=None) # We only need access token for RLS
-        print("✅ Sesión establecida en cliente Supabase con token")
-        # Opcional: Verificar si el cliente está autenticado (puede no ser necesario/posible fácilmente)
-        # try:
-        #     user_check = client.auth.get_user()
-        #     print(f"Verificación de usuario en cliente con token: {user_check.user.id if user_check and user_check.user else 'None'}")
-        # except Exception as check_e:
-        #      print(f"Error durante verificación de usuario en cliente con token: {check_e}")
-             
-        print("✅ Cliente Supabase con token creado exitosamente")
+        # Create client with anon key
+        client = create_client(url, anon_key)
+        
+        # Set authorization header on the client
+        if hasattr(client, 'rest'):
+            client.rest.session.headers.update({"Authorization": f"Bearer {user_token}"})
+        
+        # Also set on auth client if available
+        if hasattr(client, 'auth') and hasattr(client.auth, 'session'):
+            if not hasattr(client.auth, '_headers'):
+                client.auth._headers = {}
+            client.auth._headers["Authorization"] = f"Bearer {user_token}"
+        
+        print("✅ Cliente Supabase con token de usuario creado exitosamente")
         return client
     except Exception as e:
-        print(f"❌ Error al crear cliente Supabase con token o establecer sesión: {str(e)}")
+        print(f"❌ Error al crear cliente Supabase con token: {str(e)}")
         print(f"Tipo de error: {type(e)}")
         raise
 
