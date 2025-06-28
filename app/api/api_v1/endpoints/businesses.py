@@ -4,6 +4,7 @@ from app.types.auth import User
 from app.api.deps import get_current_user
 from app.db.supabase_client import get_supabase_client # Revertir a cliente base
 from app.schemas.business import BusinessCreate, Business
+from app.schemas.invitacion import InvitacionCreate, InvitacionResponse, UsuarioNegocioUpdate
 from supabase.lib.client_options import ClientOptions
 from datetime import datetime, timezone
 
@@ -1039,4 +1040,217 @@ async def remover_usuario_negocio(business_id: str, usuario_negocio_id: str, req
     # Eliminar relación usuario-negocio
     supabase.table("usuarios_negocios").delete().eq("id", usuario_negocio_id).execute()
     
-    return {"message": "Usuario removido del negocio correctamente"} 
+    return {"message": "Usuario removido del negocio correctamente"}
+
+
+# ==================== ENDPOINTS DE INVITACIONES ====================
+
+@router.post("/{business_id}/invitaciones", response_model=InvitacionResponse)
+async def invitar_usuario_negocio(
+    business_id: str, 
+    invitacion_data: InvitacionCreate, 
+    request: Request
+) -> Any:
+    """
+    Invitar un usuario a unirse al negocio (solo admin).
+    Por ahora crea la invitación en la BD, en el futuro enviará email.
+    """
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="User not authenticated.")
+    
+    supabase = get_supabase_client()
+    
+    try:
+        # Verificar que el usuario es admin del negocio
+        admin_check = supabase.table("usuarios_negocios") \
+            .select("rol") \
+            .eq("usuario_id", user.id) \
+            .eq("negocio_id", business_id) \
+            .eq("estado", "aceptado") \
+            .execute()
+        
+        if not admin_check.data or admin_check.data[0].get("rol") != "admin":
+            raise HTTPException(status_code=403, detail="Solo los administradores pueden invitar usuarios.")
+        
+        # Obtener información del negocio
+        negocio_info = supabase.table("negocios") \
+            .select("nombre") \
+            .eq("id", business_id) \
+            .execute()
+        
+        if not negocio_info.data:
+            raise HTTPException(status_code=404, detail="Negocio no encontrado.")
+        
+        negocio_nombre = negocio_info.data[0]["nombre"]
+        
+        # Verificar si el usuario ya existe
+        usuario_existente = supabase.table("usuarios") \
+            .select("id") \
+            .eq("email", invitacion_data.email) \
+            .execute()
+        
+        now = datetime.now(timezone.utc).isoformat()
+        
+        if usuario_existente.data:
+            # Usuario ya existe, crear relación directamente
+            usuario_id = usuario_existente.data[0]["id"]
+            
+            # Verificar si ya está asociado al negocio
+            relacion_existente = supabase.table("usuarios_negocios") \
+                .select("estado") \
+                .eq("usuario_id", usuario_id) \
+                .eq("negocio_id", business_id) \
+                .execute()
+            
+            if relacion_existente.data:
+                estado_actual = relacion_existente.data[0]["estado"]
+                if estado_actual == "aceptado":
+                    raise HTTPException(status_code=400, detail="El usuario ya es miembro de este negocio.")
+                elif estado_actual == "pendiente":
+                    raise HTTPException(status_code=400, detail="El usuario ya tiene una invitación pendiente.")
+                elif estado_actual == "rechazado":
+                    # Actualizar invitación rechazada a pendiente
+                    supabase.table("usuarios_negocios") \
+                        .update({
+                            "estado": "pendiente", 
+                            "rol": invitacion_data.rol,
+                            "invitado_por": user.id,
+                            "creada_en": now
+                        }) \
+                        .eq("usuario_id", usuario_id) \
+                        .eq("negocio_id", business_id) \
+                        .execute()
+            else:
+                # Crear nueva relación
+                supabase.table("usuarios_negocios").insert({
+                    "usuario_id": usuario_id,
+                    "negocio_id": business_id,
+                    "rol": invitacion_data.rol,
+                    "estado": "pendiente",
+                    "invitado_por": user.id,
+                    "creada_en": now
+                }).execute()
+            
+            message = f"Invitación enviada a {invitacion_data.email}. El usuario recibirá una notificación para aceptar."
+        else:
+            # Usuario no existe, crear invitación para registro futuro
+            # TODO: En el futuro, aquí se enviará un email de invitación con link de registro
+            message = f"Se ha preparado una invitación para {invitacion_data.email}. Cuando se registre, será automáticamente asociado al negocio."
+            
+            # Por ahora, podríamos crear una tabla de "invitaciones_pendientes" 
+            # o simplemente retornar el mensaje
+        
+        return InvitacionResponse(
+            message=message,
+            email=invitacion_data.email,
+            negocio_nombre=negocio_nombre,
+            enviado=False  # True cuando implementemos el envío de emails
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Error invitando usuario: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error interno del servidor: {str(e)}")
+
+
+@router.put("/{business_id}/usuarios/{usuario_negocio_id}/estado")
+async def actualizar_estado_usuario_negocio(
+    business_id: str,
+    usuario_negocio_id: str,
+    estado_data: UsuarioNegocioUpdate,
+    request: Request
+) -> Any:
+    """
+    Actualizar el estado de un usuario en el negocio (aceptar/rechazar invitación).
+    Puede ser usado por el propio usuario para aceptar/rechazar o por admin para cambiar estados.
+    """
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="User not authenticated.")
+    
+    supabase = get_supabase_client()
+    
+    try:
+        # Obtener información de la relación usuario-negocio
+        relacion_info = supabase.table("usuarios_negocios") \
+            .select("usuario_id, estado, rol") \
+            .eq("id", usuario_negocio_id) \
+            .eq("negocio_id", business_id) \
+            .execute()
+        
+        if not relacion_info.data:
+            raise HTTPException(status_code=404, detail="Relación usuario-negocio no encontrada.")
+        
+        relacion = relacion_info.data[0]
+        
+        # Verificar permisos
+        es_el_mismo_usuario = relacion["usuario_id"] == user.id
+        
+        # Verificar si es admin del negocio
+        es_admin = False
+        if not es_el_mismo_usuario:
+            admin_check = supabase.table("usuarios_negocios") \
+                .select("rol") \
+                .eq("usuario_id", user.id) \
+                .eq("negocio_id", business_id) \
+                .eq("estado", "aceptado") \
+                .execute()
+            
+            es_admin = admin_check.data and admin_check.data[0].get("rol") == "admin"
+        
+        if not es_el_mismo_usuario and not es_admin:
+            raise HTTPException(status_code=403, detail="No tienes permisos para actualizar este estado.")
+        
+        # Preparar datos de actualización
+        update_data = {
+            "estado": estado_data.estado,
+            "actualizado_en": datetime.now(timezone.utc).isoformat()
+        }
+        
+        # Solo admin puede cambiar rol
+        if estado_data.rol and es_admin:
+            update_data["rol"] = estado_data.rol
+        
+        # Actualizar estado
+        response = supabase.table("usuarios_negocios") \
+            .update(update_data) \
+            .eq("id", usuario_negocio_id) \
+            .execute()
+        
+        if hasattr(response, 'error') and response.error:
+            raise HTTPException(status_code=500, detail=f"Error actualizando estado: {response.error}")
+        
+        # Si se acepta la invitación, crear permisos básicos
+        if estado_data.estado == "aceptado" and relacion["estado"] != "aceptado":
+            try:
+                permisos_basicos = {
+                    "usuario_negocio_id": usuario_negocio_id,
+                    "recurso": "general",
+                    "accion": "acceso",
+                    "acceso_total": False,
+                    "puede_ver_productos": True,
+                    "puede_ver_clientes": True,
+                    "puede_ver_ventas": True,
+                    "creado_en": datetime.now(timezone.utc).isoformat()
+                }
+                
+                supabase.table("permisos_usuario_negocio") \
+                    .insert(permisos_basicos) \
+                    .execute()
+                    
+            except Exception as permisos_error:
+                print(f"⚠️ Warning: Error creando permisos básicos: {permisos_error}")
+        
+        return {
+            "message": f"Estado actualizado a '{estado_data.estado}' correctamente",
+            "estado": estado_data.estado,
+            "usuario_negocio_id": usuario_negocio_id
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Error actualizando estado: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error interno del servidor: {str(e)}")

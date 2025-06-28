@@ -15,8 +15,7 @@ class UserBase(BaseModel):
 
 class UserSignUp(UserBase):
     password: str
-    negocio_id: Optional[str] = None  # UUID del negocio existente
-    nuevo_negocio_nombre: Optional[str] = None  # Nombre del nuevo negocio a crear
+    # Removed business selection fields - users will be invited by business admins in the future
 
 class UserLogin(BaseModel):
     email: EmailStr

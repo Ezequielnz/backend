@@ -146,12 +146,8 @@ async def signup(user_data: UserSignUp) -> Any:
     try:
         print(f"Datos de registro recibidos: {user_data.dict()}")
 
-        # Validar que se reciba negocio_id o nuevo_negocio_nombre
-        if not user_data.negocio_id and not user_data.nuevo_negocio_nombre:
-            raise HTTPException(
-                status_code=400,
-                detail="Debes asociarte a un negocio existente o crear uno nuevo."
-            )
+        # En la nueva lógica, siempre se crea un negocio nuevo automáticamente
+        # Los usuarios serán invitados por administradores de negocio en el futuro
 
         # Usar cliente anónimo para el registro para que auth.uid() sea null
         supabase = get_supabase_anon_client()
@@ -192,41 +188,9 @@ async def signup(user_data: UserSignUp) -> Any:
         response = supabase.table("usuarios").insert(user_profile).execute()
         print(f"Perfil creado en tabla usuarios: {response.data}")
 
-        # --- NUEVO FLUJO ---
-        if user_data.negocio_id:
-            # Asociar a negocio existente, estado pendiente
-            usuario_negocio = {
-                "usuario_id": user_id,
-                "negocio_id": user_data.negocio_id,
-                "rol": "empleado",
-                "estado": "pendiente",
-                "invitado_por": None,
-                "creada_en": now
-            }
-            supabase.table("usuarios_negocios").insert(usuario_negocio).execute()
-            print(f"Usuario asociado a negocio {user_data.negocio_id} (pendiente de aprobación)")
-            print(f"[NOTIFICACIÓN] El usuario {user_data.email} solicitó asociarse al negocio {user_data.negocio_id}. Notificar al administrador del negocio para aprobar/rechazar.")
-        elif user_data.nuevo_negocio_nombre:
-            # Crear nuevo negocio y asociar como aprobado
-            negocio = {
-                "nombre": user_data.nuevo_negocio_nombre,
-                "creada_por": user_id,
-                "creada_en": now
-            }
-            negocio_resp = supabase.table("negocios").insert(negocio).execute()
-            if not negocio_resp.data or not negocio_resp.data[0].get("id"):
-                raise Exception("No se pudo crear el negocio")
-            negocio_id = negocio_resp.data[0]["id"]
-            usuario_negocio = {
-                "usuario_id": user_id,
-                "negocio_id": negocio_id,
-                "rol": "admin",  # Corregir: debe ser admin, no estado_aprobacion
-                "estado": "aceptado",  # Corregir: usar estado en lugar de estado_aprobacion
-                "invitado_por": None,
-                "creada_en": now
-            }
-            supabase.table("usuarios_negocios").insert(usuario_negocio).execute()  # Corregir: tabla usuarios_negocios
-            print(f"Negocio creado y usuario asociado como admin (ID negocio: {negocio_id})")
+        # Registro simple: el usuario se registra sin negocio automático
+        # Podrá crear un negocio manualmente o ser invitado a uno existente
+        print(f"Usuario {user_data.email} registrado exitosamente. Puede crear un negocio o ser invitado a uno existente.")
 
         # Mensaje diferente según el modo
         if settings.DEBUG:

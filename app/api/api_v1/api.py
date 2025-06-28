@@ -9,7 +9,7 @@ api_router.include_router(ventas.router, prefix="/businesses/{business_id}/venta
 api_router.include_router(ventas.router, prefix="/ventas", tags=["ventas-new"])
 api_router.include_router(stock.router, prefix="/stock", tags=["stock"])
 api_router.include_router(facturacion.router, prefix="/facturacion", tags=["facturacion"])
-api_router.include_router(tareas.router, prefix="/tareas", tags=["tareas"])
+api_router.include_router(tareas.router, prefix="/businesses/{business_id}/tareas", tags=["tareas"])
 api_router.include_router(comunicacion.router, prefix="/comunicacion", tags=["comunicacion"])
 api_router.include_router(productos.router, prefix="/businesses/{business_id}/products", tags=["productos"])
 api_router.include_router(categorias.router, prefix="/businesses/{business_id}/categories", tags=["categories"])

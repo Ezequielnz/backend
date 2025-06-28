@@ -251,4 +251,12 @@ async def verify_facturacion_access(business_id: str, user: User, action: str = 
     return await verify_module_permission(business_id, user, "facturacion", action)
 
 async def verify_tareas_access(business_id: str, user: User, action: str = "ver"):
+    """Verificar acceso a tareas con permisos específicos"""
     return await verify_module_permission(business_id, user, "tareas", action)
+
+async def verify_basic_business_access(business_id: str, user: User) -> dict:
+    """
+    Verificar acceso básico al negocio para tareas.
+    Permite a todos los usuarios del negocio ver tareas, pero filtra según el rol.
+    """
+    return await verify_business_access(business_id, user)

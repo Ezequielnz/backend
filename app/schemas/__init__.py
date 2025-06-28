@@ -1,4 +1,11 @@
 """
 Schemas package for Pydantic models used in the application.
 These models are used for request/response validation and serialization.
-""" 
+"""
+
+from .tarea import (
+    TareaBase, TareaCreate, TareaUpdate, TareaResponse, 
+    TareaListResponse, TareaFiltros, TareaCalendario, 
+    TareaEstadisticas, TareaNotificacion,
+    EstadoTarea, PrioridadTarea
+) 
