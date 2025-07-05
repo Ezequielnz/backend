@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, status, Depends, Query, Request
 from typing import Optional, List, Any
-from datetime import datetime
+from datetime import datetime, timezone
 import math
 
 from app.dependencies import PermissionDependency
@@ -453,17 +453,96 @@ async def get_estadisticas_tareas(
         alta = len([t for t in tareas if t.get("prioridad") == "alta"])
         urgente = len([t for t in tareas if t.get("prioridad") == "urgente"])
         
+        # Calcular tareas vencidas (las que tienen fecha_fin pasada y no están completadas)
+        now = datetime.now(timezone.utc)
+        vencidas = 0
+        
+        # Para calcular vencidas necesitamos obtener también las fechas
+        if user_role in ["admin", "propietario"]:
+            fecha_query = supabase.table("tareas").select("fecha_fin, estado").eq("negocio_id", business_id)
+        else:
+            fecha_query = supabase.table("tareas").select("fecha_fin, estado").eq("negocio_id", business_id).eq("asignada_a_id", user_negocio_id)
+        
+        fecha_response = fecha_query.execute()
+        fecha_tareas = fecha_response.data or []
+        
+        for tarea in fecha_tareas:
+            if (tarea.get("fecha_fin") and 
+                tarea.get("estado") not in ["completada", "cancelada"]):
+                try:
+                    # Manejar diferentes formatos de fecha
+                    fecha_fin_str = tarea["fecha_fin"]
+                    if fecha_fin_str.endswith('Z'):
+                        fecha_fin_str = fecha_fin_str.replace('Z', '+00:00')
+                    elif '+' not in fecha_fin_str and 'T' in fecha_fin_str:
+                        fecha_fin_str = fecha_fin_str + '+00:00'
+                    
+                    fecha_fin = datetime.fromisoformat(fecha_fin_str)
+                    
+                    # Asegurar que ambas fechas tengan zona horaria para comparar
+                    if fecha_fin.tzinfo is None:
+                        fecha_fin = fecha_fin.replace(tzinfo=timezone.utc)
+                    
+                    if fecha_fin < now:
+                        vencidas += 1
+                except (ValueError, TypeError) as e:
+                    print(f"Error al parsear fecha_fin: {fecha_fin_str}, error: {e}")
+                    continue
+        
+        # Estadísticas por empleado (solo para admin/propietario)
+        por_empleado = []
+        if user_role in ["admin", "propietario"]:
+            try:
+                empleado_query = supabase.table("tareas").select("""
+                    asignada_a_id,
+                    estado,
+                    asignada_a:usuarios_negocios!asignada_a_id(
+                        usuario:usuarios!usuarios_negocios_usuario_id_fkey(nombre, apellido)
+                    )
+                """).eq("negocio_id", business_id).not_.is_("asignada_a_id", "null")
+                
+                empleado_response = empleado_query.execute()
+                empleado_tareas = empleado_response.data or []
+                
+                # Agrupar por empleado
+                empleados_stats = {}
+                for tarea in empleado_tareas:
+                    empleado_id = tarea.get("asignada_a_id")
+                    if empleado_id and tarea.get("asignada_a"):
+                        if empleado_id not in empleados_stats:
+                            usuario = tarea["asignada_a"]["usuario"]
+                            empleados_stats[empleado_id] = {
+                                "empleado_id": empleado_id,
+                                "nombre": f"{usuario['nombre']} {usuario['apellido']}",
+                                "total": 0,
+                                "completadas": 0,
+                                "pendientes": 0
+                            }
+                        
+                        empleados_stats[empleado_id]["total"] += 1
+                        if tarea.get("estado") == "completada":
+                            empleados_stats[empleado_id]["completadas"] += 1
+                        elif tarea.get("estado") == "pendiente":
+                            empleados_stats[empleado_id]["pendientes"] += 1
+                
+                por_empleado = list(empleados_stats.values())
+            except Exception as e:
+                print(f"Error al obtener estadísticas por empleado: {e}")
+                por_empleado = []
+        
         return TareaEstadisticas(
             total_tareas=total_tareas,
             pendientes=pendientes,
             en_progreso=en_progreso,
             completadas=completadas,
-            canceladas=canceladas,
-            pausadas=pausadas,
-            prioridad_baja=baja,
-            prioridad_media=media,
-            prioridad_alta=alta,
-            prioridad_urgente=urgente
+            vencidas=vencidas,
+            por_prioridad={
+                "baja": baja,
+                "media": media,
+                "alta": alta,
+                "urgente": urgente
+            },
+            por_empleado=por_empleado
         )
         
     except HTTPException:
