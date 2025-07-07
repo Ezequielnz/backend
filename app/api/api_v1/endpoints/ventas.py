@@ -4,7 +4,7 @@ from datetime import datetime, date, timedelta
 import calendar
 from pydantic import BaseModel, Field
 import uuid
-from jose import jwt
+import jwt
 import json
 
 from app.db.supabase_client import get_supabase_client, get_supabase_user_client
@@ -23,7 +23,7 @@ def get_user_id_from_token(token: str) -> str:
         
         # Decodificar el JWT sin verificar la firma (solo para obtener el payload)
         # En producción, deberías verificar la firma con la clave pública de Supabase
-        decoded = jwt.get_unverified_claims(token)
+        decoded = jwt.decode(token, options={"verify_signature": False})
         
         # El user_id está en el campo 'sub' del JWT
         user_id = decoded.get('sub')
