@@ -94,10 +94,17 @@ git push origin main
    PIP_NO_CACHE_DIR=1
    PIP_DISABLE_PIP_VERSION_CHECK=1
    
+   # Configuración de la aplicación
+   ENVIRONMENT=production
+   DEBUG=false
+   
    # Tus variables específicas de Supabase
    SUPABASE_URL=tu_supabase_url
    SUPABASE_KEY=tu_supabase_key
    SUPABASE_SERVICE_ROLE_KEY=tu_service_role_key
+   
+   # Configuración CORS para producción
+   ALLOWED_ORIGINS=https://tu-frontend.onrender.com,https://tu-dominio.com
    ```
 
 ### 3. **Verificar el Despliegue**
@@ -105,7 +112,33 @@ git push origin main
 Una vez desplegado, verifica que los endpoints funcionen:
 
 ```bash
-# Endpoint de estado
+# Endpoint raíz (información básica)
+curl https://tu-app.onrender.com/
+
+# Debería devolver:
+{
+  "message": "Bienvenido a MicroPymes API",
+  "version": "1.0.0",
+  "environment": "production",
+  "status": "OK",
+  "docs": "/api/v1/docs"
+}
+
+# Endpoint de salud (verificación completa)
+curl https://tu-app.onrender.com/health
+
+# Debería devolver:
+{
+  "status": "OK",
+  "timestamp": 1234567890.123,
+  "services": {
+    "supabase": "Conectado",
+    "api": "OK"
+  },
+  "version": "1.0.0"
+}
+
+# Endpoint de estado de importación
 curl https://tu-app.onrender.com/api/v1/importacion/status
 
 # Debería devolver:

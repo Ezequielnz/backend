@@ -72,6 +72,7 @@ async def auth_middleware(request: Request, call_next):
     # Lista de rutas públicas que no requieren autenticación
     public_routes = [
         "/",
+        "/health",
         "/api/v1/docs",
         "/api/v1/openapi.json",
         "/api/v1/auth/login",
@@ -158,18 +159,40 @@ app.include_router(api_router, prefix=settings.API_V1_STR)
 
 @app.get("/")
 async def root() -> dict:
+    """Endpoint raíz de la API - información básica del servicio."""
+    try:
+        return {
+            "message": "Bienvenido a MicroPymes API",
+            "version": settings.VERSION,
+            "environment": settings.ENVIRONMENT,
+            "status": "OK",
+            "docs": f"{settings.API_V1_STR}/docs"
+        }
+    except Exception as e:
+        return {
+            "message": "MicroPymes API",
+            "status": "Error", 
+            "error": str(e)
+        }
+
+@app.get("/health")
+async def health_check() -> dict:
+    """Endpoint de verificación de salud del sistema."""
     try:
         supabase_status = "Conectado" if check_supabase_connection() else "Error de conexión"
         return {
-            "message": "Bienvenido a MicroPymes API",
-            "status": {
+            "status": "OK",
+            "timestamp": time.time(),
+            "services": {
                 "supabase": supabase_status,
-                "version": settings.VERSION,
-                "environment": settings.ENVIRONMENT
-            }
+                "api": "OK"
+            },
+            "version": settings.VERSION
         }
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error al verificar el estado del sistema: {str(e)}"
-        ) 
+        return {
+            "status": "Error",
+            "timestamp": time.time(),
+            "error": str(e),
+            "version": settings.VERSION
+        } 

@@ -7,9 +7,11 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
     PROJECT_NAME: str = "MicroPymes"
+    VERSION: str = "1.0.0"
+    ENVIRONMENT: str = os.getenv("ENVIRONMENT", "production")
     
     # Environment configuration
-    DEBUG: bool = True  # Establecer en False para producción
+    DEBUG: bool = os.getenv("DEBUG", "false").lower() == "true"
     
     # CORS configuration
     # Añadir http://localhost:5173 para aceptar peticiones del frontend de Vite
