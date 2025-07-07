@@ -13,7 +13,7 @@ supabase==2.3.0
 pandas==2.2.3
 openpyxl==3.1.5
 fuzzywuzzy==0.18.0
-python-Levenshtein==0.27.1
+Levenshtein==0.21.1
 xlrd==2.0.1
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
