@@ -17,338 +17,174 @@ from app.dependencies import PermissionDependency
 router = APIRouter()
 
 @router.post("/upload", response_model=ImportacionResultado,
-    dependencies=[Depends(PermissionDependency("puede_editar_productos"))]
-)
-async def subir_archivo_excel(
-    business_id: str,
+             dependencies=[Depends(PermissionDependency("productos", "create"))])
+async def upload_excel(
     file: UploadFile = File(...),
     sheet_name: Optional[str] = Form(None),
     current_user: UserData = Depends(get_current_user)
 ):
     """
-    Sube y procesa un archivo Excel para importación masiva de productos.
-    
-    Args:
-        business_id: ID del negocio
-        file: Archivo Excel a procesar
-        sheet_name: Nombre de la hoja a procesar (opcional)
-        current_user: Usuario actual
-        
-    Returns:
-        Resultado del procesamiento inicial
+    Subir y procesar archivo Excel para importación de productos.
     """
-    try:
-        # Validar tipo de archivo
-        if not file.filename.endswith(('.xlsx', '.xls')):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="El archivo debe ser un Excel (.xlsx o .xls)"
-            )
-        
-        # Validar tamaño del archivo (máximo 10MB)
-        file_content = await file.read()
-        if len(file_content) > 10 * 1024 * 1024:  # 10MB
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="El archivo no puede ser mayor a 10MB"
-            )
-        
-        # Procesar archivo
-        service = ImportacionProductosService()
-        resultado = await service.procesar_archivo_excel(
-            file_content=file_content,
-            negocio_id=business_id,
-            usuario_id=current_user["id"],
-            sheet_name=sheet_name
-        )
-        
-        return resultado
-        
-    except ValueError as e:
+    # Validar tipo de archivo
+    if not file.filename.lower().endswith(('.xlsx', '.xls')):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            detail="Solo se permiten archivos Excel (.xlsx, .xls)"
         )
+    
+    # Validar tamaño del archivo (máximo 10MB)
+    content = await file.read()
+    if len(content) > 10 * 1024 * 1024:  # 10MB
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El archivo es demasiado grande. Máximo 10MB permitido."
+        )
+    
+    try:
+        service = ImportacionProductosService()
+        resultado = await service.procesar_archivo_excel(
+            content, 
+            current_user.negocio_id,
+            sheet_name
+        )
+        return resultado
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error interno del servidor: {str(e)}"
+            detail=f"Error procesando archivo: {str(e)}"
         )
 
-@router.get("/resumen", response_model=ResumenImportacion,
-    dependencies=[Depends(PermissionDependency("puede_ver_productos"))]
-)
-async def obtener_resumen_importacion(
-    business_id: str,
+@router.get("/sheets/{session_id}")
+async def get_sheets(
+    session_id: str,
     current_user: UserData = Depends(get_current_user)
 ):
     """
-    Obtiene el resumen de la importación en curso.
-    
-    Args:
-        business_id: ID del negocio
-        current_user: Usuario actual
-        
-    Returns:
-        Resumen de la importación
+    Obtener nombres de hojas del archivo Excel subido.
     """
     try:
         service = ImportacionProductosService()
-        resumen = await service.obtener_resumen_importacion(
-            negocio_id=business_id,
-            usuario_id=current_user["id"]
-        )
-        
-        return resumen
-        
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e)
-        )
+        sheets = await service.obtener_hojas_excel(session_id, current_user.negocio_id)
+        return {"sheets": sheets}
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error interno del servidor: {str(e)}"
+            detail=f"Error obteniendo hojas: {str(e)}"
         )
 
-@router.get("/productos-temporales", response_model=List[ProductoImportacionTemporal],
-    dependencies=[Depends(PermissionDependency("puede_ver_productos"))]
-)
-async def obtener_productos_temporales(
-    business_id: str,
-    estado: Optional[str] = None,
+@router.get("/preview/{session_id}", response_model=ResumenImportacion)
+async def get_preview(
+    session_id: str,
     current_user: UserData = Depends(get_current_user)
 ):
     """
-    Obtiene los productos temporales de la importación en curso.
-    
-    Args:
-        business_id: ID del negocio
-        estado: Filtrar por estado (pendiente, validado, error)
-        current_user: Usuario actual
-        
-    Returns:
-        Lista de productos temporales
+    Obtener vista previa de los productos a importar.
     """
     try:
         service = ImportacionProductosService()
-        productos = await service.obtener_productos_temporales(
-            negocio_id=business_id,
-            usuario_id=current_user["id"],
-            estado=estado
-        )
-        
-        return productos
-        
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e)
-        )
+        preview = await service.obtener_preview(session_id, current_user.negocio_id)
+        return preview
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error interno del servidor: {str(e)}"
+            detail=f"Error obteniendo preview: {str(e)}"
         )
 
-@router.put("/productos-temporales/{producto_id}", response_model=ProductoImportacionTemporal,
-    dependencies=[Depends(PermissionDependency("puede_editar_productos"))]
-)
-async def actualizar_producto_temporal(
-    business_id: str,
-    producto_id: str,
-    producto_update: ProductoImportacionUpdate,
+@router.post("/mapping/{session_id}")
+async def update_mapping(
+    session_id: str,
+    mapping: dict,
     current_user: UserData = Depends(get_current_user)
 ):
     """
-    Actualiza un producto temporal.
-    
-    Args:
-        business_id: ID del negocio
-        producto_id: ID del producto temporal
-        producto_update: Datos a actualizar
-        current_user: Usuario actual
-        
-    Returns:
-        Producto temporal actualizado
+    Actualizar el mapeo de columnas Excel a campos de producto.
     """
     try:
         service = ImportacionProductosService()
-        
-        # Convertir a diccionario excluyendo valores None
-        datos_actualizacion = producto_update.model_dump(exclude_unset=True, exclude_none=True)
-        
-        producto_actualizado = await service.actualizar_producto_temporal(
-            producto_id=producto_id,
-            negocio_id=business_id,
-            usuario_id=current_user["id"],
-            datos_actualizacion=datos_actualizacion
+        resultado = await service.actualizar_mapeo(
+            session_id, 
+            current_user.negocio_id, 
+            mapping
         )
-        
-        return producto_actualizado
-        
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e)
-        )
+        return resultado
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error interno del servidor: {str(e)}"
+            detail=f"Error actualizando mapeo: {str(e)}"
         )
 
-@router.post("/confirmar", response_model=ResultadoImportacionFinal,
-    dependencies=[Depends(PermissionDependency("puede_editar_productos"))]
-)
-async def confirmar_importacion(
-    business_id: str,
+@router.put("/products/{session_id}")
+async def update_products(
+    session_id: str,
+    productos: List[ProductoImportacionUpdate],
+    current_user: UserData = Depends(get_current_user)
+):
+    """
+    Actualizar productos antes de la importación final.
+    """
+    try:
+        service = ImportacionProductosService()
+        resultado = await service.actualizar_productos_temporales(
+            session_id,
+            current_user.negocio_id,
+            productos
+        )
+        return resultado
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error actualizando productos: {str(e)}"
+        )
+
+@router.post("/confirm/{session_id}", response_model=ResultadoImportacionFinal)
+async def confirm_import(
+    session_id: str,
     confirmacion: ConfirmacionImportacion,
     current_user: UserData = Depends(get_current_user)
 ):
     """
-    Confirma la importación y crea los productos definitivos.
-    
-    Args:
-        business_id: ID del negocio
-        confirmacion: Datos de confirmación
-        current_user: Usuario actual
-        
-    Returns:
-        Resultado de la importación final
+    Confirmar e importar productos definitivamente.
     """
     try:
         service = ImportacionProductosService()
         resultado = await service.confirmar_importacion(
-            negocio_id=business_id,
-            usuario_id=current_user["id"],
-            confirmacion=confirmacion
+            session_id,
+            current_user.negocio_id,
+            confirmacion
         )
-        
         return resultado
-        
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error interno del servidor: {str(e)}"
+            detail=f"Error confirmando importación: {str(e)}"
         )
 
-@router.delete("/cancelar",
-    dependencies=[Depends(PermissionDependency("puede_editar_productos"))]
-)
-async def cancelar_importacion(
-    business_id: str,
+@router.delete("/cancel/{session_id}")
+async def cancel_import(
+    session_id: str,
     current_user: UserData = Depends(get_current_user)
 ):
     """
-    Cancela la importación en curso eliminando los datos temporales.
-    
-    Args:
-        business_id: ID del negocio
-        current_user: Usuario actual
-        
-    Returns:
-        Confirmación de cancelación
+    Cancelar proceso de importación.
     """
     try:
         service = ImportacionProductosService()
-        await service.cancelar_importacion(
-            negocio_id=business_id,
-            usuario_id=current_user["id"]
-        )
-        
-        return JSONResponse(
-            status_code=status.HTTP_200_OK,
-            content={"message": "Importación cancelada correctamente"}
-        )
-        
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e)
-        )
+        await service.cancelar_importacion(session_id, current_user.negocio_id)
+        return {"message": "Importación cancelada exitosamente"}
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error interno del servidor: {str(e)}"
+            detail=f"Error cancelando importación: {str(e)}"
         )
 
-@router.get("/hojas-excel")
-async def obtener_hojas_excel(
-    file: UploadFile = File(...),
-    current_user: UserData = Depends(get_current_user)
-):
+@router.get("/status")
+async def get_import_status():
     """
-    Obtiene los nombres de las hojas de un archivo Excel.
-    
-    Args:
-        file: Archivo Excel
-        current_user: Usuario actual
-        
-    Returns:
-        Lista de nombres de hojas
+    Obtener estado del sistema de importación.
     """
-    try:
-        # Validar tipo de archivo
-        if not file.filename.endswith(('.xlsx', '.xls')):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="El archivo debe ser un Excel (.xlsx o .xls)"
-            )
-        
-        file_content = await file.read()
-        service = ImportacionProductosService()
-        sheet_names = service.excel_processor.get_sheet_names(file_content)
-        
-        return {"sheet_names": sheet_names}
-        
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error interno del servidor: {str(e)}"
-        )
-
-@router.delete("/limpiar-antiguos",
-    dependencies=[Depends(PermissionDependency("puede_editar_productos"))]
-)
-async def limpiar_importaciones_antiguas(
-    current_user: UserData = Depends(get_current_user)
-):
-    """
-    Limpia importaciones temporales antiguas (más de 24 horas).
-    Útil para mantenimiento manual.
-    
-    Args:
-        current_user: Usuario actual
-        
-    Returns:
-        Número de registros eliminados
-    """
-    try:
-        service = ImportacionProductosService()
-        registros_eliminados = await service.limpiar_importaciones_antiguas()
-        
-        return JSONResponse(
-            status_code=status.HTTP_200_OK,
-            content={
-                "message": f"Limpieza completada. {registros_eliminados} registros eliminados.",
-                "registros_eliminados": registros_eliminados
-            }
-        )
-        
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error al limpiar datos antiguos: {str(e)}"
-        ) 
+    return {
+        "message": "Sistema de importación funcionando correctamente",
+        "status": "active",
+        "supported_formats": [".xlsx", ".xls"]
+    } 
