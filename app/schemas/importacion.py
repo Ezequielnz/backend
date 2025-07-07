@@ -44,13 +44,12 @@ class ProductoImportacionUpdate(BaseModel):
     categoria_id: Optional[str] = None
 
 class ImportacionResultado(BaseModel):
-    """Resultado del procesamiento de importación."""
+    """Resultado del procesamiento inicial de importación."""
+    session_id: str
     total_filas: int
-    filas_procesadas: int
-    filas_con_errores: int
-    filas_validas: int
-    productos_temporales: List[ProductoImportacionTemporal]
-    errores_generales: List[str] = Field(default_factory=list)
+    columnas_detectadas: List[str]
+    mapeo_automatico: Dict[str, str]
+    reconocimiento_columnas: Dict[str, Any]
 
 class ColumnaMapeada(BaseModel):
     """Información sobre una columna mapeada del Excel."""
@@ -61,11 +60,10 @@ class ColumnaMapeada(BaseModel):
 
 class ResumenImportacion(BaseModel):
     """Resumen de la importación para mostrar al usuario."""
+    session_id: str
     total_filas: int
-    columnas_detectadas: List[ColumnaMapeada]
     productos_validos: int
     productos_con_errores: int
-    productos_pendientes: int
     categorias_nuevas: List[str] = Field(default_factory=list)
 
 class ConfirmacionImportacion(BaseModel):
@@ -79,5 +77,4 @@ class ResultadoImportacionFinal(BaseModel):
     productos_creados: int
     productos_actualizados: int
     categorias_creadas: int
-    errores: List[str] = Field(default_factory=list)
-    productos_creados_ids: List[str] = Field(default_factory=list) 
+    errores: List[str] = Field(default_factory=list) 
