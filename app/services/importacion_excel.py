@@ -1,7 +1,7 @@
 import pandas as pd
 import re
 from typing import Dict, List, Optional, Tuple, Any
-from fuzzywuzzy import fuzz, process
+from thefuzz import fuzz, process
 from io import BytesIO
 
 class ColumnRecognizer:
