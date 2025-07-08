@@ -3,6 +3,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 import sys
 import time
+import asyncio
 from typing import List, Optional
 import os
 
@@ -13,7 +14,7 @@ from app.db.supabase_client import get_supabase_client, check_supabase_connectio
 # Get allowed origins from environment or use default
 ALLOWED_ORIGINS: List[str] = os.getenv(
     "ALLOWED_ORIGINS",
-    "http://localhost:5173,http://localhost:3000"  # Default development origins
+    "http://localhost:5173,http://localhost:3000,https://micropymes-frontend.onrender.com"  # Include Render frontend
 ).split(",")
 
 MAX_RETRIES = 3
@@ -155,6 +156,21 @@ async def auth_middleware(request: Request, call_next):
 
 app.middleware("http")(auth_middleware)
 
+# Timeout middleware para evitar que las requests se cuelguen
+async def timeout_middleware(request: Request, call_next):
+    """Middleware to handle request timeouts"""
+    try:
+        # Timeout de 50 segundos para dar tiempo a las consultas complejas
+        response = await asyncio.wait_for(call_next(request), timeout=50.0)
+        return response
+    except asyncio.TimeoutError:
+        return Response("Request timeout", status_code=408)
+    except Exception as e:
+        print(f"Timeout middleware error: {e}")
+        return Response("Internal server error", status_code=500)
+
+app.middleware("http")(timeout_middleware)
+
 app.include_router(api_router, prefix=settings.API_V1_STR)
 
 @app.get("/")
@@ -187,12 +203,24 @@ async def health_check() -> dict:
                 "supabase": supabase_status,
                 "api": "OK"
             },
-            "version": settings.VERSION
+            "version": settings.VERSION,
+            "environment": settings.ENVIRONMENT,
+            "allowed_origins": ALLOWED_ORIGINS
         }
     except Exception as e:
         return {
             "status": "Error",
             "timestamp": time.time(),
             "error": str(e),
-            "version": settings.VERSION
-        } 
+            "version": settings.VERSION,
+            "environment": settings.ENVIRONMENT
+        }
+
+@app.get("/wake-up")
+async def wake_up() -> dict:
+    """Endpoint para despertar el servicio en Render (evita cold starts)."""
+    return {
+        "status": "awake",
+        "timestamp": time.time(),
+        "message": "Servicio activo y listo para recibir requests"
+    } 

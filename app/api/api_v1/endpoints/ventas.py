@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 import uuid
 import jwt
 import json
+import time
 
 from app.db.supabase_client import get_supabase_client, get_supabase_user_client
 from app.dependencies import verify_permission, PermissionDependency
@@ -90,6 +91,21 @@ class VentaResponseSimple(BaseModel):
     total: float
     fecha: str  # Supabase devuelve fecha como string
     mensaje: str
+
+class DashboardStatsPeriod(BaseModel):
+    total_sales: float
+    estimated_profit: float
+    new_customers: int
+
+class DashboardStatsResponse(BaseModel):
+    today: DashboardStatsPeriod
+    week: DashboardStatsPeriod
+    month: DashboardStatsPeriod
+    top_items: List[dict]
+    # Nuevos campos para el dashboard
+    total_products: int
+    total_customers: int
+    low_stock_products: int
 
 @router.post("/record-sale", response_model=VentaResponseSimple)
 async def record_sale(
@@ -718,3 +734,357 @@ async def get_top_products_chart(
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al obtener datos del gráfico de productos: {str(e)}") 
+
+@router.get("/dashboard-stats-v2", response_model=DashboardStatsResponse)
+async def get_dashboard_stats_v2(
+    authorization: str = Header(..., description="Bearer token"),
+    negocio_id: str = None
+):
+    """
+    Obtiene estadísticas del dashboard incluyendo ventas, ganancias y clientes nuevos
+    para diferentes períodos de tiempo. Optimizado para reducir consultas a la base de datos.
+    """
+    start_time = time.time()
+    try:
+        client = get_supabase_user_client(authorization)
+        
+        if not negocio_id:
+            raise HTTPException(status_code=400, detail="negocio_id es requerido")
+        
+        print(f"[DASHBOARD] Iniciando dashboard-stats-v2 para negocio {negocio_id}")
+
+        # Obtener fechas de inicio para cada período
+        now = datetime.now()
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        
+        # Inicio de la semana (lunes)
+        week_start = (now - timedelta(days=now.weekday())).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ).isoformat()
+        
+        # Inicio del mes
+        month_start = now.replace(
+            day=1, hour=0, minute=0, second=0, microsecond=0
+        ).isoformat()
+
+        # OPTIMIZACIÓN: Obtener todas las ventas del mes de una vez (incluye today y week)
+        query_start = time.time()
+        try:
+            ventas_mes = client.table("ventas") \
+                .select("id, total, fecha") \
+                .eq("negocio_id", negocio_id) \
+                .gte("fecha", month_start) \
+                .execute()
+            
+            ventas_data = ventas_mes.data if ventas_mes.data else []
+            print(f"[DASHBOARD] Consulta ventas: {len(ventas_data)} registros en {time.time() - query_start:.2f}s")
+        except Exception as e:
+            print(f"[DASHBOARD] Error obteniendo ventas: {str(e)}")
+            ventas_data = []
+
+        # OPTIMIZACIÓN: Obtener todos los detalles de ventas del mes de una vez
+        query_start = time.time()
+        try:
+            if ventas_data:
+                venta_ids = [v["id"] for v in ventas_data]
+                detalles_mes = client.table("venta_detalle") \
+                    .select("venta_id, producto_id, servicio_id, cantidad, precio_unitario, subtotal") \
+                    .in_("venta_id", venta_ids) \
+                    .execute()
+                
+                detalles_data = detalles_mes.data if detalles_mes.data else []
+                print(f"[DASHBOARD] Consulta detalles: {len(detalles_data)} registros en {time.time() - query_start:.2f}s")
+            else:
+                detalles_data = []
+                print(f"[DASHBOARD] Sin ventas, saltando detalles")
+        except Exception as e:
+            print(f"[DASHBOARD] Error obteniendo detalles: {str(e)}")
+            detalles_data = []
+
+        # OPTIMIZACIÓN: Obtener todos los productos y servicios de una vez
+        try:
+            # Obtener IDs únicos de productos y servicios
+            producto_ids = list(set(d["producto_id"] for d in detalles_data if d.get("producto_id")))
+            servicio_ids = list(set(d["servicio_id"] for d in detalles_data if d.get("servicio_id")))
+            
+            # Obtener productos con nombres y costos
+            productos_info = {}
+            if producto_ids:
+                productos_response = client.table("productos") \
+                    .select("id, nombre, precio_compra") \
+                    .in_("id", producto_ids) \
+                    .execute()
+                
+                if productos_response.data:
+                    productos_info = {
+                        p["id"]: {
+                            "nombre": p.get("nombre", "Producto sin nombre"),
+                            "costo": p.get("precio_compra", 0) or 0
+                        }
+                        for p in productos_response.data
+                    }
+            
+            # Obtener servicios con nombres y costos
+            servicios_info = {}
+            if servicio_ids:
+                servicios_response = client.table("servicios") \
+                    .select("id, nombre, costo") \
+                    .in_("id", servicio_ids) \
+                    .execute()
+                
+                if servicios_response.data:
+                    servicios_info = {
+                        s["id"]: {
+                            "nombre": s.get("nombre", "Servicio sin nombre"),
+                            "costo": s.get("costo", 0) or 0
+                        }
+                        for s in servicios_response.data
+                    }
+        except Exception as e:
+            print(f"Error obteniendo productos/servicios: {str(e)}")
+            productos_info = {}
+            servicios_info = {}
+
+        # OPTIMIZACIÓN: Obtener datos de clientes y productos en paralelo
+        try:
+            # Consultas en paralelo para optimizar rendimiento
+            import asyncio
+            
+            # Crear las consultas
+            clientes_mes_query = client.table("clientes") \
+                .select("id, creado_en") \
+                .eq("negocio_id", negocio_id) \
+                .gte("creado_en", month_start) \
+                .execute()
+            
+            total_clientes_query = client.table("clientes") \
+                .select("id") \
+                .eq("negocio_id", negocio_id) \
+                .execute()
+            
+            total_productos_query = client.table("productos") \
+                .select("id") \
+                .eq("negocio_id", negocio_id) \
+                .execute()
+            
+            productos_stock_bajo_query = client.table("productos") \
+                .select("id") \
+                .eq("negocio_id", negocio_id) \
+                .lt("stock_actual", 10) \
+                .execute()
+            
+            # Ejecutar consultas
+            clientes_mes = clientes_mes_query
+            total_clientes_response = total_clientes_query
+            total_productos_response = total_productos_query
+            productos_stock_bajo_response = productos_stock_bajo_query
+            
+            # Procesar resultados
+            clientes_data = clientes_mes.data if clientes_mes.data else []
+            total_customers = len(total_clientes_response.data) if total_clientes_response.data else 0
+            total_products = len(total_productos_response.data) if total_productos_response.data else 0
+            low_stock_products = len(productos_stock_bajo_response.data) if productos_stock_bajo_response.data else 0
+            
+            print(f"[DASHBOARD] Conteos obtenidos - Productos: {total_products}, Clientes: {total_customers}, Stock bajo: {low_stock_products}")
+            
+        except Exception as e:
+            print(f"Error obteniendo datos adicionales: {str(e)}")
+            clientes_data = []
+            total_customers = 0
+            total_products = 0
+            low_stock_products = 0
+
+        # Función auxiliar optimizada para calcular estadísticas
+        def calculate_period_stats(start_date: str) -> DashboardStatsPeriod:
+            try:
+                # Filtrar ventas del período
+                ventas_periodo = [v for v in ventas_data if v.get("fecha", "") >= start_date]
+                
+                if not ventas_periodo:
+                    return DashboardStatsPeriod(
+                        total_sales=0,
+                        estimated_profit=0,
+                        new_customers=0
+                    )
+                
+                # Calcular total de ventas
+                total_sales = sum(v.get("total", 0) or 0 for v in ventas_periodo)
+                
+                # Calcular ganancias estimadas
+                venta_ids_periodo = [v["id"] for v in ventas_periodo]
+                detalles_periodo = [d for d in detalles_data if d.get("venta_id") in venta_ids_periodo]
+                
+                ganancia = 0
+                for detalle in detalles_periodo:
+                    try:
+                        cantidad = detalle.get("cantidad", 0) or 0
+                        precio_unitario = detalle.get("precio_unitario", 0) or 0
+                        
+                        if detalle.get("producto_id"):
+                            producto_info = productos_info.get(detalle["producto_id"], {})
+                            costo = producto_info.get("costo", 0)
+                            ganancia += (precio_unitario - costo) * cantidad
+                        elif detalle.get("servicio_id"):
+                            servicio_info = servicios_info.get(detalle["servicio_id"], {})
+                            costo = servicio_info.get("costo", 0)
+                            ganancia += (precio_unitario - costo) * cantidad
+                    except (TypeError, ValueError):
+                        continue
+                
+                # Contar clientes nuevos del período
+                clientes_periodo = [c for c in clientes_data if c.get("creado_en", "") >= start_date]
+                new_customers = len(clientes_periodo)
+                
+                return DashboardStatsPeriod(
+                    total_sales=total_sales,
+                    estimated_profit=max(0, ganancia),
+                    new_customers=new_customers
+                )
+            
+            except Exception as e:
+                print(f"Error calculando estadísticas para {start_date}: {str(e)}")
+                return DashboardStatsPeriod(
+                    total_sales=0,
+                    estimated_profit=0,
+                    new_customers=0
+                )
+
+        # Calcular estadísticas para cada período
+        today_stats = calculate_period_stats(today_start)
+        week_stats = calculate_period_stats(week_start)
+        month_stats = calculate_period_stats(month_start)
+
+        # Calcular top items vendidos del mes
+        top_items = []
+        try:
+            # Procesar productos y servicios vendidos
+            productos_vendidos = {}
+            servicios_vendidos = {}
+            
+            for detalle in detalles_data:
+                try:
+                    cantidad = detalle.get("cantidad", 0) or 0
+                    subtotal = detalle.get("subtotal", 0) or 0
+                    
+                    if detalle.get("producto_id"):
+                        prod_id = detalle["producto_id"]
+                        if prod_id not in productos_vendidos:
+                            productos_vendidos[prod_id] = {
+                                "cantidad_total": 0,
+                                "ingreso_total": 0
+                            }
+                        productos_vendidos[prod_id]["cantidad_total"] += cantidad
+                        productos_vendidos[prod_id]["ingreso_total"] += subtotal
+                    
+                    elif detalle.get("servicio_id"):
+                        serv_id = detalle["servicio_id"]
+                        if serv_id not in servicios_vendidos:
+                            servicios_vendidos[serv_id] = {
+                                "cantidad_total": 0,
+                                "ingreso_total": 0
+                            }
+                        servicios_vendidos[serv_id]["cantidad_total"] += cantidad
+                        servicios_vendidos[serv_id]["ingreso_total"] += subtotal
+                except (TypeError, ValueError):
+                    continue
+            
+            # Agregar productos a top_items
+            for prod_id, data in productos_vendidos.items():
+                producto_info = productos_info.get(prod_id, {})
+                top_items.append({
+                    "nombre": producto_info.get("nombre", "Producto sin nombre"),
+                    "tipo": "Producto",
+                    "cantidad_total": data.get("cantidad_total", 0),
+                    "ingreso_total": data.get("ingreso_total", 0)
+                })
+            
+            # Agregar servicios a top_items
+            for serv_id, data in servicios_vendidos.items():
+                servicio_info = servicios_info.get(serv_id, {})
+                top_items.append({
+                    "nombre": servicio_info.get("nombre", "Servicio sin nombre"),
+                    "tipo": "Servicio",
+                    "cantidad_total": data.get("cantidad_total", 0),
+                    "ingreso_total": data.get("ingreso_total", 0)
+                })
+            
+            # Ordenar por cantidad vendida y tomar los primeros 5
+            top_items.sort(key=lambda x: x.get("cantidad_total", 0), reverse=True)
+            top_items = top_items[:5]
+        
+        except Exception as e:
+            print(f"Error procesando top items: {str(e)}")
+            top_items = []
+
+
+
+        total_time = time.time() - start_time
+        print(f"[DASHBOARD] Completado en {total_time:.2f}s")
+        
+        return DashboardStatsResponse(
+            today=today_stats,
+            week=week_stats,
+            month=month_stats,
+            top_items=top_items,
+            total_products=total_products,
+            total_customers=total_customers,
+            low_stock_products=low_stock_products
+        )
+
+    except Exception as e:
+        total_time = time.time() - start_time
+        print(f"[DASHBOARD] Error después de {total_time:.2f}s: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error interno del servidor: {str(e)}") 
+
+@router.get("/health-check")
+async def health_check(
+    authorization: str = Header(..., description="Bearer token"),
+    negocio_id: str = None
+):
+    """
+    Endpoint simple para verificar conectividad básica con la base de datos.
+    """
+    start_time = time.time()
+    try:
+        client = get_supabase_user_client(authorization)
+        
+        if not negocio_id:
+            raise HTTPException(status_code=400, detail="negocio_id es requerido")
+        
+        print(f"[HEALTH] Iniciando health check para negocio {negocio_id}")
+        
+        # Consulta simple: contar ventas
+        query_start = time.time()
+        ventas_count = client.table("ventas") \
+            .select("id", count="exact") \
+            .eq("negocio_id", negocio_id) \
+            .execute()
+        
+        query_time = time.time() - query_start
+        print(f"[HEALTH] Consulta ventas completada en {query_time:.2f}s")
+        
+        # Consulta simple: contar productos
+        query_start = time.time()
+        productos_count = client.table("productos") \
+            .select("id", count="exact") \
+            .eq("negocio_id", negocio_id) \
+            .execute()
+        
+        query_time = time.time() - query_start
+        print(f"[HEALTH] Consulta productos completada en {query_time:.2f}s")
+        
+        total_time = time.time() - start_time
+        print(f"[HEALTH] Health check completado en {total_time:.2f}s")
+        
+        return {
+            "status": "ok",
+            "negocio_id": negocio_id,
+            "ventas_count": ventas_count.count if ventas_count.count is not None else 0,
+            "productos_count": productos_count.count if productos_count.count is not None else 0,
+            "response_time": f"{total_time:.2f}s"
+        }
+        
+    except Exception as e:
+        total_time = time.time() - start_time
+        print(f"[HEALTH] Error después de {total_time:.2f}s: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error en health check: {str(e)}") 
