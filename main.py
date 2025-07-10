@@ -14,7 +14,7 @@ from app.db.supabase_client import get_supabase_client, check_supabase_connectio
 # Get allowed origins from environment or use default
 ALLOWED_ORIGINS: List[str] = os.getenv(
     "ALLOWED_ORIGINS",
-    "http://localhost:5173,http://localhost:3000,https://micropymes-frontend.onrender.com"  # Include Render frontend
+    "http://localhost:5173,http://localhost:3000,https://client-micropymes.onrender.com"  # Include Render frontend
 ).split(",")
 
 MAX_RETRIES = 3
