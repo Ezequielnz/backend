@@ -67,106 +67,143 @@ app.add_middleware(
 
 async def auth_middleware(request: Request, call_next):
     """Middleware to authenticate Supabase sessions."""
-    if request.method == "OPTIONS":
-        return await call_next(request)
+    try:
+        if request.method == "OPTIONS":
+            return await call_next(request)
 
-    # Lista de rutas públicas que no requieren autenticación
-    public_routes = [
-        "/",
-        "/health",
-        "/api/v1/docs",
-        "/api/v1/openapi.json",
-        "/api/v1/auth/login",
-        "/api/v1/auth/signup",
-        "/api/v1/auth/confirm",
-        "/api/v1/auth/activate"
-    ]
+        # Lista de rutas públicas que no requieren autenticación
+        public_routes = [
+            "/",
+            "/health",
+            "/wake-up",
+            "/api/v1/docs",
+            "/api/v1/openapi.json",
+            "/api/v1/auth/login",
+            "/api/v1/auth/signup",
+            "/api/v1/auth/confirm",
+            "/api/v1/auth/activate",
+            "/test-products",
+            "/test-services", 
+            "/test-businesses"
+        ]
 
-    # Verificar si la ruta actual es pública
-    is_public_route = any(request.url.path.startswith(route) for route in public_routes)
+        # Verificar si la ruta actual es pública
+        is_public_route = any(request.url.path.startswith(route) for route in public_routes)
+        
+        # Temporary: make all business products/services routes public for testing
+        # This allows access to products and services endpoints without authentication during development
+        if "/businesses/" in request.url.path and ("/products" in request.url.path or "/services" in request.url.path):
+            is_public_route = True
+            print(f"DEBUG: Making business route public: {request.url.path}")
+        
+        print(f"DEBUG: Path: {request.url.path}, is_public_route: {is_public_route}")
 
-    token = request.headers.get("Authorization", "").replace("Bearer ", "")
+        token = request.headers.get("Authorization", "").replace("Bearer ", "")
 
-    if not is_public_route:
-        # Si la ruta no es pública, se requiere un token
-        if not token:
-            print("Authentication Middleware: Non-public route, no token provided, returning 401")
-            return Response("Unauthorized: Missing token", status_code=401)
+        if not is_public_route:
+            # Si la ruta no es pública, se requiere un token
+            if not token:
+                print("Authentication Middleware: Non-public route, no token provided, returning 401")
+                return Response(
+                    content="Unauthorized: Missing token",
+                    status_code=401,
+                    headers={"Content-Type": "text/plain"}
+                )
 
-        try:
-            supabase = get_supabase_client()
-            print(f"Authentication Middleware: Non-public route, attempting to get user with token: {token[:10]}...") # Log first 10 chars of token
-            auth_response = supabase.auth.get_user(token)
-            
-            print(f"Authentication Middleware: Raw Supabase get_user response type: {type(auth_response)}")
-            print(f"Authentication Middleware: Raw Supabase get_user response: {auth_response}")
+            try:
+                supabase = get_supabase_client()
+                print(f"Authentication Middleware: Non-public route, attempting to get user with token: {token[:10]}...")
+                auth_response = supabase.auth.get_user(token)
+                
+                user_from_auth = None
+                # Supabase client <= 1.0 returns a tuple (user, error), > 1.0 returns an object with user/error attributes
+                if isinstance(auth_response, tuple):
+                     # Older client version
+                     user_from_auth, error = auth_response
+                     if error:
+                         print(f"Authentication Middleware: Supabase error in tuple response: {error}")
+                elif hasattr(auth_response, 'user') and auth_response.user:
+                     # Newer client version
+                     user_from_auth = auth_response.user
 
-            user_from_auth = None
-            # Supabase client <= 1.0 returns a tuple (user, error), > 1.0 returns an object with user/error attributes
-            if isinstance(auth_response, tuple):
-                 # Older client version
-                 user_from_auth, error = auth_response
-                 if error:
-                     print(f"Authentication Middleware: Supabase error in tuple response: {error}")
-            elif hasattr(auth_response, 'user') and auth_response.user:
-                 # Newer client version
-                 user_from_auth = auth_response.user
+                if user_from_auth:
+                    request.state.user = user_from_auth
+                    print(f"Authentication Middleware: User {user_from_auth.id} attached to request.state")
+                else:
+                    print("Authentication Middleware: Non-public route, get_user did not return a valid user object, returning 401")
+                    return Response(
+                        content="Unauthorized: Invalid token or no user found",
+                        status_code=401,
+                        headers={"Content-Type": "text/plain"}
+                    )
 
-            print(f"Authentication Middleware: Extracted user from response: {user_from_auth}")
-            
-            if user_from_auth:
-                request.state.user = user_from_auth
-                print(f"Authentication Middleware: User {user_from_auth.id} attached to request.state")
-            else:
-                print("Authentication Middleware: Non-public route, get_user did not return a valid user object, returning 401")
-                return Response("Unauthorized: Invalid token or no user found", status_code=401)
+            except Exception as e:
+                # Log the exception for debugging
+                print(f"Authentication Middleware: Exception during get_user call on non-public route: {type(e).__name__} - {e}")
+                return Response(
+                    content=f"Unauthorized: Authentication error",
+                    status_code=401,
+                    headers={"Content-Type": "text/plain"}
+                )
 
-        except Exception as e:
-            # Log the exception for debugging
-            print(f"Authentication Middleware: Exception during get_user call on non-public route: {type(e).__name__} - {e}")
-            return Response(f"Unauthorized: Authentication error: {e}", status_code=401)
+        elif token: # is_public_route is True
+            # If it's a public route but a token is provided, still try to attach the user for convenience
+            try:
+                supabase = get_supabase_client()
+                print(f"Authentication Middleware: Public route with token, attempting to get user: {token[:10]}...")
+                auth_response = supabase.auth.get_user(token)
 
-    elif token: # is_public_route is True
-        # If it's a public route but a token is provided, still try to attach the user for convenience
-        try:
-            supabase = get_supabase_client()
-            print(f"Authentication Middleware: Public route with token, attempting to get user: {token[:10]}...")
-            auth_response = supabase.auth.get_user(token)
+                user_from_auth = None
+                if isinstance(auth_response, tuple):
+                     user_from_auth, error = auth_response
+                elif hasattr(auth_response, 'user') and auth_response.user:
+                     user_from_auth = auth_response.user
+                     
+                if user_from_auth:
+                     request.state.user = user_from_auth
+                     print(f"Authentication Middleware: User {user_from_auth.id} attached to request.state on public route")
+                # else: no error needed, public route
 
-            user_from_auth = None
-            if isinstance(auth_response, tuple):
-                 user_from_auth, error = auth_response
-            elif hasattr(auth_response, 'user') and auth_response.user:
-                 user_from_auth = auth_response.user
-                 
-            if user_from_auth:
-                 request.state.user = user_from_auth
-                 print(f"Authentication Middleware: User {user_from_auth.id} attached to request.state on public route")
-            # else: no error needed, public route
+            except Exception as e:
+                print(f"Authentication Middleware: Exception during get_user call on public route: {type(e).__name__} - {e}")
+                # No need to return 401, it's a public route
 
-        except Exception as e:
-            print(f"Authentication Middleware: Exception during get_user call on public route: {type(e).__name__} - {e}")
-            # No need to return 401, it's a public route
-
-    # If it's a public route without a token, or if the token validation passed/failed gracefully,
-    # continue to the next middleware/endpoint.
-    print(f"Authentication Middleware: Proceeding to next middleware/endpoint for {request.url.path}")
-    response = await call_next(request)
-    return response
+        # If it's a public route without a token, or if the token validation passed/failed gracefully,
+        # continue to the next middleware/endpoint.
+        print(f"Authentication Middleware: Proceeding to next middleware/endpoint for {request.url.path}")
+        response = await call_next(request)
+        return response
+        
+    except Exception as e:
+        print(f"Authentication Middleware: Critical error: {type(e).__name__} - {e}")
+        return Response(
+            content="Internal server error",
+            status_code=500,
+            headers={"Content-Type": "text/plain"}
+        )
 
 app.middleware("http")(auth_middleware)
 
 # Timeout middleware para evitar que las requests se cuelguen
 async def timeout_middleware(request: Request, call_next):
-    """Middleware to handle request timeouts"""
+    """Middleware to handle request timeouts and connection errors"""
     try:
-        # Timeout de 50 segundos para dar tiempo a las consultas complejas
-        response = await asyncio.wait_for(call_next(request), timeout=50.0)
+        # Timeout de 30 segundos para evitar requests muy largas
+        response = await asyncio.wait_for(call_next(request), timeout=30.0)
         return response
     except asyncio.TimeoutError:
+        print(f"Request timeout for {request.url.path}")
         return Response("Request timeout", status_code=408)
+    except ConnectionError as e:
+        print(f"Connection error for {request.url.path}: {e}")
+        return Response("Connection error", status_code=503)
     except Exception as e:
-        print(f"Timeout middleware error: {e}")
+        # Capturar errores de protocolo HTTP específicos
+        if "LocalProtocolError" in str(type(e)) or "Can't send data" in str(e):
+            print(f"HTTP protocol error for {request.url.path}: {e} - Client likely disconnected")
+            # No enviar respuesta si el cliente ya se desconectó
+            return None
+        print(f"Timeout middleware error for {request.url.path}: {e}")
         return Response("Internal server error", status_code=500)
 
 app.middleware("http")(timeout_middleware)
@@ -223,4 +260,59 @@ async def wake_up() -> dict:
         "status": "awake",
         "timestamp": time.time(),
         "message": "Servicio activo y listo para recibir requests"
-    } 
+    }
+
+@app.get("/test-products/{business_id}")
+async def test_products(business_id: str):
+    """Test endpoint to check products without authentication"""
+    try:
+        supabase = get_supabase_client()
+        response = supabase.table("productos").select("*").eq("negocio_id", business_id).execute()
+        return {
+            "status": "success",
+            "business_id": business_id,
+            "products": response.data if response.data else [],
+            "count": len(response.data) if response.data else 0
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "business_id": business_id,
+            "error": str(e)
+        }
+
+@app.get("/test-services/{business_id}")
+async def test_services(business_id: str):
+    """Test endpoint to check services without authentication"""
+    try:
+        supabase = get_supabase_client()
+        response = supabase.table("servicios").select("*").eq("negocio_id", business_id).execute()
+        return {
+            "status": "success",
+            "business_id": business_id,
+            "services": response.data if response.data else [],
+            "count": len(response.data) if response.data else 0
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "business_id": business_id,
+            "error": str(e)
+        }
+
+@app.get("/test-businesses")
+async def test_businesses():
+    """Test endpoint to list businesses without authentication"""
+    try:
+        supabase = get_supabase_client()
+        response = supabase.table("negocios").select("*").limit(5).execute()
+        return {
+            "status": "success",
+            "businesses": response.data if response.data else [],
+            "count": len(response.data) if response.data else 0
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e)
+        } 

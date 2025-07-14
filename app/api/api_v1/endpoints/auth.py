@@ -227,36 +227,148 @@ async def signup(user_data: UserSignUp) -> Any:
 @router.get("/me", response_model=dict)
 async def read_users_me(request: Request) -> Any:
     """
-    Get current user info.
+    Get current user
     """
     try:
-        # User is already authenticated by the auth_middleware and attached to request.state.user
+        if not hasattr(request.state, 'user') or not request.state.user:
+            raise HTTPException(status_code=401, detail="Usuario no autenticado")
+        
         user = request.state.user
-
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="User not authenticated.",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-
+        user_id = user.id
+        
+        # Obtener información del usuario desde la tabla usuarios
         supabase = get_supabase_client()
-
-        # Obtener información adicional del usuario de la tabla usuarios
-        user_info_response = supabase.table("usuarios").select("*").eq("id", user.id).execute()
-
-        user_data = {"email": user.email, "id": user.id}
-        if user_info_response.data and len(user_info_response.data) > 0:
-            user_data.update(user_info_response.data[0])
-
+        
+        response = supabase.table("usuarios").select("*").eq("id", user_id).execute()
+        
+        if not response.data:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        
+        user_data = response.data[0]
+        
+        # Agregar información adicional del auth de Supabase
+        user_data.update({
+            "email": user.email,
+            "email_confirmed_at": user.email_confirmed_at,
+            "last_sign_in_at": user.last_sign_in_at,
+        })
+        
         return user_data
-
+        
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"Get user error: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error retrieving user data: {str(e)}",
-        )
+        print(f"Error al obtener información del usuario: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error interno del servidor")
+
+
+@router.put("/profile", response_model=dict)
+async def update_profile(profile_data: dict, request: Request) -> Any:
+    """
+    Update current user's profile information
+    """
+    try:
+        if not hasattr(request.state, 'user') or not request.state.user:
+            raise HTTPException(status_code=401, detail="Usuario no autenticado")
+        
+        user = request.state.user
+        user_id = user.id
+        
+        # Validar que solo se actualicen campos permitidos
+        allowed_fields = ['nombre', 'apellido', 'telefono']
+        update_data = {k: v for k, v in profile_data.items() if k in allowed_fields and v is not None}
+        
+        if not update_data:
+            raise HTTPException(status_code=400, detail="No hay datos válidos para actualizar")
+        
+        # Agregar timestamp de actualización
+        update_data['updated_at'] = datetime.now(timezone.utc).isoformat()
+        
+        # Actualizar en la base de datos
+        supabase = get_supabase_client()
+        response = supabase.table("usuarios").update(update_data).eq("id", user_id).execute()
+        
+        if not response.data:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        
+        updated_user = response.data[0]
+        
+        # Agregar información adicional del auth de Supabase
+        updated_user.update({
+            "email": user.email,
+            "email_confirmed_at": user.email_confirmed_at,
+            "last_sign_in_at": user.last_sign_in_at,
+        })
+        
+        return updated_user
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error al actualizar perfil: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error interno del servidor")
+
+
+@router.put("/change-password", response_model=dict)
+async def change_password(password_data: dict, request: Request) -> Any:
+    """
+    Change current user's password
+    """
+    try:
+        if not hasattr(request.state, 'user') or not request.state.user:
+            raise HTTPException(status_code=401, detail="Usuario no autenticado")
+        
+        user = request.state.user
+        current_password = password_data.get('currentPassword')
+        new_password = password_data.get('newPassword')
+        
+        if not current_password or not new_password:
+            raise HTTPException(status_code=400, detail="Se requiere la contraseña actual y la nueva contraseña")
+        
+        if len(new_password) < 6:
+            raise HTTPException(status_code=400, detail="La nueva contraseña debe tener al menos 6 caracteres")
+        
+        # Verificar contraseña actual intentando hacer login
+        supabase = get_supabase_client()
+        
+        try:
+            # Intentar iniciar sesión con las credenciales actuales para verificar la contraseña
+            verify_response = supabase.auth.sign_in_with_password({
+                "email": user.email,
+                "password": current_password
+            })
+            
+            if not verify_response or not verify_response.session:
+                raise HTTPException(status_code=400, detail="La contraseña actual es incorrecta")
+                
+        except Exception as verify_error:
+            if "Invalid login credentials" in str(verify_error):
+                raise HTTPException(status_code=400, detail="La contraseña actual es incorrecta")
+            else:
+                raise HTTPException(status_code=500, detail="Error al verificar la contraseña actual")
+        
+        # Actualizar la contraseña usando Supabase Auth
+        try:
+            # Obtener el token actual del request
+            token = request.headers.get("Authorization", "").replace("Bearer ", "")
+            
+            # Usar el token para actualizar la contraseña
+            supabase.auth.update_user(
+                token,
+                {"password": new_password}
+            )
+            
+            return {"message": "Contraseña actualizada correctamente"}
+            
+        except Exception as update_error:
+            print(f"Error al actualizar contraseña: {str(update_error)}")
+            raise HTTPException(status_code=500, detail="Error al actualizar la contraseña")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error general al cambiar contraseña: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error interno del servidor")
 
 
 @router.get("/activate/{email}")

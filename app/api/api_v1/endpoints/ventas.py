@@ -7,6 +7,7 @@ import uuid
 import jwt
 import json
 import time
+import asyncio
 
 from app.db.supabase_client import get_supabase_client, get_supabase_user_client
 from app.dependencies import verify_permission, PermissionDependency
@@ -845,39 +846,30 @@ async def get_dashboard_stats_v2(
             productos_info = {}
             servicios_info = {}
 
-        # OPTIMIZACIÓN: Obtener datos de clientes y productos en paralelo
+        # OPTIMIZACIÓN: Obtener datos de clientes y productos de forma secuencial para evitar problemas
         try:
-            # Consultas en paralelo para optimizar rendimiento
-            import asyncio
-            
-            # Crear las consultas
-            clientes_mes_query = client.table("clientes") \
+            # Consultas individuales para evitar problemas de concurrencia
+            clientes_mes = client.table("clientes") \
                 .select("id, creado_en") \
                 .eq("negocio_id", negocio_id) \
                 .gte("creado_en", month_start) \
                 .execute()
             
-            total_clientes_query = client.table("clientes") \
+            total_clientes_response = client.table("clientes") \
                 .select("id") \
                 .eq("negocio_id", negocio_id) \
                 .execute()
             
-            total_productos_query = client.table("productos") \
+            total_productos_response = client.table("productos") \
                 .select("id") \
                 .eq("negocio_id", negocio_id) \
                 .execute()
             
-            productos_stock_bajo_query = client.table("productos") \
+            productos_stock_bajo_response = client.table("productos") \
                 .select("id") \
                 .eq("negocio_id", negocio_id) \
                 .lt("stock_actual", 10) \
                 .execute()
-            
-            # Ejecutar consultas
-            clientes_mes = clientes_mes_query
-            total_clientes_response = total_clientes_query
-            total_productos_response = total_productos_query
-            productos_stock_bajo_response = productos_stock_bajo_query
             
             # Procesar resultados
             clientes_data = clientes_mes.data if clientes_mes.data else []
@@ -902,33 +894,33 @@ async def get_dashboard_stats_v2(
                 
                 if not ventas_periodo:
                     return DashboardStatsPeriod(
-                        total_sales=0,
-                        estimated_profit=0,
+                        total_sales=0.0,
+                        estimated_profit=0.0,
                         new_customers=0
                     )
                 
                 # Calcular total de ventas
-                total_sales = sum(v.get("total", 0) or 0 for v in ventas_periodo)
+                total_sales = sum(float(v.get("total", 0) or 0) for v in ventas_periodo)
                 
                 # Calcular ganancias estimadas
                 venta_ids_periodo = [v["id"] for v in ventas_periodo]
                 detalles_periodo = [d for d in detalles_data if d.get("venta_id") in venta_ids_periodo]
                 
-                ganancia = 0
+                ganancia = 0.0
                 for detalle in detalles_periodo:
                     try:
-                        cantidad = detalle.get("cantidad", 0) or 0
-                        precio_unitario = detalle.get("precio_unitario", 0) or 0
+                        cantidad = float(detalle.get("cantidad", 0) or 0)
+                        precio_unitario = float(detalle.get("precio_unitario", 0) or 0)
                         
                         if detalle.get("producto_id"):
                             producto_info = productos_info.get(detalle["producto_id"], {})
-                            costo = producto_info.get("costo", 0)
+                            costo = float(producto_info.get("costo", 0) or 0)
                             ganancia += (precio_unitario - costo) * cantidad
                         elif detalle.get("servicio_id"):
                             servicio_info = servicios_info.get(detalle["servicio_id"], {})
-                            costo = servicio_info.get("costo", 0)
+                            costo = float(servicio_info.get("costo", 0) or 0)
                             ganancia += (precio_unitario - costo) * cantidad
-                    except (TypeError, ValueError):
+                    except (TypeError, ValueError, AttributeError):
                         continue
                 
                 # Contar clientes nuevos del período
@@ -936,16 +928,16 @@ async def get_dashboard_stats_v2(
                 new_customers = len(clientes_periodo)
                 
                 return DashboardStatsPeriod(
-                    total_sales=total_sales,
-                    estimated_profit=max(0, ganancia),
+                    total_sales=round(total_sales, 2),
+                    estimated_profit=round(max(0.0, ganancia), 2),
                     new_customers=new_customers
                 )
             
             except Exception as e:
                 print(f"Error calculando estadísticas para {start_date}: {str(e)}")
                 return DashboardStatsPeriod(
-                    total_sales=0,
-                    estimated_profit=0,
+                    total_sales=0.0,
+                    estimated_profit=0.0,
                     new_customers=0
                 )
 
@@ -963,15 +955,15 @@ async def get_dashboard_stats_v2(
             
             for detalle in detalles_data:
                 try:
-                    cantidad = detalle.get("cantidad", 0) or 0
-                    subtotal = detalle.get("subtotal", 0) or 0
+                    cantidad = int(detalle.get("cantidad", 0) or 0)
+                    subtotal = float(detalle.get("subtotal", 0) or 0)
                     
                     if detalle.get("producto_id"):
                         prod_id = detalle["producto_id"]
                         if prod_id not in productos_vendidos:
                             productos_vendidos[prod_id] = {
                                 "cantidad_total": 0,
-                                "ingreso_total": 0
+                                "ingreso_total": 0.0
                             }
                         productos_vendidos[prod_id]["cantidad_total"] += cantidad
                         productos_vendidos[prod_id]["ingreso_total"] += subtotal
@@ -981,31 +973,31 @@ async def get_dashboard_stats_v2(
                         if serv_id not in servicios_vendidos:
                             servicios_vendidos[serv_id] = {
                                 "cantidad_total": 0,
-                                "ingreso_total": 0
+                                "ingreso_total": 0.0
                             }
                         servicios_vendidos[serv_id]["cantidad_total"] += cantidad
                         servicios_vendidos[serv_id]["ingreso_total"] += subtotal
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, AttributeError):
                     continue
             
             # Agregar productos a top_items
             for prod_id, data in productos_vendidos.items():
                 producto_info = productos_info.get(prod_id, {})
                 top_items.append({
-                    "nombre": producto_info.get("nombre", "Producto sin nombre"),
+                    "nombre": str(producto_info.get("nombre", "Producto sin nombre")),
                     "tipo": "Producto",
-                    "cantidad_total": data.get("cantidad_total", 0),
-                    "ingreso_total": data.get("ingreso_total", 0)
+                    "cantidad_total": int(data.get("cantidad_total", 0)),
+                    "ingreso_total": round(float(data.get("ingreso_total", 0)), 2)
                 })
             
             # Agregar servicios a top_items
             for serv_id, data in servicios_vendidos.items():
                 servicio_info = servicios_info.get(serv_id, {})
                 top_items.append({
-                    "nombre": servicio_info.get("nombre", "Servicio sin nombre"),
+                    "nombre": str(servicio_info.get("nombre", "Servicio sin nombre")),
                     "tipo": "Servicio",
-                    "cantidad_total": data.get("cantidad_total", 0),
-                    "ingreso_total": data.get("ingreso_total", 0)
+                    "cantidad_total": int(data.get("cantidad_total", 0)),
+                    "ingreso_total": round(float(data.get("ingreso_total", 0)), 2)
                 })
             
             # Ordenar por cantidad vendida y tomar los primeros 5
@@ -1016,25 +1008,31 @@ async def get_dashboard_stats_v2(
             print(f"Error procesando top items: {str(e)}")
             top_items = []
 
-
-
         total_time = time.time() - start_time
         print(f"[DASHBOARD] Completado en {total_time:.2f}s")
         
-        return DashboardStatsResponse(
+        # Asegurar que todos los valores sean serializables
+        response_data = DashboardStatsResponse(
             today=today_stats,
             week=week_stats,
             month=month_stats,
             top_items=top_items,
-            total_products=total_products,
-            total_customers=total_customers,
-            low_stock_products=low_stock_products
+            total_products=int(total_products),
+            total_customers=int(total_customers),
+            low_stock_products=int(low_stock_products)
         )
+        
+        return response_data
 
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
     except Exception as e:
         total_time = time.time() - start_time
         print(f"[DASHBOARD] Error después de {total_time:.2f}s: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error interno del servidor: {str(e)}") 
+        import traceback
+        print(f"[DASHBOARD] Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail="Error interno del servidor")
 
 @router.get("/health-check")
 async def health_check(

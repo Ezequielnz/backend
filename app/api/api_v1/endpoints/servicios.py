@@ -1,11 +1,16 @@
 from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
+from pydantic import ValidationError
 from app.api.deps import get_current_user
 from app.db.supabase_client import get_supabase_client
 from app.schemas.servicio import ServicioCreate, ServicioUpdate, Servicio
 from app.dependencies import PermissionDependency
+import logging
 
 router = APIRouter()
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 @router.get("/", response_model=List[Servicio],
     dependencies=[Depends(PermissionDependency("puede_ver_productos"))]
@@ -36,10 +41,56 @@ async def read_services(
         response = query.execute()
         services_data = response.data if response.data is not None else []
         
-        return [Servicio(**item) for item in services_data]
+        # Validate and serialize each service individually to catch validation errors
+        validated_services = []
+        for item in services_data:
+            try:
+                # Ensure required fields are present and handle None values
+                if not item.get('id'):
+                    logger.warning(f"Skipping service without ID: {item}")
+                    continue
+                
+                # Handle datetime fields properly
+                if item.get('creado_en') and isinstance(item['creado_en'], str):
+                    # If it's a string, try to parse it
+                    from datetime import datetime
+                    try:
+                        item['creado_en'] = datetime.fromisoformat(item['creado_en'].replace('Z', '+00:00'))
+                    except ValueError:
+                        logger.warning(f"Invalid creado_en format for service {item.get('id')}: {item.get('creado_en')}")
+                        # Set a default value
+                        item['creado_en'] = datetime.now()
+                
+                if item.get('actualizado_en') and isinstance(item['actualizado_en'], str):
+                    try:
+                        item['actualizado_en'] = datetime.fromisoformat(item['actualizado_en'].replace('Z', '+00:00'))
+                    except ValueError:
+                        logger.warning(f"Invalid actualizado_en format for service {item.get('id')}: {item.get('actualizado_en')}")
+                        # Set a default value
+                        item['actualizado_en'] = datetime.now()
+                
+                # Ensure required fields have default values
+                if item.get('activo') is None:
+                    item['activo'] = True
+                
+                validated_service = Servicio(**item)
+                validated_services.append(validated_service)
+                
+            except ValidationError as ve:
+                logger.error(f"Validation error for service {item.get('id', 'unknown')}: {ve}")
+                # Skip invalid services instead of failing the entire request
+                continue
+            except Exception as e:
+                logger.error(f"Error processing service {item.get('id', 'unknown')}: {e}")
+                continue
         
+        return validated_services
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions as they are expected
+        raise
     except Exception as e:
-        print(f"Error al obtener servicios: {str(e)}")
+        logger.error(f"Error al obtener servicios: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error al obtener servicios: {str(e)}"
