@@ -194,7 +194,7 @@ async def get_businesses(request: Request) -> Any:
     try:
         print(f"🔍 Getting businesses for user: {user.id}")
         
-        # Get all business relationships for the user
+        # ✅ OPTIMIZED: Get all business relationships for the user
         response = supabase.table("usuarios_negocios") \
             .select("rol, negocio_id") \
             .eq("usuario_id", user.id) \
@@ -207,21 +207,32 @@ async def get_businesses(request: Request) -> Any:
             print("🔍 No business relationships found for user")
             return []
 
-        # Get business data for each relationship
+        # ✅ OPTIMIZED: Get all business IDs and fetch them in a single batch query
+        business_ids = [item.get("negocio_id") for item in response.data]
+        
+        # Batch query for all businesses at once
+        businesses_response = supabase.table("negocios") \
+            .select("id, nombre, creada_por, creada_en") \
+            .in_("id", business_ids) \
+            .execute()
+        
+        # Create a mapping of business_id -> business_data for fast lookup
+        businesses_data = {}
+        for business in businesses_response.data or []:
+            businesses_data[business["id"]] = business
+        
+        print(f"🔍 Found {len(businesses_data)} businesses in batch query")
+
+        # ✅ OPTIMIZED: Process data using the batch results
         businesses = []
         for item in response.data:
             print(f"🔍 Processing relationship: {item}")
             negocio_id = item.get("negocio_id")
             rol = item.get("rol")
             
-            # Get business data separately
-            business_response = supabase.table("negocios") \
-                .select("id, nombre, creada_por, creada_en") \
-                .eq("id", negocio_id) \
-                .execute()
+            negocio_data = businesses_data.get(negocio_id)
             
-            if business_response.data:
-                negocio_data = business_response.data[0]
+            if negocio_data:
                 print(f"🔍 Found business data: {negocio_data}")
                 
                 # Construct the Business object
@@ -231,12 +242,6 @@ async def get_businesses(request: Request) -> Any:
                     "creada_por": negocio_data.get("creada_por"),
                     "creada_en": negocio_data.get("creada_en"),
                     "rol": rol,
-                    # Include optional fields if they exist
-                    "descripcion": negocio_data.get("descripcion"),
-                    "direccion": negocio_data.get("direccion"),
-                    "telefono": negocio_data.get("telefono"),
-                    "email": negocio_data.get("email"),
-                    "logo_url": negocio_data.get("logo_url"),
                 }
                 businesses.append(business_obj)
                 print(f"🔍 Added business to list: {business_obj}")
