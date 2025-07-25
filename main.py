@@ -14,7 +14,7 @@ from app.db.supabase_client import get_supabase_client, check_supabase_connectio
 # Get allowed origins from environment or use default
 ALLOWED_ORIGINS: List[str] = os.getenv(
     "ALLOWED_ORIGINS",
-    "http://localhost:5173,http://localhost:3000,https://client-micropymes.onrender.com"  # Include Render frontend
+    "http://localhost:5173,http://localhost:3000,https://client-micropymes.onrender.com,https://operixml.com,operixml.com"  # Include Render frontend
 ).split(",")
 
 MAX_RETRIES = 3
@@ -122,7 +122,7 @@ async def auth_middleware(request: Request, call_next):
                      user_from_auth, error = auth_response
                      if error:
                          print(f"Authentication Middleware: Supabase error in tuple response: {error}")
-                elif hasattr(auth_response, 'user') and auth_response.user:
+                elif auth_response is not None and hasattr(auth_response, 'user') and auth_response.user:
                      # Newer client version
                      user_from_auth = auth_response.user
 
@@ -156,7 +156,7 @@ async def auth_middleware(request: Request, call_next):
                 user_from_auth = None
                 if isinstance(auth_response, tuple):
                      user_from_auth, error = auth_response
-                elif hasattr(auth_response, 'user') and auth_response.user:
+                elif auth_response is not None and hasattr(auth_response, 'user') and auth_response.user:
                      user_from_auth = auth_response.user
                      
                 if user_from_auth:
