@@ -33,19 +33,19 @@ class SupabaseModel(BaseModel):
         return response.data
     
     @classmethod
-    async def create(cls, data: Dict[str, Any]) -> Dict[str, Any]:
+    async def create(cls, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Create a new record."""
         response = get_table(cls.table_name()).insert(data).execute()
         return response.data[0] if response.data else None
     
     @classmethod
-    async def update(cls, id: int, data: Dict[str, Any]) -> Dict[str, Any]:
+    async def update(cls, id: int, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Update a record by ID."""
         response = get_table(cls.table_name()).update(data).eq("id", id).execute()
         return response.data[0] if response.data else None
     
     @classmethod
-    async def delete(cls, id: int) -> Dict[str, Any]:
+    async def delete(cls, id: int) -> Optional[Dict[str, Any]]:
         """Delete a record by ID."""
         response = get_table(cls.table_name()).delete().eq("id", id).execute()
         return response.data[0] if response.data else None
@@ -173,4 +173,64 @@ class ConfiguracionArea(SupabaseModel):
     
     @classmethod
     def table_name(cls) -> str:
-        return "configuracion_area" 
+        return "configuracion_area"
+
+# Finance module models
+class CategoriaFinanciera(SupabaseModel):
+    id: Optional[str] = None
+    negocio_id: str
+    nombre: str
+    descripcion: Optional[str] = None
+    tipo: str  # 'ingreso' or 'egreso'
+    activo: bool = True
+    creado_en: Optional[datetime] = None
+    actualizado_en: Optional[datetime] = None
+    creado_por: Optional[str] = None
+    
+    @classmethod
+    def table_name(cls) -> str:
+        return "categorias_financieras"
+
+class MovimientoFinanciero(SupabaseModel):
+    id: Optional[str] = None
+    negocio_id: str
+    tipo: str  # 'ingreso' or 'egreso'
+    categoria_id: Optional[str] = None
+    monto: float
+    fecha: datetime
+    metodo_pago: str
+    descripcion: Optional[str] = None
+    observaciones: Optional[str] = None
+    cliente_id: Optional[str] = None
+    venta_id: Optional[str] = None
+    creado_en: Optional[datetime] = None
+    actualizado_en: Optional[datetime] = None
+    creado_por: Optional[str] = None
+    
+    @classmethod
+    def table_name(cls) -> str:
+        return "movimientos_financieros"
+
+class CuentaPendiente(SupabaseModel):
+    id: Optional[str] = None
+    negocio_id: str
+    tipo: str  # 'por_cobrar' or 'por_pagar'
+    cliente_id: Optional[str] = None
+    proveedor_nombre: Optional[str] = None
+    monto: float
+    fecha_vencimiento: datetime
+    fecha_emision: datetime
+    estado: str = "pendiente"  # 'pendiente', 'pagado', 'vencido'
+    descripcion: str
+    observaciones: Optional[str] = None
+    venta_id: Optional[str] = None
+    movimiento_id: Optional[str] = None
+    creado_en: Optional[datetime] = None
+    actualizado_en: Optional[datetime] = None
+    creado_por: Optional[str] = None
+    pagado_en: Optional[datetime] = None
+    pagado_por: Optional[str] = None
+    
+    @classmethod
+    def table_name(cls) -> str:
+        return "cuentas_pendientes"

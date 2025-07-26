@@ -47,7 +47,7 @@ class VentaCreate(BaseModel):
     cliente_id: Optional[str] = None
     metodo_pago: str = Field(..., description="Método de pago: efectivo, tarjeta, transferencia")
     total: float = Field(gt=0, description="Total debe ser mayor a 0")
-    items: List[VentaItemCreate] = Field(..., min_items=1, description="Debe incluir al menos un item")
+    items: List[VentaItemCreate] = Field(..., description="Debe incluir al menos un item")
     observaciones: Optional[str] = None
 
 class VentaResponse(BaseModel):
@@ -739,7 +739,7 @@ async def get_top_products_chart(
 @router.get("/dashboard-stats-v2", response_model=DashboardStatsResponse)
 async def get_dashboard_stats_v2(
     authorization: str = Header(..., description="Bearer token"),
-    negocio_id: str = None
+    negocio_id: Optional[str] = None
 ):
     """
     Obtiene estadísticas del dashboard incluyendo ventas, ganancias y clientes nuevos
@@ -1034,10 +1034,72 @@ async def get_dashboard_stats_v2(
         print(f"[DASHBOARD] Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail="Error interno del servidor")
 
+@router.get("/sales", response_model=List[dict])
+async def get_recent_sales(
+    authorization: str = Header(..., description="Bearer token")
+):
+    """
+    Obtiene las ventas más recientes para ser mostradas en el dashboard.
+    Este endpoint es utilizado por la función getRecentSales() del frontend.
+    No requiere business_id ya que debe obtener ventas de todos los negocios a los que tiene acceso el usuario.
+    
+    Returns:
+        List[dict]: Lista de ventas recientes con formato simplificado para el dashboard
+    """
+    try:
+        # Extraemos el usuario del token
+        user_id = get_user_id_from_token(authorization)
+        
+        # Obtenemos el cliente Supabase
+        supabase = get_supabase_user_client(authorization)
+        
+        # Consultamos los IDs de los negocios a los que tiene acceso el usuario
+        negocios_response = supabase.table("usuarios_negocios").select("negocio_id").eq("usuario_id", user_id).execute()
+        
+        if not negocios_response.data:
+            return []
+        
+        # Extraemos los IDs de negocios
+        negocio_ids = [item["negocio_id"] for item in negocios_response.data]
+        
+        # Obtenemos las ventas más recientes de esos negocios
+        ventas_response = supabase.table("ventas")\
+            .select("*, clientes(nombre, apellido)")\
+            .in_("negocio_id", negocio_ids)\
+            .order("fecha", desc=True)\
+            .limit(10)\
+            .execute()
+            
+        # Formateamos los resultados
+        formatted_sales = []
+        for venta in ventas_response.data:
+            cliente_nombre = "Cliente no registrado"
+            if venta.get("clientes") and venta["clientes"]:
+                nombre_completo = f"{venta['clientes']['nombre'] or ''} {venta['clientes']['apellido'] or ''}".strip()
+                cliente_nombre = nombre_completo if nombre_completo else "Cliente no registrado"
+                
+            formatted_sales.append({
+                "id": venta["id"],
+                "fecha": venta["fecha"],
+                "total": float(venta["total"]) if "total" in venta else 0.0,
+                "negocio_id": venta["negocio_id"],
+                "cliente_nombre": cliente_nombre,
+                "metodo_pago": venta.get("medio_pago", "")
+            })
+            
+        return formatted_sales
+        
+    except Exception as e:
+        print(f"Error en get_recent_sales: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error al obtener ventas recientes: {str(e)}"
+        )
+
 @router.get("/health-check")
 async def health_check(
     authorization: str = Header(..., description="Bearer token"),
-    negocio_id: str = None
+    negocio_id: Optional[str] = None
 ):
     """
     Endpoint simple para verificar conectividad básica con la base de datos.
@@ -1054,7 +1116,7 @@ async def health_check(
         # Consulta simple: contar ventas
         query_start = time.time()
         ventas_count = client.table("ventas") \
-            .select("id", count="exact") \
+            .select("id") \
             .eq("negocio_id", negocio_id) \
             .execute()
         
@@ -1064,7 +1126,7 @@ async def health_check(
         # Consulta simple: contar productos
         query_start = time.time()
         productos_count = client.table("productos") \
-            .select("id", count="exact") \
+            .select("id") \
             .eq("negocio_id", negocio_id) \
             .execute()
         

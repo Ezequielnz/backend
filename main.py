@@ -10,6 +10,7 @@ import os
 from app.api.api_v1.api import api_router
 from app.core.config import settings
 from app.db.supabase_client import get_supabase_client, check_supabase_connection
+from app.middleware.error_handlers import JSONErrorMiddleware
 
 # Get allowed origins from environment or use default
 ALLOWED_ORIGINS: List[str] = os.getenv(
@@ -26,10 +27,10 @@ async def connect_to_supabase() -> bool:
         try:
             client = get_supabase_client()
             if check_supabase_connection():
-                print(f"✅ Conexión con Supabase establecida correctamente (intento {attempt + 1})")
+                print(f"[OK] Conexion con Supabase establecida correctamente (intento {attempt + 1})")
                 return True
         except Exception as e:
-            print(f"⚠️ Intento {attempt + 1} fallido: {str(e)}")
+            print(f"[WARNING] Intento {attempt + 1} fallido: {str(e)}")
             if attempt < MAX_RETRIES - 1:
                 print(f"Reintentando en {RETRY_DELAY} segundos...")
                 time.sleep(RETRY_DELAY)
@@ -39,10 +40,10 @@ async def connect_to_supabase() -> bool:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    print("Verificando conexión con Supabase...")
+    print("Verificando conexion con Supabase...")
     if not await connect_to_supabase():
-        print("❌ No se pudo establecer conexión con Supabase después de varios intentos")
-        print("❌ La aplicación requiere Supabase para funcionar")
+        print("[ERROR] No se pudo establecer conexion con Supabase despues de varios intentos")
+        print("[ERROR] La aplicacion requiere Supabase para funcionar")
         sys.exit(1)
     
     yield
@@ -64,6 +65,9 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
 )
+
+# Agregar middleware para errores JSON en rutas API
+app.add_middleware(JSONErrorMiddleware)
 
 async def auth_middleware(request: Request, call_next):
     """Middleware to authenticate Supabase sessions."""

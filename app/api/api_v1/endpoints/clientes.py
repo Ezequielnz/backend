@@ -8,10 +8,10 @@ from app.types.auth import User
 router = APIRouter()
 
 @router.get("/", response_model=List[Cliente])
+@router.get("", response_model=List[Cliente])  # Agregar ruta sin barra final
 async def read_clientes(
     business_id: str,
     request: Request,
-    current_user: User = Depends(get_current_user),
     q: Optional[str] = Query(None, description="Búsqueda por nombre, apellido, email o documento"),
     documento_tipo: Optional[str] = Query(None, description="Filtrar por tipo de documento"),
     limit: int = Query(10, ge=1, le=100, description="Número máximo de resultados"),
@@ -21,16 +21,28 @@ async def read_clientes(
     Retrieve clients for a business with optional filtering and pagination.
     RLS policies handle permission checking automatically.
     """
+    # Verificar autenticación - el middleware ya debe haber procesado el token
+    user = getattr(request.state, 'user', None)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Usuario no autenticado"
+        )
+    
+    print(f"DEBUG clientes endpoint: User found: {user.id if user else 'None'}")
+    print(f"DEBUG clientes endpoint: Business ID: {business_id}")
+    
     supabase = get_supabase_client()
 
     try:
         # Build query
         query = supabase.table("clientes").select("*").eq("negocio_id", business_id)
         
-        # Apply filters
+        # Apply filters - versión simplificada para debug
         if q:
-            # Search in multiple fields
-            query = query.or_(f"nombre.ilike.%{q}%,apellido.ilike.%{q}%,email.ilike.%{q}%,documento_numero.ilike.%{q}%")
+            # Búsqueda simple solo por nombre
+            search_term = f"%{q}%"
+            query = query.ilike("nombre", search_term)
         
         if documento_tipo:
             query = query.eq("documento_tipo", documento_tipo)
