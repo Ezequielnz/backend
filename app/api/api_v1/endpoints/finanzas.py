@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse
 from datetime import datetime, date, timedelta
 from decimal import Decimal
 import calendar
+import json
 from dateutil.relativedelta import relativedelta
 
 from app.types.auth import User
@@ -20,6 +21,25 @@ import logging
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# Helper function para serializar datos para JSON
+def serialize_for_json(data):
+    """Convert Python objects to JSON-serializable types."""
+    if isinstance(data, Decimal):
+        return float(data)
+    elif isinstance(data, date):
+        if isinstance(data, datetime):
+            return data.isoformat()  # Full ISO format with T separator
+        else:
+            return data.strftime('%Y-%m-%d')  # Date-only format
+    elif isinstance(data, dict):
+        return {k: serialize_for_json(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [serialize_for_json(item) for item in data]
+    elif isinstance(data, datetime):
+        return data.isoformat()
+    else:
+        return data
 
 # ============================================================================
 # CATEGORIAS FINANCIERAS
@@ -240,30 +260,85 @@ async def get_movimientos_financieros(
         # Transform manual movements
         movements = []
         for item in response_movimientos.data if response_movimientos.data else []:
-            movement = MovimientoFinancieroConCategoria(**item)
+            # Create a copy of the item to modify safely
+            item_copy = dict(item)
+            
+            # Convert Decimal to float for JSON serialization
+            if isinstance(item_copy.get('monto'), Decimal):
+                item_copy['monto'] = float(item_copy['monto'])
+            
+            # Ensure fecha is in string format
+            if isinstance(item_copy.get('fecha'), str):
+                fecha_str = item_copy['fecha']
+                if 'T' in fecha_str:  # If it's a datetime string, extract date part
+                    item_copy['fecha'] = fecha_str.split('T')[0]
+            elif isinstance(item_copy.get('fecha'), date):
+                item_copy['fecha'] = item_copy['fecha'].strftime('%Y-%m-%d')
+            
+            # Ensure creado_en and actualizado_en are in ISO format with T separator
+            for field in ['creado_en', 'actualizado_en']:
+                if isinstance(item_copy.get(field), str) and 'T' not in item_copy.get(field, ''):
+                    # Si es una fecha simple YYYY-MM-DD, convertir a formato ISO 8601
+                    fecha_value = item_copy.get(field)
+                    if fecha_value and len(fecha_value) == 10:  # YYYY-MM-DD
+                        item_copy[field] = f"{fecha_value}T00:00:00"
+                elif isinstance(item_copy.get(field), date) and not isinstance(item_copy.get(field), datetime):
+                    # Si es un objeto date pero no datetime, convertir a ISO
+                    item_copy[field] = f"{item_copy[field].strftime('%Y-%m-%d')}T00:00:00"
+            
+            movement = MovimientoFinancieroConCategoria(**item_copy)
             movement.categoria_nombre = item.get("categorias_financieras", {}).get("nombre")
             if item.get("clientes"):
                 client = item["clientes"]
-                movement.cliente_nombre = f"{client.get('nombre', '')} {client.get('apellido', '')}".strip()
+                movement.cliente_nombre = f"{client.get('nombre', '')} {client.get('apellido', '')}" .strip()
             movements.append(movement)
         
         # Transform sales into movement format
         for venta in ventas_data:
+            # Convert Decimal to float for JSON serialization
+            monto_value = float(venta["total"]) if isinstance(venta["total"], Decimal) else venta["total"]
+            
+            # Convert timestamp to date string for fecha field
+            fecha_value = venta["fecha"]
+            if isinstance(fecha_value, str):
+                # Handle string date/datetime
+                if 'T' in fecha_value:
+                    # Extract date part from timestamp string (keep as string)
+                    fecha_value = fecha_value.split('T')[0]
+                # fecha_value is already a string in YYYY-MM-DD format
+            elif hasattr(fecha_value, 'strftime'):
+                # Convert datetime/date to string
+                fecha_value = fecha_value.strftime('%Y-%m-%d')
+            
             # Create a movement-like object for each sale
+            # Convertir fecha_value a datetime ISO completo para los campos datetime
+            fecha_iso_format = None
+            if isinstance(venta.get("creado_en"), datetime):
+                fecha_iso_format = venta.get("creado_en").isoformat()
+            elif isinstance(venta.get("fecha"), datetime):
+                fecha_iso_format = venta.get("fecha").isoformat()
+            else:
+                # Si no hay datetime disponible, crear uno a partir de la fecha
+                if isinstance(fecha_value, str) and len(fecha_value) == 10:  # YYYY-MM-DD
+                    fecha_iso_format = f"{fecha_value}T00:00:00"
+                else:
+                    # Último recurso: fecha actual en formato ISO
+                    fecha_iso_format = datetime.now().isoformat()
+                    
             movement_dict = {
                 "id": f"venta_{venta['id']}",  # Prefix to distinguish from manual movements
                 "negocio_id": business_id,
                 "tipo": "ingreso",
                 "categoria_id": None,
-                "monto": float(venta["total"]),
-                "fecha": venta["fecha"],
+                "monto": monto_value,
+                "fecha": fecha_value,
                 "metodo_pago": "venta",
                 "descripcion": f"Venta #{venta['id'][:8]}...",
                 "observaciones": venta.get("observaciones", ""),
                 "cliente_id": None,
                 "venta_id": venta["id"],
-                "creado_en": venta["fecha"],
-                "actualizado_en": venta["fecha"],
+                "creado_en": fecha_iso_format,  # Ahora usa formato ISO 8601 completo
+                "actualizado_en": fecha_iso_format,  # Ahora usa formato ISO 8601 completo
                 "creado_por": None
             }
             
@@ -330,6 +405,15 @@ async def create_movimiento_financiero(
         movimiento_data["negocio_id"] = business_id
         movimiento_data["creado_por"] = current_user.id
         
+        # Convert Decimal to float and date to string for JSON serialization
+        if isinstance(movimiento_data.get('monto'), Decimal):
+            movimiento_data['monto'] = float(movimiento_data['monto'])
+        
+        if isinstance(movimiento_data.get('fecha'), date):
+            movimiento_data['fecha'] = movimiento_data['fecha'].strftime('%Y-%m-%d')
+        elif isinstance(movimiento_data.get('fecha'), datetime):
+            movimiento_data['fecha'] = movimiento_data['fecha'].strftime('%Y-%m-%d')
+        
         response = supabase.table("movimientos_financieros").insert(movimiento_data).execute()
         
         if not response.data:
@@ -337,8 +421,17 @@ async def create_movimiento_financiero(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Error al crear el movimiento financiero"
             )
+        
+        # Convert Decimal to float and date to string in response data for JSON serialization
+        result = response.data[0]
+        if isinstance(result.get('monto'), Decimal):
+            result['monto'] = float(result['monto'])
+        if isinstance(result.get('fecha'), date):
+            result['fecha'] = result['fecha'].strftime('%Y-%m-%d')
+        elif isinstance(result.get('fecha'), datetime):
+            result['fecha'] = result['fecha'].strftime('%Y-%m-%d')
             
-        return response.data[0]
+        return result
         
     except HTTPException:
         raise

@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import sys
 import time
@@ -108,11 +109,21 @@ async def auth_middleware(request: Request, call_next):
             # Si la ruta no es pública, se requiere un token
             if not token:
                 print("Authentication Middleware: Non-public route, no token provided, returning 401")
-                return Response(
-                    content="Unauthorized: Missing token",
-                    status_code=401,
-                    headers={"Content-Type": "text/plain"}
-                )
+                # Usar JSONResponse para rutas de API
+                if "/api/" in request.url.path:
+                    return JSONResponse(
+                        status_code=401,
+                        content={
+                            "detail": "Unauthorized: Missing token",
+                            "error": "UNAUTHORIZED"
+                        }
+                    )
+                else:
+                    return Response(
+                        content="Unauthorized: Missing token",
+                        status_code=401,
+                        headers={"Content-Type": "text/plain"}
+                    )
 
             try:
                 supabase = get_supabase_client()
@@ -135,20 +146,41 @@ async def auth_middleware(request: Request, call_next):
                     print(f"Authentication Middleware: User {user_from_auth.id} attached to request.state")
                 else:
                     print("Authentication Middleware: Non-public route, get_user did not return a valid user object, returning 401")
-                    return Response(
-                        content="Unauthorized: Invalid token or no user found",
-                        status_code=401,
-                        headers={"Content-Type": "text/plain"}
-                    )
+                    # Usar JSONResponse para rutas de API
+                    if "/api/" in request.url.path:
+                        return JSONResponse(
+                            status_code=401,
+                            content={
+                                "detail": "Unauthorized: Invalid token or no user found",
+                                "error": "UNAUTHORIZED"
+                            }
+                        )
+                    else:
+                        return Response(
+                            content="Unauthorized: Invalid token or no user found",
+                            status_code=401,
+                            headers={"Content-Type": "text/plain"}
+                        )
 
             except Exception as e:
                 # Log the exception for debugging
                 print(f"Authentication Middleware: Exception during get_user call on non-public route: {type(e).__name__} - {e}")
-                return Response(
-                    content=f"Unauthorized: Authentication error",
-                    status_code=401,
-                    headers={"Content-Type": "text/plain"}
-                )
+                # Usar JSONResponse para rutas de API
+                if "/api/" in request.url.path:
+                    return JSONResponse(
+                        status_code=401,
+                        content={
+                            "detail": "Unauthorized: Authentication error",
+                            "error": "UNAUTHORIZED",
+                            "message": str(e)
+                        }
+                    )
+                else:
+                    return Response(
+                        content=f"Unauthorized: Authentication error",
+                        status_code=401,
+                        headers={"Content-Type": "text/plain"}
+                    )
 
         elif token: # is_public_route is True
             # If it's a public route but a token is provided, still try to attach the user for convenience
@@ -180,10 +212,21 @@ async def auth_middleware(request: Request, call_next):
         
     except Exception as e:
         print(f"Authentication Middleware: Critical error: {type(e).__name__} - {e}")
-        return Response(
-            content="Internal server error",
-            status_code=500,
-            headers={"Content-Type": "text/plain"}
+        # Usar JSONResponse para rutas de API
+        if "/api/" in request.url.path:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "detail": "Internal server error",
+                    "error": "INTERNAL_SERVER_ERROR",
+                    "message": str(e)
+                }
+            )
+        else:
+            return Response(
+                content="Internal server error",
+                status_code=500,
+                headers={"Content-Type": "text/plain"}
         )
 
 app.middleware("http")(auth_middleware)
