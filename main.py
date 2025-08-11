@@ -231,6 +231,8 @@ async def auth_middleware(request: Request, call_next):
 
 app.middleware("http")(auth_middleware)
 
+# JSON Error middleware ya está registrado arriba
+
 # Timeout middleware para evitar que las requests se cuelguen
 async def timeout_middleware(request: Request, call_next):
     """Middleware to handle request timeouts and connection errors"""

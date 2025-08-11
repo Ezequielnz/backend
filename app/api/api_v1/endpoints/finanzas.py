@@ -25,21 +25,29 @@ logger = logging.getLogger(__name__)
 # Helper function para serializar datos para JSON
 def serialize_for_json(data):
     """Convert Python objects to JSON-serializable types."""
-    if isinstance(data, Decimal):
+    if data is None:
+        return None
+    elif isinstance(data, Decimal):
         return float(data)
+    elif isinstance(data, datetime):
+        return data.isoformat()  # Full ISO format with T separator
     elif isinstance(data, date):
-        if isinstance(data, datetime):
-            return data.isoformat()  # Full ISO format with T separator
-        else:
-            return data.strftime('%Y-%m-%d')  # Date-only format
+        return data.strftime('%Y-%m-%d')  # Date-only format
     elif isinstance(data, dict):
         return {k: serialize_for_json(v) for k, v in data.items()}
-    elif isinstance(data, list):
+    elif isinstance(data, (list, tuple)):
         return [serialize_for_json(item) for item in data]
-    elif isinstance(data, datetime):
-        return data.isoformat()
-    else:
+    elif hasattr(data, 'dict') and callable(getattr(data, 'dict')):
+        # Para objetos Pydantic
+        return serialize_for_json(data.dict())
+    elif isinstance(data, (str, int, float, bool)):
         return data
+    else:
+        # Para cualquier otro tipo, intentar convertir a string
+        try:
+            return str(data)
+        except Exception:
+            return None
 
 # ============================================================================
 # CATEGORIAS FINANCIERAS
@@ -65,7 +73,7 @@ async def get_categorias_financieras(
             query = query.eq("activo", activo)
             
         response = query.order("nombre").execute()
-        return response.data if response.data else []
+        return JSONResponse(status_code=200, content=response.data if response.data else [])
         
     except Exception as e:
         logger.error(f"Error fetching financial categories: {str(e)}")
@@ -355,7 +363,7 @@ async def get_movimientos_financieros(
         movements.sort(key=lambda x: x.fecha, reverse=True)
         paginated_movements = movements[offset:offset + limit]
         
-        return paginated_movements
+        return JSONResponse(status_code=200, content=[serialize_for_json(m.dict()) for m in paginated_movements])
         
     except Exception as e:
         logger.error(f"Error fetching financial movements: {str(e)}")
@@ -733,13 +741,15 @@ async def get_resumen_financiero(
 
             logger.info(f"💰 Resumen calculado - Ingresos: {ingresos_mes}, Egresos: {egresos_mes}, Saldo: {saldo_actual}")
 
-            return ResumenFinanciero(
-                ingresos_mes=float(ingresos_mes),
-                egresos_mes=float(egresos_mes),
-                saldo_actual=float(saldo_actual),
-                ingresos_mes_anterior=float(ingresos_mes_anterior),
-                egresos_mes_anterior=float(egresos_mes_anterior)
-            )
+            resumen_data = {
+                "ingresos_mes": float(ingresos_mes),
+                "egresos_mes": float(egresos_mes),
+                "saldo_actual": float(saldo_actual),
+                "ingresos_mes_anterior": float(ingresos_mes_anterior),
+                "egresos_mes_anterior": float(egresos_mes_anterior)
+            }
+            
+            return JSONResponse(status_code=200, content=resumen_data)
 
         except Exception as e:
             logger.error(f"❌ Error consultando datos financieros: {str(e)}")
@@ -822,17 +832,20 @@ async def get_flujo_caja_mensual(
             saldo_acumulado += saldo_diario
             
             flujo_diario.append(FlujoCajaDiario(
-                fecha=fecha,
-                ingresos=day_data["ingresos"],
-                egresos=day_data["egresos"],
-                saldo_acumulado=saldo_acumulado
+                fecha=fecha.strftime('%Y-%m-%d'),  # Convertir date a string
+                ingresos=day_data["ingresos"],      # Mantener como Decimal
+                egresos=day_data["egresos"],        # Mantener como Decimal
+                saldo_acumulado=saldo_acumulado     # Mantener como Decimal
             ))
         
-        return FlujoCajaMensual(
-            mes=mes,
-            anio=anio,
-            flujo_diario=flujo_diario
-        )
+        # Serializar datos para JSON
+        flujo_serializado = {
+            "mes": mes,
+            "anio": anio,
+            "flujo_diario": [serialize_for_json(d.dict()) for d in flujo_diario]
+        }
+        
+        return JSONResponse(status_code=200, content=serialize_for_json(flujo_serializado))
         
     except Exception as e:
         logger.error(f"Error getting cash flow: {str(e)}")
@@ -896,7 +909,7 @@ async def get_cuentas_por_cobrar(
             
             cuentas.append(cuenta)
         
-        return cuentas
+        return JSONResponse(status_code=200, content=[serialize_for_json(c.dict()) for c in cuentas])
         
     except Exception as e:
         logger.error(f"Error fetching accounts receivable: {str(e)}")
@@ -956,7 +969,7 @@ async def get_cuentas_por_pagar(
             
             cuentas.append(cuenta)
         
-        return cuentas
+        return JSONResponse(status_code=200, content=[serialize_for_json(c.dict()) for c in cuentas])
         
     except Exception as e:
         logger.error(f"Error fetching accounts payable: {str(e)}")
