@@ -83,7 +83,7 @@ class VentaItem(BaseModel):
 
 class VentaRequest(BaseModel):
     items: List[VentaItem]
-    cliente_id: str
+    cliente_id: Optional[str] = None
     metodo_pago: str  # Mantenemos metodo_pago en la API pero lo mapeamos a medio_pago
     observaciones: Optional[str] = None
 
@@ -123,22 +123,32 @@ async def record_sale(
         # Obtener el user_id del usuario autenticado
         user_id = get_user_id_from_token(authorization)
         
-        # Obtener el usuario_negocio_id del usuario autenticado
-        # Por ahora usamos un negocio conocido para testing
-        negocio_id = "de138c82-abaa-4f3b-86de-1c98edbef33b"
-        
-        usuario_negocio_response = client.table("usuarios_negocios").select("id").eq("usuario_id", user_id).eq("negocio_id", negocio_id).execute()
+        # Obtener el negocio asociado del usuario autenticado
+        usuario_negocio_response = (
+            client
+            .table("usuarios_negocios")
+            .select("id, negocio_id")
+            .eq("usuario_id", user_id)
+            .eq("estado", "aceptado")
+            .limit(1)
+            .execute()
+        )
         
         if not usuario_negocio_response.data:
-            raise HTTPException(status_code=403, detail=f"Usuario no tiene acceso al negocio {negocio_id}")
+            raise HTTPException(status_code=403, detail="Usuario no tiene acceso a ningún negocio")
         
         usuario_negocio_id = usuario_negocio_response.data[0]["id"]
+        negocio_id = usuario_negocio_response.data[0]["negocio_id"]
         
-        # Validar que el cliente existe y pertenece al negocio
-        cliente_response = client.table("clientes").select("id").eq("id", venta_data.cliente_id).eq("negocio_id", negocio_id).execute()
-        
-        if not cliente_response.data:
-            raise HTTPException(status_code=404, detail=f"Cliente {venta_data.cliente_id} no encontrado o no pertenece al negocio {negocio_id}")
+        # Normalizar cliente_id: permitir None o string vacío y validar solo si existe
+        cliente_id = venta_data.cliente_id.strip() if isinstance(venta_data.cliente_id, str) else venta_data.cliente_id
+        if cliente_id == "":
+            cliente_id = None
+        if cliente_id:
+            cliente_response = client.table("clientes").select("id").eq("id", cliente_id).eq("negocio_id", negocio_id).execute()
+            
+            if not cliente_response.data:
+                raise HTTPException(status_code=404, detail=f"Cliente {cliente_id} no encontrado o no pertenece al negocio {negocio_id}")
         
         # Calcular total y validar stock
         total = 0.0
@@ -150,7 +160,7 @@ async def record_sale(
                 producto_response = client.table("productos").select("id, nombre, precio_venta, stock_actual").eq("id", item.id).eq("negocio_id", negocio_id).execute()
                 
                 if not producto_response.data:
-                    raise HTTPException(status_code=404, detail=f"Producto {item.id} no encontrado")
+                    raise HTTPException(status_code=404, detail=f"Producto {item.id} no encontrado o no pertenece al negocio {negocio_id}")
                 
                 producto = producto_response.data[0]
                 
@@ -175,7 +185,7 @@ async def record_sale(
                 servicio_response = client.table("servicios").select("id, nombre, precio").eq("id", item.id).eq("negocio_id", negocio_id).execute()
                 
                 if not servicio_response.data:
-                    raise HTTPException(status_code=404, detail=f"Servicio {item.id} no encontrado")
+                    raise HTTPException(status_code=404, detail=f"Servicio {item.id} no encontrado o no pertenece al negocio {negocio_id}")
                 
                 subtotal = item.cantidad * item.precio
                 total += subtotal
@@ -194,7 +204,7 @@ async def record_sale(
         venta_insert_data = {
             "id": venta_id,
             "negocio_id": negocio_id,
-            "cliente_id": venta_data.cliente_id,
+            "cliente_id": cliente_id,
             "usuario_negocio_id": usuario_negocio_id,  # Agregar el usuario_negocio_id
             "total": total,
             "medio_pago": venta_data.metodo_pago,  # Mapear metodo_pago a medio_pago
@@ -225,7 +235,14 @@ async def record_sale(
         for item in venta_data.items:
             if item.tipo == "producto":
                 # Obtener stock actual del producto
-                producto_response = client.table("productos").select("stock_actual").eq("id", item.id).execute()
+                producto_response = (
+                    client
+                    .table("productos")
+                    .select("stock_actual")
+                    .eq("id", item.id)
+                    .eq("negocio_id", negocio_id)
+                    .execute()
+                )
                 if producto_response.data:
                     stock_actual = producto_response.data[0]["stock_actual"]
                     nuevo_stock = stock_actual - item.cantidad
@@ -233,7 +250,7 @@ async def record_sale(
                     # Reducir stock
                     client.table("productos").update({
                         "stock_actual": nuevo_stock
-                    }).eq("id", item.id).execute()
+                    }).eq("id", item.id).eq("negocio_id", negocio_id).execute()
         
         return VentaResponseSimple(
             id=venta_creada["id"],
