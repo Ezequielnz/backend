@@ -54,7 +54,7 @@ def serialize_for_json(data):
 # ============================================================================
 
 @router.get("/categorias", response_model=List[CategoriaFinanciera],
-    dependencies=[Depends(PermissionDependency("puede_ver_finanzas"))]
+    dependencies=[Depends(PermissionDependency("facturacion", "ver"))]
 )
 async def get_categorias_financieras(
     business_id: str,
@@ -83,7 +83,7 @@ async def get_categorias_financieras(
         )
 
 @router.post("/categorias", response_model=CategoriaFinanciera,
-    dependencies=[Depends(PermissionDependency("puede_editar_finanzas"))]
+    dependencies=[Depends(PermissionDependency("facturacion", "editar"))]
 )
 async def create_categoria_financiera(
     business_id: str,
@@ -126,7 +126,7 @@ async def create_categoria_financiera(
         )
 
 @router.put("/categorias/{categoria_id}", response_model=CategoriaFinanciera,
-    dependencies=[Depends(PermissionDependency("puede_editar_finanzas"))]
+    dependencies=[Depends(PermissionDependency("facturacion", "editar"))]
 )
 async def update_categoria_financiera(
     business_id: str,
@@ -169,7 +169,7 @@ async def update_categoria_financiera(
         )
 
 @router.delete("/categorias/{categoria_id}",
-    dependencies=[Depends(PermissionDependency("puede_editar_finanzas"))]
+    dependencies=[Depends(PermissionDependency("facturacion", "editar"))]
 )
 async def delete_categoria_financiera(
     business_id: str,
@@ -213,7 +213,7 @@ async def delete_categoria_financiera(
 # ============================================================================
 
 @router.get("/movimientos", response_model=List[MovimientoFinancieroConCategoria],
-    dependencies=[Depends(PermissionDependency("puede_ver_finanzas"))]
+    dependencies=[Depends(PermissionDependency("facturacion", "ver"))]
 )
 async def get_movimientos_financieros(
     business_id: str,
@@ -373,7 +373,7 @@ async def get_movimientos_financieros(
         )
 
 @router.post("/movimientos", response_model=MovimientoFinanciero,
-    dependencies=[Depends(PermissionDependency("puede_editar_finanzas"))]
+    dependencies=[Depends(PermissionDependency("facturacion", "editar"))]
 )
 async def create_movimiento_financiero(
     business_id: str,
@@ -451,7 +451,7 @@ async def create_movimiento_financiero(
         )
 
 @router.put("/movimientos/{movimiento_id}", response_model=MovimientoFinanciero,
-    dependencies=[Depends(PermissionDependency("puede_editar_finanzas"))]
+    dependencies=[Depends(PermissionDependency("facturacion", "editar"))]
 )
 async def update_movimiento_financiero(
     business_id: str,
@@ -503,7 +503,7 @@ async def update_movimiento_financiero(
         )
 
 @router.delete("/movimientos/{movimiento_id}",
-    dependencies=[Depends(PermissionDependency("puede_editar_finanzas"))]
+    dependencies=[Depends(PermissionDependency("facturacion", "editar"))]
 )
 async def delete_movimiento_financiero(
     business_id: str,
@@ -538,7 +538,9 @@ async def delete_movimiento_financiero(
 # DASHBOARD Y RESUMEN
 # ============================================================================
 
-@router.get("/resumen", response_model=ResumenFinanciero)
+@router.get("/resumen", response_model=ResumenFinanciero,
+    dependencies=[Depends(PermissionDependency("facturacion", "ver"))]
+)
 async def get_resumen_financiero(
     request: Request,
     business_id: str,
@@ -553,92 +555,7 @@ async def get_resumen_financiero(
     try:
         supabase = get_supabase_client()
         
-        # Verificación manual de permisos
-        try:
-            user = getattr(request.state, 'user', None)
-            if not user:
-                logger.error("❌ Usuario no autenticado")
-                return JSONResponse(
-                    status_code=401,
-                    content={"detail": "Usuario no autenticado", "error": "UNAUTHORIZED"}
-                )
-            
-            logger.info(f"✅ Usuario autenticado: {user.id}")
-            
-            # Verificar acceso al negocio
-            user_business_response = supabase.table("usuarios_negocios") \
-                .select("id, rol") \
-                .eq("usuario_id", user.id) \
-                .eq("negocio_id", business_id) \
-                .eq("estado", "aceptado") \
-                .execute()
-            
-            if not user_business_response.data:
-                logger.error(f"❌ Usuario {user.id} no tiene acceso al negocio {business_id}")
-                return JSONResponse(
-                    status_code=403,
-                    content={
-                        "detail": "No tienes acceso a este negocio o tu acceso está pendiente de aprobación.",
-                        "error": "FORBIDDEN"
-                    }
-                )
-
-            user_business_info = user_business_response.data[0]
-            usuario_negocio_id = user_business_info.get("id")
-            
-            logger.info(f"✅ Usuario tiene acceso al negocio. Rol: {user_business_info.get('rol')}")
-            
-            # Verificar si es el creador del negocio
-            business_response = supabase.table("negocios").select("creada_por").eq("id", business_id).execute()
-            is_creator = business_response.data and business_response.data[0].get("creada_por") == user.id
-            
-            # Los admins y creadores tienen acceso sin verificar el permiso específico
-            is_admin = user_business_info.get("rol") == "admin"
-            
-            logger.info(f"✅ is_creator: {is_creator}, is_admin: {is_admin}")
-            
-            if not (is_creator or is_admin):
-                # Verificar permiso específico para usuarios normales
-                permissions_response = supabase.table("permisos_usuario_negocio") \
-                    .select("acceso_total, puede_ver_finanzas") \
-                    .eq("usuario_negocio_id", usuario_negocio_id) \
-                    .execute()
-                
-                if not permissions_response.data:
-                    logger.error(f"❌ Usuario no tiene permisos configurados")
-                    return JSONResponse(
-                        status_code=403,
-                        content={
-                            "detail": "No tienes permisos configurados para este negocio. Contacta al administrador.",
-                            "error": "NO_PERMISSIONS"
-                        }
-                    )
-                
-                permisos = permissions_response.data[0]
-                
-                # Verificar acceso total o permiso específico
-                if not (permisos.get("acceso_total", False) or permisos.get("puede_ver_finanzas", False)):
-                    logger.error(f"❌ Usuario no tiene permiso para ver finanzas")
-                    return JSONResponse(
-                        status_code=403,
-                        content={
-                            "detail": "No tienes permisos para ver finanzas. Contacta al administrador para solicitar acceso.",
-                            "error": "INSUFFICIENT_PERMISSIONS"
-                        }
-                    )
-            
-            logger.info("✅ Permisos verificados correctamente")
-            
-        except Exception as e:
-            logger.error(f"❌ Error verificando permisos: {str(e)}, {type(e)}")
-            return JSONResponse(
-                status_code=500,
-                content={
-                    "detail": "Error interno del servidor al verificar permisos",
-                    "error": "PERMISSION_CHECK_ERROR",
-                    "message": str(e)
-                }
-            )
+        
     
         try:
             # Use current month/year if not provided
@@ -774,7 +691,7 @@ async def get_resumen_financiero(
         )
 
 @router.get("/flujo-caja", response_model=FlujoCajaMensual,
-    dependencies=[Depends(PermissionDependency("puede_ver_finanzas"))]
+    dependencies=[Depends(PermissionDependency("facturacion", "ver"))]
 )
 async def get_flujo_caja_mensual(
     business_id: str,
@@ -859,7 +776,7 @@ async def get_flujo_caja_mensual(
 # ============================================================================
 
 @router.get("/cuentas-cobrar", response_model=List[CuentaPendienteConCliente],
-    dependencies=[Depends(PermissionDependency("puede_ver_finanzas"))]
+    dependencies=[Depends(PermissionDependency("facturacion", "ver"))]
 )
 async def get_cuentas_por_cobrar(
     business_id: str,
@@ -919,7 +836,7 @@ async def get_cuentas_por_cobrar(
         )
 
 @router.get("/cuentas-pagar", response_model=List[CuentaPendienteConCliente],
-    dependencies=[Depends(PermissionDependency("puede_ver_finanzas"))]
+    dependencies=[Depends(PermissionDependency("facturacion", "ver"))]
 )
 async def get_cuentas_por_pagar(
     business_id: str,
@@ -979,7 +896,7 @@ async def get_cuentas_por_pagar(
         )
 
 @router.post("/cuentas", response_model=CuentaPendiente,
-    dependencies=[Depends(PermissionDependency("puede_editar_finanzas"))]
+    dependencies=[Depends(PermissionDependency("facturacion", "editar"))]
 )
 async def create_cuenta_pendiente(
     business_id: str,
@@ -1030,7 +947,7 @@ async def create_cuenta_pendiente(
         )
 
 @router.put("/cuentas/{cuenta_id}", response_model=CuentaPendiente,
-    dependencies=[Depends(PermissionDependency("puede_editar_finanzas"))]
+    dependencies=[Depends(PermissionDependency("facturacion", "editar"))]
 )
 async def update_cuenta_pendiente(
     business_id: str,
@@ -1082,7 +999,7 @@ async def update_cuenta_pendiente(
         )
 
 @router.put("/cuentas/{cuenta_id}/marcar-pagado",
-    dependencies=[Depends(PermissionDependency("puede_editar_finanzas"))]
+    dependencies=[Depends(PermissionDependency("facturacion", "editar"))]
 )
 async def marcar_cuenta_como_pagada(
     business_id: str,
@@ -1128,7 +1045,7 @@ async def marcar_cuenta_como_pagada(
         )
 
 @router.delete("/cuentas/{cuenta_id}",
-    dependencies=[Depends(PermissionDependency("puede_editar_finanzas"))]
+    dependencies=[Depends(PermissionDependency("facturacion", "editar"))]
 )
 async def delete_cuenta_pendiente(
     business_id: str,

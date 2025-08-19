@@ -2,6 +2,17 @@ from fastapi import Depends, HTTPException, status, Request
 from app.db.supabase_client import get_supabase_client
 from typing import Optional, List
 
+def is_public_products_services_request(request: Request) -> bool:
+    """Detecta si la request corresponde a rutas públicas temporales de productos/servicios.
+    Se considera pública SOLO para consultas GET (listado/detalle) y cuando no hay usuario adjunto.
+    """
+    path = request.url.path if hasattr(request, "url") else ""
+    return (
+        request.method == "GET"
+        and "/businesses/" in path
+        and ("/products" in path or "/services" in path)
+    )
+
 async def verify_task_view_permission(request: Request, negocio_id: str) -> bool:
     """Dependency to verify if the user has 'puede_ver_tareas' permission for a business."""
     return await verify_permission_logic(request, negocio_id, "puede_ver_tareas")
@@ -157,6 +168,9 @@ class LegacyPermissionDependency:
 
     async def __call__(self, request: Request, business_id: str):
         try:
+            # Permitir acceso público temporal para GET de productos/servicios sin usuario autenticado
+            if is_public_products_services_request(request) and getattr(request.state, "user", None) is None:
+                return True
             # The business_id is automatically injected by FastAPI from the path parameter
             await verify_permission_logic(request, business_id, self.required_permission)
             return True # Dependency must return something on success
@@ -179,6 +193,9 @@ class ResourcePermissionDependency:
 
     async def __call__(self, request: Request, business_id: str):
         try:
+            # Permitir acceso público temporal para GET de productos/servicios sin usuario autenticado
+            if is_public_products_services_request(request) and getattr(request.state, "user", None) is None:
+                return True
             # The business_id is automatically injected by FastAPI from the path parameter
             await verify_resource_permission_logic(request, business_id, self.recurso, self.accion)
             return True # Dependency must return something on success
@@ -194,7 +211,7 @@ class ResourcePermissionDependency:
             )
 
 # Convenience function to create resource permission dependencies
-def PermissionDependency(recurso: str, accion: str = None):
+def PermissionDependency(recurso: str, accion: Optional[str] = None):
     """
     Create a permission dependency. 
     If accion is provided, uses the new resource/action pattern.

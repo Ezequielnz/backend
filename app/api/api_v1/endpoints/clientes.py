@@ -4,14 +4,18 @@ from app.api.deps import get_current_user
 from app.db.supabase_client import get_supabase_client
 from app.schemas.cliente import ClienteCreate, ClienteUpdate, Cliente, ClienteSearch
 from app.types.auth import User
+from app.dependencies import PermissionDependency
 
 router = APIRouter()
 
-@router.get("/", response_model=List[Cliente])
-@router.get("", response_model=List[Cliente])  # Agregar ruta sin barra final
+@router.get("/", response_model=List[Cliente],
+    dependencies=[Depends(PermissionDependency("clientes", "ver"))]
+)
+@router.get("", response_model=List[Cliente],  # Agregar ruta sin barra final
+    dependencies=[Depends(PermissionDependency("clientes", "ver"))]
+)
 async def read_clientes(
     business_id: str,
-    request: Request,
     q: Optional[str] = Query(None, description="Búsqueda por nombre, apellido, email o documento"),
     documento_tipo: Optional[str] = Query(None, description="Filtrar por tipo de documento"),
     limit: int = Query(10, ge=1, le=100, description="Número máximo de resultados"),
@@ -19,18 +23,8 @@ async def read_clientes(
 ) -> Any:
     """
     Retrieve clients for a business with optional filtering and pagination.
-    RLS policies handle permission checking automatically.
+    Permission checking is handled by PermissionDependency.
     """
-    # Verificar autenticación - el middleware ya debe haber procesado el token
-    user = getattr(request.state, 'user', None)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Usuario no autenticado"
-        )
-    
-    print(f"DEBUG clientes endpoint: User found: {user.id if user else 'None'}")
-    print(f"DEBUG clientes endpoint: Business ID: {business_id}")
     
     supabase = get_supabase_client()
 
@@ -61,11 +55,12 @@ async def read_clientes(
             detail=f"Error fetching clients: {str(e)}"
         )
 
-@router.get("/{cliente_id}", response_model=Cliente)
+@router.get("/{cliente_id}", response_model=Cliente,
+    dependencies=[Depends(PermissionDependency("clientes", "ver"))]
+)
 async def read_cliente(
     business_id: str,
     cliente_id: str,
-    request: Request,
     current_user: User = Depends(get_current_user)
 ) -> Any:
     """
@@ -93,11 +88,15 @@ async def read_cliente(
             detail=f"Error fetching client: {str(e)}"
         )
 
-@router.post("/", response_model=Cliente, status_code=status.HTTP_201_CREATED)
+@router.post("/", response_model=Cliente, status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(PermissionDependency("clientes", "editar"))]
+)
+@router.post("", response_model=Cliente, status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(PermissionDependency("clientes", "editar"))]
+)
 async def create_cliente(
     business_id: str,
     cliente: ClienteCreate,
-    request: Request,
     current_user: User = Depends(get_current_user)
 ) -> Any:
     """
@@ -130,12 +129,13 @@ async def create_cliente(
             detail=f"Error creating client: {str(e)}"
         )
 
-@router.put("/{cliente_id}", response_model=Cliente)
+@router.put("/{cliente_id}", response_model=Cliente,
+    dependencies=[Depends(PermissionDependency("clientes", "editar"))]
+)
 async def update_cliente(
     business_id: str,
     cliente_id: str,
     cliente: ClienteUpdate,
-    request: Request,
     current_user: User = Depends(get_current_user)
 ) -> Any:
     """
@@ -173,11 +173,12 @@ async def update_cliente(
             detail=f"Error updating client: {str(e)}"
         )
 
-@router.delete("/{cliente_id}")
+@router.delete("/{cliente_id}",
+    dependencies=[Depends(PermissionDependency("clientes", "eliminar"))]
+)
 async def delete_cliente(
     business_id: str,
     cliente_id: str,
-    request: Request,
     current_user: User = Depends(get_current_user)
 ) -> Any:
     """

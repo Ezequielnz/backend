@@ -7,6 +7,7 @@ import time
 import asyncio
 from typing import List, Optional
 import os
+import logging
 
 from app.api.api_v1.api import api_router
 from app.core.config import settings
@@ -22,6 +23,60 @@ ALLOWED_ORIGINS: List[str] = os.getenv(
 MAX_RETRIES = 3
 RETRY_DELAY = 2  # seconds
 
+class SafeProtocolMiddleware:
+    """ASGI middleware to gracefully handle h11 LocalProtocolError and client disconnections"""
+    
+    def __init__(self, app):
+        self.app = app
+        self.logger = logging.getLogger(__name__)
+    
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        
+        async def safe_send(message):
+            try:
+                await send(message)
+            except Exception as e:
+                error_type = str(type(e))
+                error_msg = str(e)
+                
+                # Catch h11 protocol errors and client disconnections
+                if (
+                    "LocalProtocolError" in error_type
+                    or "RemoteProtocolError" in error_type
+                    or "ClientDisconnect" in error_type
+                    or "Can't send data when our state is ERROR" in error_msg
+                    or "Connection lost" in error_msg
+                ):
+                    self.logger.debug(f"Protocol error swallowed: {error_type} - {error_msg}")
+                    # Silently ignore - client already disconnected
+                    return
+                else:
+                    # Re-raise other exceptions
+                    self.logger.error(f"Unexpected ASGI send error: {error_type} - {error_msg}")
+                    raise
+        
+        try:
+            await self.app(scope, receive, safe_send)
+        except Exception as e:
+            error_type = str(type(e))
+            error_msg = str(e)
+            
+            # Additional safety net for any protocol errors that bubble up
+            if (
+                "LocalProtocolError" in error_type
+                or "RemoteProtocolError" in error_type
+                or "ClientDisconnect" in error_type
+                or "Can't send data" in error_msg
+            ):
+                self.logger.debug(f"ASGI protocol error swallowed: {error_type} - {error_msg}")
+                return
+            else:
+                # Re-raise other exceptions
+                raise
+
 async def connect_to_supabase() -> bool:
     """Attempt to connect to Supabase with retries"""
     for attempt in range(MAX_RETRIES):
@@ -34,7 +89,7 @@ async def connect_to_supabase() -> bool:
             print(f"[WARNING] Intento {attempt + 1} fallido: {str(e)}")
             if attempt < MAX_RETRIES - 1:
                 print(f"Reintentando en {RETRY_DELAY} segundos...")
-                time.sleep(RETRY_DELAY)
+                await asyncio.sleep(RETRY_DELAY)
     
     return False
 
@@ -95,9 +150,11 @@ async def auth_middleware(request: Request, call_next):
         # Verificar si la ruta actual es pública
         is_public_route = any(request.url.path.startswith(route) for route in public_routes)
         
-        # Temporary: make all business products/services routes public for testing
+        # Temporary: make ONLY business products/services GET routes public for testing
         # This allows access to products and services endpoints without authentication during development
-        if "/businesses/" in request.url.path and ("/products" in request.url.path or "/services" in request.url.path):
+        if (request.method == "GET" and 
+            "/businesses/" in request.url.path and 
+            ("/products" in request.url.path or "/services" in request.url.path)):
             is_public_route = True
             print(f"DEBUG: Making business route public: {request.url.path}")
         
@@ -235,7 +292,7 @@ app.middleware("http")(auth_middleware)
 
 # Timeout middleware para evitar que las requests se cuelguen
 async def timeout_middleware(request: Request, call_next):
-    """Middleware to handle request timeouts and connection errors"""
+    """Middleware to handle request timeouts"""
     try:
         # Timeout de 30 segundos para evitar requests muy largas
         response = await asyncio.wait_for(call_next(request), timeout=30.0)
@@ -243,15 +300,14 @@ async def timeout_middleware(request: Request, call_next):
     except asyncio.TimeoutError:
         print(f"Request timeout for {request.url.path}")
         return Response("Request timeout", status_code=408)
+    except asyncio.CancelledError:
+        # Client disconnected; avoid sending a response body
+        print(f"Request cancelled (client disconnected) for {request.url.path}")
+        return Response(status_code=204)
     except ConnectionError as e:
         print(f"Connection error for {request.url.path}: {e}")
         return Response("Connection error", status_code=503)
     except Exception as e:
-        # Capturar errores de protocolo HTTP específicos
-        if "LocalProtocolError" in str(type(e)) or "Can't send data" in str(e):
-            print(f"HTTP protocol error for {request.url.path}: {e} - Client likely disconnected")
-            # No enviar respuesta si el cliente ya se desconectó
-            return None
         print(f"Timeout middleware error for {request.url.path}: {e}")
         return Response("Internal server error", status_code=500)
 
@@ -364,4 +420,7 @@ async def test_businesses():
         return {
             "status": "error",
             "error": str(e)
-        } 
+        }
+
+# Apply SafeProtocolMiddleware as the outermost layer to catch h11 errors
+app = SafeProtocolMiddleware(app)
