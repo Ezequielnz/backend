@@ -1,10 +1,12 @@
 from fastapi import APIRouter
-from app.api.api_v1.endpoints import auth, businesses, ventas, stock, facturacion, tareas, comunicacion, productos, categorias, clientes, servicios, suscripciones, importacion, permissions, finanzas
+from app.api.api_v1.endpoints import auth, businesses, ventas, stock, facturacion, tareas, comunicacion, productos, categorias, clientes, servicios, suscripciones, importacion, permissions, finanzas, compras, proveedores
 
 api_router = APIRouter()
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
 api_router.include_router(businesses.router, prefix="/businesses", tags=["businesses"])
 api_router.include_router(ventas.router, prefix="/businesses/{business_id}/ventas", tags=["ventas"])
+api_router.include_router(compras.router, prefix="/businesses/{business_id}/compras", tags=["compras"])
+api_router.include_router(proveedores.router, prefix="/businesses/{business_id}/proveedores", tags=["proveedores"])
 api_router.include_router(ventas.router, prefix="/ventas", tags=["ventas-new"])
 api_router.include_router(stock.router, prefix="/stock", tags=["stock"])
 api_router.include_router(facturacion.router, prefix="/facturacion", tags=["facturacion"])
