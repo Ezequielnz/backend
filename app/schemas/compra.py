@@ -20,12 +20,21 @@ class CompraCreate(BaseModel):
     proveedor_id: Optional[str] = Field(None, description="ID del proveedor")
     proveedor_nombre: Optional[str] = Field(None, description="Nombre del proveedor si no hay ID")
     fecha: Optional[date] = Field(None, description="Fecha de la compra")
+    metodo_pago: Optional[str] = Field(None, description="Método de pago de la compra")
+    estado: Optional[str] = Field(None, description="Estado de entrega de la compra ('entregado'|'no_entregado')")
+    fecha_entrega: Optional[date] = Field(None, description="Fecha estimada/real de entrega")
     observaciones: Optional[str] = Field(None, max_length=500)
-    items: List[CompraItem] = Field(..., min_items=1)
+    items: List[CompraItem] = Field(...)
 
     @validator("proveedor_nombre")
     def validate_proveedor_nombre(cls, v, values):
         # Allow either proveedor_id or proveedor_nombre or none (depending on DB constraints)
+        return v
+
+    @validator("items")
+    def validate_items(cls, v: List[CompraItem]) -> List[CompraItem]:
+        if not v or len(v) < 1:
+            raise ValueError("La compra debe contener al menos un ítem")
         return v
 
 
@@ -33,4 +42,6 @@ class CompraUpdate(BaseModel):
     proveedor_id: Optional[str] = None
     proveedor_nombre: Optional[str] = None
     fecha: Optional[date] = None
+    fecha_entrega: Optional[date] = None
+    estado: Optional[str] = None
     observaciones: Optional[str] = Field(None, max_length=500)

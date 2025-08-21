@@ -35,6 +35,34 @@ def get_supabase_client() -> Client:
         print(f"Tipo de error: {type(e)}")
         raise
 
+@lru_cache()
+def get_supabase_service_client() -> Client:
+    """
+    Create and return a Supabase client using the Service Role key.
+    Use this ONLY for server-side operations where RLS must be bypassed,
+    e.g., automatic finance movements on purchase creation.
+    """
+    url = settings.SUPABASE_URL
+    service_key = settings.SUPABASE_SERVICE_ROLE_KEY or settings.SUPABASE_KEY
+    
+    print("=== Creando cliente Supabase Service ===")
+    print(f"URL: {url}")
+    print(f"SERVICE_KEY: {'*'*(len(service_key)//4) if service_key else 'No configurada'}")
+    
+    if not url:
+        raise ValueError("SUPABASE_URL no está configurado en variables de entorno o .env")
+    if not service_key:
+        raise ValueError("SUPABASE_SERVICE_ROLE_KEY o SUPABASE_KEY no están configurados")
+    
+    try:
+        client = create_client(url, service_key)
+        print("[OK] Cliente Supabase Service creado exitosamente")
+        return client
+    except Exception as e:
+        print(f"[ERROR] Error al crear cliente Supabase Service: {str(e)}")
+        print(f"Tipo de error: {type(e)}")
+        raise
+
 def get_supabase_anon_client() -> Client:
     """
     Create and return a Supabase client using the anon key for user registration.
