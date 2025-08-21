@@ -266,20 +266,27 @@ async def record_sale(
 
 @router.get("/sales")
 async def get_sales(
-    authorization: str = Header(..., description="Bearer token")
+    business_id: str,
+    request: Request,
+    fecha_inicio: Optional[str] = None,
+    fecha_fin: Optional[str] = None,
 ):
     """
-    Obtiene todas las ventas del negocio del usuario autenticado.
+    Obtiene todas las ventas del negocio indicado, opcionalmente filtradas por fecha.
     """
+    token = request.headers.get("Authorization", "").replace("Bearer ", "")
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token de autenticación requerido"
+        )
     try:
-        client = get_supabase_user_client(authorization)
-        
-        # Por ahora usamos un negocio conocido para testing
-        negocio_id = "de138c82-abaa-4f3b-86de-1c98edbef33b"
-        
-        # Obtener ventas con información del cliente
-        ventas_response = client.table("ventas").select("""
+        client = get_supabase_user_client(token)
+
+        # Construir consulta con filtros opcionales
+        query = client.table("ventas").select("""
             id,
+            cliente_id,
             fecha,
             total,
             medio_pago,
@@ -289,13 +296,22 @@ async def get_sales(
                 nombre,
                 email
             )
-        """).eq("negocio_id", negocio_id).order("fecha", desc=True).execute()
-        
+        """).eq("negocio_id", business_id).order("fecha", desc=True)
+
+        if fecha_inicio:
+            query = query.gte("fecha", fecha_inicio)
+        if fecha_fin:
+            query = query.lte("fecha", fecha_fin)
+
+        ventas_response = query.execute()
+
+        data = ventas_response.data if ventas_response.data else []
         return {
-            "ventas": ventas_response.data if ventas_response.data else [],
-            "total_ventas": len(ventas_response.data) if ventas_response.data else 0
+            "ventas": data,
+            "total_ventas": len(data)
         }
-        
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al obtener ventas: {str(e)}")
 
@@ -426,7 +442,7 @@ async def get_reporte_ventas(
     supabase = get_supabase_user_client(token)
     
     try:
-        query = supabase.table("ventas").select("*, venta_detalle(*, productos(nombre))").eq("negocio_id", business_id)
+        query = supabase.table("ventas").select("*, venta_detalle(*, productos(nombre), servicios(nombre))").eq("negocio_id", business_id)
         
         if fecha_inicio:
             query = query.gte("fecha", fecha_inicio)
@@ -434,12 +450,46 @@ async def get_reporte_ventas(
             query = query.lte("fecha", fecha_fin)
         
         response = query.execute()
+        ventas = response.data if response.data else []
+        
+        # Calcular resumen en niveles superiores para facilitar consumo en frontend
+        total_ventas = len(ventas)
+        total_ingresos = sum(float(v.get("total") or 0) for v in ventas)
+        
+        # Calcular productos/servicios más vendidos (opcional)
+        top_items = {}
+        for v in ventas:
+            detalles = v.get("venta_detalle") or []
+            for d in detalles:
+                tipo = d.get("tipo")
+                if tipo == "producto":
+                    key = f'producto:{d.get("producto_id")}'
+                    nombre = (d.get("productos") or {}).get("nombre") if isinstance(d.get("productos"), dict) else None
+                    nombre = nombre or "Producto"
+                elif tipo == "servicio":
+                    key = f'servicio:{d.get("servicio_id")}'
+                    nombre = (d.get("servicios") or {}).get("nombre") if isinstance(d.get("servicios"), dict) else None
+                    nombre = nombre or "Servicio"
+                else:
+                    continue
+                cantidad = int(d.get("cantidad") or 0)
+                subtotal = float(d.get("subtotal") or 0)
+                if subtotal == 0:
+                    precio_unitario = float(d.get("precio_unitario") or 0)
+                    subtotal = precio_unitario * cantidad
+                if key not in top_items:
+                    top_items[key] = {"nombre": nombre, "cantidad": 0, "total": 0.0}
+                top_items[key]["cantidad"] += cantidad
+                top_items[key]["total"] += subtotal
+        
+        productos_mas_vendidos = sorted(top_items.values(), key=lambda x: x["cantidad"], reverse=True)[:6]
+        
         return {
-            "ventas": response.data if response.data else [],
-            "resumen": {
-                "total_ventas": len(response.data) if response.data else 0,
-                "total_ingresos": sum(v["total"] for v in response.data) if response.data else 0
-            }
+            "ventas": ventas,
+            "total_ventas": total_ventas,
+            "total_ingresos": total_ingresos,
+            "ganancias_netas": total_ingresos,
+            "productos_mas_vendidos": productos_mas_vendidos,
         }
         
     except Exception as e:
