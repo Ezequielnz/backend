@@ -84,7 +84,14 @@ async def get_tenant_settings(
             return JSONResponse(content=response.data[0])
         else:
             # Si no existe configuración, devolver valores por defecto
-            return JSONResponse(content={})
+            default_settings = {
+                "locale": "es-AR",
+                "timezone": "America/Argentina/Buenos_Aires", 
+                "currency": "ARS",
+                "sales_drop_threshold": 15,
+                "min_days_for_model": 30
+            }
+            return JSONResponse(content=default_settings)
             
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al obtener configuración: {str(e)}")

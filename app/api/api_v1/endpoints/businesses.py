@@ -168,6 +168,31 @@ async def create_business(business_data: BusinessCreate, request: Request) -> An
             print(f"⚠️ Warning: Error setting initial permissions (non-critical): {permissions_error}")
             # Continue with business creation even if permissions fail
 
+        # 4. Create default tenant settings for the new business
+        try:
+            default_tenant_settings = {
+                "tenant_id": business_id,
+                "locale": "es-AR",
+                "timezone": "America/Argentina/Buenos_Aires",
+                "currency": "ARS",
+                "sales_drop_threshold": 15,  # 15% threshold (Media sensitivity)
+                "min_days_for_model": 30     # 30 days minimum for predictions
+            }
+            print(f"Creating default tenant settings for business: {business_id}")
+            
+            tenant_settings_response = supabase.table("tenant_settings").insert([default_tenant_settings]).execute()
+            
+            if hasattr(tenant_settings_response, 'error') and tenant_settings_response.error:
+                print(f"⚠️ Warning: Could not create default tenant settings: {tenant_settings_response.error}")
+            elif tenant_settings_response.data:
+                print(f"✅ Default tenant settings created successfully")
+            else:
+                print("⚠️ Warning: Could not create default tenant settings - No data returned")
+                
+        except Exception as tenant_settings_error:
+            print(f"⚠️ Warning: Error creating default tenant settings (non-critical): {tenant_settings_error}")
+            # Continue with business creation even if tenant settings fail
+
         return {"message": "Business created successfully", "business_id": business_id}
 
     except HTTPException:
