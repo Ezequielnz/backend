@@ -35,22 +35,21 @@ async def create_business(business_data: BusinessCreate, request: Request) -> An
         }
         print(f"Insert data: {insert_data}")
 
-        business_response = supabase.table("negocios").insert([insert_data]).execute()
-
-        # === Manejo explícito de errores de Supabase ===
-        if hasattr(business_response, 'error') and business_response.error:
-             print(f"❌ Supabase INSERT error: {business_response.error}")
-             raise HTTPException(
-                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, # O 400 dependiendo del error
-                 detail=f"Supabase error creating business: {business_response.error.message}"
-             )
-
-        if not business_response.data or len(business_response.data) == 0:
-             print("❌ Supabase INSERT returned no data")
-             raise HTTPException(
-                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                 detail="Supabase did not return created business data."
-             )
+        try:
+            business_response = supabase.table("negocios").insert([insert_data]).execute()
+            
+            if not business_response.data or len(business_response.data) == 0:
+                print("❌ Supabase INSERT returned no data")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Supabase did not return created business data."
+                )
+        except Exception as e:
+            print(f"❌ Supabase INSERT error: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Supabase error creating business: {str(e)}"
+            )
         # =============================================
 
         new_business = business_response.data[0]
@@ -89,23 +88,32 @@ async def create_business(business_data: BusinessCreate, request: Request) -> An
             print(f"No existing relationships found for user {user.id}")
         
         try:
-            user_business_link_response = supabase.table("usuarios_negocios").insert({
-                "usuario_id": str(user.id), # Asegurar que es string
-                "negocio_id": business_id,
-                "rol": "admin", # Assign admin role to the creator
-                "estado": "aceptado", # Creator is automatically accepted
-                "invitado_por": None # Explicitamente establecer a NULL si no hay un invitador
-            }).execute()
-            
-            # === Manejo explícito de errores de Supabase ===
-            if hasattr(user_business_link_response, 'error') and user_business_link_response.error:
-                print(f"❌ Supabase INSERT usuarios_negocios error: {user_business_link_response.error}")
+            try:
+                user_business_link_response = supabase.table("usuarios_negocios").insert({
+                    "usuario_id": str(user.id), # Asegurar que es string
+                    "negocio_id": business_id,
+                    "rol": "admin", # Assign admin role to the creator
+                    "estado": "aceptado", # Creator is automatically accepted
+                    "invitado_por": None # Explicitamente establecer a NULL si no hay un invitador
+                }).execute()
+                
+                if not user_business_link_response.data or len(user_business_link_response.data) == 0:
+                    print("❌ Supabase INSERT usuarios_negocios returned no data")
+                    # Rollback: eliminar el negocio creado
+                    print(f"Rolling back business creation for business_id: {business_id}")
+                    supabase.table("negocios").delete().eq("id", business_id).execute()
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Error linking user to business - no data returned."
+                    )
+            except Exception as e:
+                print(f"❌ Supabase INSERT usuarios_negocios error: {str(e)}")
                 # Rollback: eliminar el negocio creado
                 print(f"Rolling back business creation for business_id: {business_id}")
                 supabase.table("negocios").delete().eq("id", business_id).execute()
                 
                 # Verificar si es un error de constraint único
-                if "23505" in str(user_business_link_response.error):
+                if "23505" in str(e):
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail="Ya existe una relación para este usuario. Puede que tengas un negocio pendiente de configuración."
@@ -113,18 +121,8 @@ async def create_business(business_data: BusinessCreate, request: Request) -> An
                 else:
                     raise HTTPException(
                         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                        detail=f"Error linking user to business: {user_business_link_response.error.message}"
+                        detail=f"Error linking user to business: {str(e)}"
                     )
-
-            if not user_business_link_response.data or len(user_business_link_response.data) == 0:
-                print("❌ Supabase INSERT usuarios_negocios returned no data")
-                # Rollback: eliminar el negocio creado
-                print(f"Rolling back business creation for business_id: {business_id}")
-                supabase.table("negocios").delete().eq("id", business_id).execute()
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Error linking user to business - no data returned."
-                )
                 
         except HTTPException:
             raise  # Re-raise HTTPExceptions
@@ -155,14 +153,15 @@ async def create_business(business_data: BusinessCreate, request: Request) -> An
             }
             print(f"Setting initial permissions for usuario_negocio_id: {usuario_negocio_id}")
             
-            permissions_response = supabase.table("permisos_usuario_negocio").insert([initial_permissions]).execute()
-            
-            if hasattr(permissions_response, 'error') and permissions_response.error:
-                print(f"⚠️ Warning: Could not set initial permissions: {permissions_response.error}")
-            elif permissions_response.data:
-                print(f"✅ Initial permissions set successfully")
-            else:
-                print("⚠️ Warning: Could not set initial permissions - No data returned")
+            try:
+                permissions_response = supabase.table("permisos_usuario_negocio").insert([initial_permissions]).execute()
+                
+                if permissions_response.data:
+                    print(f"✅ Initial permissions set successfully")
+                else:
+                    print("⚠️ Warning: Could not set initial permissions - No data returned")
+            except Exception as e:
+                print(f"⚠️ Warning: Could not set initial permissions: {str(e)}")
                 
         except Exception as permissions_error:
             print(f"⚠️ Warning: Error setting initial permissions (non-critical): {permissions_error}")
@@ -180,14 +179,15 @@ async def create_business(business_data: BusinessCreate, request: Request) -> An
             }
             print(f"Creating default tenant settings for business: {business_id}")
             
-            tenant_settings_response = supabase.table("tenant_settings").insert([default_tenant_settings]).execute()
-            
-            if hasattr(tenant_settings_response, 'error') and tenant_settings_response.error:
-                print(f"⚠️ Warning: Could not create default tenant settings: {tenant_settings_response.error}")
-            elif tenant_settings_response.data:
-                print(f"✅ Default tenant settings created successfully")
-            else:
-                print("⚠️ Warning: Could not create default tenant settings - No data returned")
+            try:
+                tenant_settings_response = supabase.table("tenant_settings").insert([default_tenant_settings]).execute()
+                
+                if tenant_settings_response.data:
+                    print(f"✅ Default tenant settings created successfully")
+                else:
+                    print("⚠️ Warning: Could not create default tenant settings - No data returned")
+            except Exception as e:
+                print(f"⚠️ Warning: Could not create default tenant settings: {str(e)}")
                 
         except Exception as tenant_settings_error:
             print(f"⚠️ Warning: Error creating default tenant settings (non-critical): {tenant_settings_error}")
@@ -208,7 +208,7 @@ async def create_business(business_data: BusinessCreate, request: Request) -> An
 async def get_businesses(request: Request) -> Any:
     """Get all businesses for the current user."""
     user = getattr(request.state, "user", None)
-    if not user:
+    if not user or not hasattr(user, 'id'):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not authenticated.",
@@ -288,7 +288,7 @@ async def get_businesses(request: Request) -> Any:
 async def get_business_by_id(business_id: str, request: Request) -> Any:
     """Get a specific business by ID for the current user."""
     user = getattr(request.state, "user", None)
-    if not user:
+    if not user or not hasattr(user, 'id'):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not authenticated.",
@@ -346,7 +346,7 @@ async def get_business_by_id(business_id: str, request: Request) -> Any:
 async def delete_business(business_id: str, request: Request) -> Any:
     """Delete a business and all its related data."""
     user = getattr(request.state, "user", None)
-    if not user:
+    if not user or not hasattr(user, 'id'):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not authenticated.",
@@ -420,16 +420,16 @@ async def delete_business(business_id: str, request: Request) -> Any:
 
         # 5. Finally, delete the business itself
         print(f"Deleting business {business_id}")
-        business_response = supabase.table("negocios") \
-            .delete() \
-            .eq("id", business_id) \
-            .execute()
-
-        if hasattr(business_response, 'error') and business_response.error:
-            print(f"❌ Supabase DELETE error: {business_response.error}")
+        try:
+            business_response = supabase.table("negocios") \
+                .delete() \
+                .eq("id", business_id) \
+                .execute()
+        except Exception as e:
+            print(f"❌ Supabase DELETE error: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Error deleting business: {business_response.error.message}"
+                detail=f"Error deleting business: {str(e)}"
             )
 
         print(f"✅ Business {business_id} deleted successfully")
@@ -567,7 +567,7 @@ async def repair_user_businesses(user_id: str, request: Request) -> Any:
 async def listar_usuarios_pendientes(business_id: str, request: Request) -> Any:
     """Listar usuarios pendientes de aprobación para un negocio (solo admin o creador)."""
     user = getattr(request.state, "user", None)
-    if not user:
+    if not user or not hasattr(user, 'id'):
         raise HTTPException(status_code=401, detail="User not authenticated.")
     
     supabase = get_supabase_client()
@@ -630,8 +630,8 @@ async def listar_usuarios_pendientes(business_id: str, request: Request) -> Any:
 async def aprobar_usuario_negocio(
     business_id: str, 
     usuario_negocio_id: str, 
-    permisos_data: dict = Body(default={}),
-    request: Request = None
+    request: Request,
+    permisos_data: dict = Body(default={})
 ) -> Any:
     """Aprobar usuario pendiente y configurar sus permisos por módulos."""
     try:
@@ -641,7 +641,7 @@ async def aprobar_usuario_negocio(
         print(f"Permisos data: {permisos_data}")
         
         user = getattr(request.state, "user", None)
-        if not user:
+        if not user or not hasattr(user, 'id'):
             raise HTTPException(status_code=401, detail="User not authenticated.")
         
         print(f"Usuario autenticado: {user.id}")
@@ -775,9 +775,7 @@ async def aprobar_usuario_negocio(
                 .insert(permisos_config) \
                 .execute()
         
-        if hasattr(permisos_response, 'error') and permisos_response.error:
-            print(f"❌ Error creando/actualizando permisos: {permisos_response.error}")
-            raise HTTPException(status_code=500, detail=f"Error configurando permisos: {permisos_response.error}")
+        # No need to check for .error - Supabase raises exceptions on errors
         
         print("✅ Permisos configurados exitosamente")
         
@@ -789,9 +787,7 @@ async def aprobar_usuario_negocio(
                 .eq("id", usuario_negocio_id) \
                 .execute()
             
-            if hasattr(approval_response, 'error') and approval_response.error:
-                print(f"❌ Error aprobando usuario: {approval_response.error}")
-                raise HTTPException(status_code=500, detail=f"Error aprobando usuario: {approval_response.error}")
+            # No need to check for .error - Supabase raises exceptions on errors
             
             print("✅ Usuario aprobado exitosamente")
         else:
@@ -804,8 +800,7 @@ async def aprobar_usuario_negocio(
             .eq("id", usuario_check.data[0]["usuario_id"]) \
             .execute()
         
-        if hasattr(usuario_data, 'error') and usuario_data.error:
-            print(f"⚠️ Error obteniendo datos del usuario: {usuario_data.error}")
+        # No need to check for .error - Supabase raises exceptions on errors
         
         print("✅ Aprobación completada exitosamente")
         
@@ -830,7 +825,7 @@ async def aprobar_usuario_negocio(
 async def rechazar_usuario_pendiente(business_id: str, usuario_negocio_id: str, request: Request) -> Any:
     """Rechazar usuario pendiente (solo admin)."""
     user = getattr(request.state, "user", None)
-    if not user:
+    if not user or not hasattr(user, 'id'):
         raise HTTPException(status_code=401, detail="User not authenticated.")
     supabase = get_supabase_client()
     # Verificar que el usuario es admin del negocio
@@ -856,7 +851,7 @@ async def buscar_negocios(nombre: str = "", id: str = "") -> Any:
 async def obtener_notificaciones_negocio(business_id: str, request: Request) -> Any:
     """Obtener notificaciones para el centro de notificaciones (usuarios pendientes, etc.)."""
     user = getattr(request.state, "user", None)
-    if not user:
+    if not user or not hasattr(user, 'id'):
         raise HTTPException(status_code=401, detail="User not authenticated.")
     supabase = get_supabase_client()
     
@@ -908,7 +903,7 @@ async def obtener_notificaciones_negocio(business_id: str, request: Request) -> 
 async def listar_usuarios_negocio(business_id: str, request: Request) -> Any:
     """Listar todos los usuarios asociados al negocio con sus permisos."""
     user = getattr(request.state, "user", None)
-    if not user:
+    if not user or not hasattr(user, 'id'):
         raise HTTPException(status_code=401, detail="User not authenticated.")
     
     supabase = get_supabase_client()
@@ -980,12 +975,12 @@ async def listar_usuarios_negocio(business_id: str, request: Request) -> Any:
 async def actualizar_permisos_usuario(
     business_id: str, 
     usuario_negocio_id: str, 
-    permisos_data: dict = Body(...),
-    request: Request = None
+    request: Request,
+    permisos_data: dict = Body(...)
 ) -> Any:
     """Actualizar permisos de un usuario del negocio (solo admin)."""
     user = getattr(request.state, "user", None)
-    if not user:
+    if not user or not hasattr(user, 'id'):
         raise HTTPException(status_code=401, detail="User not authenticated.")
     
     supabase = get_supabase_client()
@@ -1029,9 +1024,7 @@ async def actualizar_permisos_usuario(
                 .insert(permisos_update) \
                 .execute()
         
-        if hasattr(response, 'error') and response.error:
-            print(f"❌ Error actualizando permisos: {response.error}")
-            raise HTTPException(status_code=500, detail=f"Error actualizando permisos: {response.error}")
+        # No need to check for .error - Supabase raises exceptions on errors
         
         return {"message": "Permisos actualizados correctamente", "permisos": response.data[0] if response.data else {}}
         
@@ -1045,7 +1038,7 @@ async def actualizar_permisos_usuario(
 async def remover_usuario_negocio(business_id: str, usuario_negocio_id: str, request: Request) -> Any:
     """Remover usuario del negocio (solo admin)."""
     user = getattr(request.state, "user", None)
-    if not user:
+    if not user or not hasattr(user, 'id'):
         raise HTTPException(status_code=401, detail="User not authenticated.")
     
     supabase = get_supabase_client()
@@ -1072,7 +1065,6 @@ async def remover_usuario_negocio(business_id: str, usuario_negocio_id: str, req
     
     return {"message": "Usuario removido del negocio correctamente"}
 
-
 # ==================== ENDPOINTS DE INVITACIONES ====================
 
 @router.post("/{business_id}/invitaciones", response_model=InvitacionResponse)
@@ -1086,7 +1078,7 @@ async def invitar_usuario_negocio(
     Por ahora crea la invitación en la BD, en el futuro enviará email.
     """
     user = getattr(request.state, "user", None)
-    if not user:
+    if not user or not hasattr(user, 'id'):
         raise HTTPException(status_code=401, detail="User not authenticated.")
     
     supabase = get_supabase_client()
@@ -1197,7 +1189,7 @@ async def actualizar_estado_usuario_negocio(
     Puede ser usado por el propio usuario para aceptar/rechazar o por admin para cambiar estados.
     """
     user = getattr(request.state, "user", None)
-    if not user:
+    if not user or not hasattr(user, 'id'):
         raise HTTPException(status_code=401, detail="User not authenticated.")
     
     supabase = get_supabase_client()
@@ -1249,8 +1241,7 @@ async def actualizar_estado_usuario_negocio(
             .eq("id", usuario_negocio_id) \
             .execute()
         
-        if hasattr(response, 'error') and response.error:
-            raise HTTPException(status_code=500, detail=f"Error actualizando estado: {response.error}")
+        # No need to check for .error - Supabase raises exceptions on errors
         
         # Si se acepta la invitación, crear permisos básicos
         if estado_data.estado == "aceptado" and relacion["estado"] != "aceptado":
