@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.api_v1.endpoints import auth, businesses, ventas, stock, facturacion, tareas, comunicacion, productos, categorias, clientes, servicios, suscripciones, importacion, permissions, finanzas, compras, proveedores, tenant_settings
+from app.api.api_v1.endpoints import auth, businesses, ventas, stock, facturacion, tareas, comunicacion, productos, categorias, clientes, servicios, suscripciones, importacion, permissions, finanzas, compras, proveedores, tenant_settings, notifications
 
 api_router = APIRouter()
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
@@ -20,4 +20,5 @@ api_router.include_router(suscripciones.router, prefix="/businesses/{business_id
 api_router.include_router(importacion.router, prefix="/businesses/{business_id}/import", tags=["import"])
 api_router.include_router(permissions.router, prefix="", tags=["permissions"])
 api_router.include_router(finanzas.router, prefix="/businesses/{business_id}/finanzas", tags=["finanzas"])
-api_router.include_router(tenant_settings.router, prefix="/businesses/{business_id}/tenant-settings", tags=["tenant-settings"]) 
+api_router.include_router(tenant_settings.router, prefix="/businesses/{business_id}/tenant-settings", tags=["tenant-settings"])
+api_router.include_router(notifications.router, prefix="/notifications", tags=["notifications"]) 

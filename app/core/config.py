@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     
     # CORS configuration
     # Añadir http://localhost:5173 para aceptar peticiones del frontend de Vite
-    BACKEND_CORS_ORIGINS: List[AnyHttpUrl] = [
+    BACKEND_CORS_ORIGINS: List[str] = [
         "http://localhost:5173",  # Frontend Vite
         "http://localhost:3000",  # Frontend alternativo (por si se usa otro puerto)
         "http://localhost:8080",  # Frontend alternativo (por si se usa otro puerto)
@@ -34,7 +34,27 @@ class Settings(BaseSettings):
     SUPABASE_KEY: str = os.getenv("SUPABASE_KEY", "")
     SUPABASE_ANON_KEY: str = os.getenv("SUPABASE_ANON_KEY", "")
     SUPABASE_SERVICE_ROLE_KEY: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
-    
+
+    # Redis Configuration
+    REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+
+    # Celery Configuration
+    CELERY_BROKER_URL: str = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
+    CELERY_RESULT_BACKEND: str = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
+
+    # JWT Configuration
+    JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "your_jwt_secret_key_here")
+    JWT_ALGORITHM: str = os.getenv("JWT_ALGORITHM", "HS256")
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
+
+    # ML Configuration
+    ML_MODEL_PATH: str = os.getenv("ML_MODEL_PATH", "./models/")
+    ML_FEATURE_CACHE_TTL: int = int(os.getenv("ML_FEATURE_CACHE_TTL", "3600"))
+
+    # Notification Configuration
+    NOTIFICATION_CACHE_TTL: int = int(os.getenv("NOTIFICATION_CACHE_TTL", "3600"))
+    DEFAULT_NOTIFICATION_LANGUAGE: str = os.getenv("DEFAULT_NOTIFICATION_LANGUAGE", "es")
+
     # Database connection settings for Supabase Pooler
     DB_USER: str = os.getenv("DB_USER", "postgres.aupmnxxauxasetwnqkma")
     DB_PASSWORD: str = os.getenv("DB_PASSWORD", "")
