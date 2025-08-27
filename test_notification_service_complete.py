@@ -8,17 +8,37 @@ Prueba inicialización de negocio, consulta de reglas efectivas y actualización
 import asyncio
 import json
 import logging
+import sys
+import io
+import os
 from datetime import datetime
-from typing import Dict, Any, cast
+from typing import cast
 
-from app.services.notification_service import NotificationConfigService, NotificationRuleType
+from app.services.notification_service import NotificationConfigService
 from app.services.rubro_strategies import RubroStrategyFactory
-from app.core.cache_manager import cache_manager
+from app.core.cache_manager import cache_manager, CacheManager
 from supabase.client import Client
 
 
+# Ensure UTF-8-capable stdout to avoid UnicodeEncodeError on Windows consoles
+reconf = getattr(sys.stdout, "reconfigure", None)
+if callable(reconf):
+    try:
+        _ = reconf(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+else:
+    try:
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+        os.environ["PYTHONIOENCODING"] = "utf-8"
+    except Exception:
+        pass
+
 class TestNotificationConfigService(NotificationConfigService):
     """Lightweight subclass that skips Supabase client creation for local tests."""
+    supabase: Client
+    cache_manager: CacheManager
+    logger: logging.Logger
     def __init__(self):
         # Do NOT call super().__init__() to avoid get_supabase_client()
         self.supabase = cast(Client, cast(object, None))  # Not used by the tested methods
@@ -56,7 +76,7 @@ async def test_notification_service_complete():
         
         print("\n3️⃣ **Test: Inicialización de negocio**")
         user_preferences = {
-            "low_stock": {
+            "ingredient_stock": {
                 "parameters": {
                     "threshold": 15,
                     "notification_channels": ["email", "app"]
@@ -94,7 +114,7 @@ async def test_notification_service_complete():
             "severity": "medium"
         }
         
-        transformed_params = composition_service.apply_rubro_transformations("low_stock", base_params)
+        transformed_params = composition_service.apply_rubro_transformations("ingredient_stock", base_params)
         print(f"✅ Parámetros base: {base_params}")
         print(f"✅ Parámetros transformados para '{test_rubro}': {transformed_params}")
         
@@ -107,7 +127,7 @@ async def test_notification_service_complete():
             "is_active": True
         }
         
-        validated_override = composition_service.validate_rule_override("low_stock", test_override)
+        validated_override = composition_service.validate_rule_override("ingredient_stock", test_override)
         print(f"✅ Override original: {test_override}")
         print(f"✅ Override validado: {validated_override}")
         
@@ -115,7 +135,7 @@ async def test_notification_service_complete():
         # Simular templates base
         mock_templates = [
             {
-                "rule_type": "low_stock",
+                "rule_type": "ingredient_stock",
                 "default_parameters": {"threshold": 10, "severity": "medium"},
                 "condition_config": {"check_frequency": "daily"},
                 "version": "1.0"
@@ -129,7 +149,7 @@ async def test_notification_service_complete():
         ]
         
         mock_overrides = {
-            "low_stock": {
+            "ingredient_stock": {
                 "parameters": {"threshold": 5},
                 "is_active": True
             }
