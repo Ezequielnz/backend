@@ -7,11 +7,9 @@ Hybrid Notification Rule Engine
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import cast, TypeVar, Callable, Protocol
 from collections.abc import Awaitable
-from enum import Enum
 import logging
 from supabase.client import Client
 
@@ -22,50 +20,11 @@ from app.services.notification_service import (
 )
 from app.db.supabase_client import get_supabase_service_client
 from app.core.cache_manager import cache_manager, CacheManager
+from app.services.notifications.schemas import NotificationAlert, AlertSource
+from app.services.notifications.rules.registry import evaluate_rule as _evaluate_static_rule
+from app.services.notifications.utils import sev_rank
 
 logger = logging.getLogger(__name__)
-
-
-class AlertSource(str, Enum):
-    STATIC_RULE = "static_rule"
-    ML = "ml"
-    COMBINED = "combined"
-
-
-@dataclass
-class NotificationAlert:
-    rule_type: NotificationRuleType
-    severity: str  # one of: info, warning, error, success
-    title: str
-    message: str
-    metadata: dict[str, object]
-    score: float
-    source: AlertSource
-
-    def to_db_row(self, tenant_id: str) -> dict[str, object]:
-        return {
-            "tenant_id": tenant_id,
-            "title": self.title,
-            "message": self.message,
-            "metadata": self.metadata,
-            "severity": self.severity,
-            # created_at handled by DB default
-        }
-
-
-def map_severity(value: str | None, default: str = "info") -> str:
-    v = (value or default).lower()
-    # normalize into allowed: info, warning, error, success
-    if v in {"info", "warning", "error", "success"}:
-        return v
-    # map common synonyms
-    if v in {"low"}:
-        return "info"
-    if v in {"medium", "med", "moderate"}:
-        return "warning"
-    if v in {"high", "critical", "severe"}:
-        return "error"
-    return default
 
 
 T = TypeVar("T")
@@ -78,6 +37,7 @@ class NotificationRuleEngine:
 
     def __init__(self) -> None:
         # Use service client so Celery can bypass RLS safely (server-side tasks)
+        super().__init__()
         self.supabase: Client = get_supabase_service_client()
         self.config_service: NotificationConfigService = NotificationConfigService()
         self.cache: CacheManager = cache_manager
@@ -232,6 +192,18 @@ class NotificationRuleEngine:
         return preds
 
     # --------------------------- Evaluation ---------------------------
+    def _rule_type_value(self, rt: object) -> str:
+        """Return a stable string value for a rule_type that may be an enum or arbitrary object."""
+        try:
+            # Avoid top-level import cycle by importing here
+            from app.services.notification_service import NotificationRuleType as _RT  # type: ignore
+            if isinstance(rt, _RT):
+                return rt.value
+        except Exception:
+            pass
+        v = getattr(rt, "value", None)
+        return str(v if v is not None else rt)
+
     def evaluate(self, tenant_id: str, features: dict[str, object] | None = None, predictions: list[dict[str, object]] | None = None) -> list[NotificationAlert]:
         """
         Evaluate static rules and combine with ML suggestions, returning final deduped alerts.
@@ -262,134 +234,7 @@ class NotificationRuleEngine:
         return deduped
 
     def _evaluate_rule(self, rule: NotificationRule, features: dict[str, object]) -> NotificationAlert | None:
-        rt = rule.rule_type
-        params = rule.parameters or {}
-        severity = map_severity(cast(str | None, params.get("severity")), "warning")
-
-        # Helper getters
-        def num(name: str, default: float = 0.0) -> float:
-            return self._as_float(features.get(name), default)
-
-        def listv(name: str) -> list[object]:
-            v = features.get(name)
-            return cast(list[object], v) if isinstance(v, list) else []
-
-        # sales_drop
-        if rt == NotificationRuleType.SALES_DROP:
-            threshold = self._as_float(params.get("threshold"), 20.0)  # percent
-            # Try sales_growth (e.g., -0.15 means -15%) or sales_trend
-            growth = num("sales_growth", num("sales_trend", 0.0)) * 100.0
-            # Negative growth beyond threshold
-            if growth < -threshold:
-                pct = round(growth, 1)
-                return NotificationAlert(
-                    rule_type=rt,
-                    severity=severity,
-                    title="Caída de ventas detectada",
-                    message=f"Las ventas han caído {abs(pct)}% respecto al período anterior.",
-                    metadata={"sales_growth_pct": pct, "threshold_pct": threshold},
-                    score=min(1.0, abs(growth) / max(1.0, threshold)),
-                    source=AlertSource.STATIC_RULE,
-                )
-            return None
-
-        # low_stock
-        if rt == NotificationRuleType.LOW_STOCK:
-            threshold_units = self._as_float(params.get("threshold"), 10.0)
-            critical_threshold = self._as_float(params.get("critical_threshold"), max(2.0, threshold_units / 5.0))
-            low_items = listv("low_stock_items")
-            # Fallback using inventory_level [0..1]
-            inv_level = num("inventory_level", 1.0)
-            metadata: dict[str, object] = {}
-            if low_items:
-                metadata["items"] = low_items
-            if inv_level < 0.2:
-                metadata["inventory_level"] = inv_level
-            if low_items or inv_level < 0.2:
-                sev = severity
-                if inv_level < 0.1 or any((self._as_float(cast(dict[str, object], i).get("qty"), threshold_units) <= critical_threshold) for i in low_items if isinstance(i, dict)):
-                    sev = "error"
-                return NotificationAlert(
-                    rule_type=rt,
-                    severity=sev,
-                    title="Stock bajo detectado",
-                    message="Se detectaron productos con stock bajo o inventario general crítico.",
-                    metadata=metadata,
-                    score=1.0 - inv_level if inv_level <= 1 else 0.6,
-                    source=AlertSource.STATIC_RULE,
-                )
-            return None
-
-        # ingredient_stock (restaurants)
-        if rt == NotificationRuleType.INGREDIENT_STOCK:
-            threshold_pct = self._as_float(params.get("threshold"), 20.0)
-            crit_pct = self._as_float(params.get("critical_threshold"), 5.0)
-            ingred_list = listv("ingredient_low_list")
-            if ingred_list:
-                sev = severity
-                if any((self._as_float(cast(dict[str, object], it).get("pct"), 100.0) <= crit_pct) for it in ingred_list if isinstance(it, dict)):
-                    sev = "error"
-                return NotificationAlert(
-                    rule_type=rt,
-                    severity=sev,
-                    title="Ingredientes con stock bajo",
-                    message="Hay ingredientes por debajo de los umbrales definidos.",
-                    metadata={"ingredients": ingred_list, "threshold_pct": threshold_pct},
-                    score=0.8,
-                    source=AlertSource.STATIC_RULE,
-                )
-            return None
-
-        # no_purchases
-        if rt == NotificationRuleType.NO_PURCHASES:
-            days = self._as_float(params.get("threshold"), 5.0)
-            days_without = num("days_without_purchases", 0.0)
-            if days_without > days:
-                return NotificationAlert(
-                    rule_type=rt,
-                    severity=severity,
-                    title="Sin compras recientes",
-                    message=f"No se registran compras desde hace {int(days_without)} días.",
-                    metadata={"days_without_purchases": days_without, "threshold_days": days},
-                    score=min(1.0, (days_without - days) / max(1.0, days)),
-                    source=AlertSource.STATIC_RULE,
-                )
-            return None
-
-        # seasonal_alert
-        if rt == NotificationRuleType.SEASONAL_ALERT:
-            peak_seasons = cast(list[str], params.get("peak_seasons", []))
-            now_month = datetime.now().strftime("%B").lower()
-            # if any spanish month matches current month name (rough heuristic)
-            if any(m for m in peak_seasons if now_month.startswith(m[:3].lower())):
-                return NotificationAlert(
-                    rule_type=rt,
-                    severity=map_severity("info"),
-                    title="Temporada alta próxima",
-                    message="Prepara inventario y promociones para la temporada alta.",
-                    metadata={"peak_seasons": peak_seasons},
-                    score=0.5,
-                    source=AlertSource.STATIC_RULE,
-                )
-            return None
-
-        # high_expenses
-        if rt == NotificationRuleType.HIGH_EXPENSES:
-            threshold_pct = self._as_float(params.get("threshold"), 120.0)  # e.g., expenses vs budget 120%
-            expense_ratio = num("expense_ratio", 100.0)  # percent
-            if expense_ratio >= threshold_pct:
-                return NotificationAlert(
-                    rule_type=rt,
-                    severity=severity,
-                    title="Gastos por encima del presupuesto",
-                    message=f"Los gastos alcanzaron {expense_ratio:.0f}% del presupuesto.",
-                    metadata={"expense_ratio_pct": expense_ratio, "threshold_pct": threshold_pct},
-                    score=min(1.0, (expense_ratio - threshold_pct + 1.0) / max(1.0, threshold_pct)),
-                    source=AlertSource.STATIC_RULE,
-                )
-            return None
-
-        return None
+        return _evaluate_static_rule(rule, features)
 
     def _combine_with_ml(self, static_alerts: list[NotificationAlert], predictions: list[dict[str, object]]) -> list[NotificationAlert]:
         """Turn ML predictions into alerts and combine with static alerts."""
@@ -432,12 +277,9 @@ class NotificationRuleEngine:
 
     def _dedupe_alerts(self, alerts: list[NotificationAlert]) -> list[NotificationAlert]:
         """Deduplicate alerts by rule_type, prefer higher severity/score, merge metadata."""
-        def sev_rank(s: str) -> int:
-            return {"info": 0, "success": 1, "warning": 2, "error": 3}.get(s, 1)
-
         best: dict[str, NotificationAlert] = {}
         for a in alerts:
-            key = a.rule_type.value
+            key = self._rule_type_value(cast(object, a.rule_type))
             if key not in best:
                 best[key] = a
                 continue
@@ -463,7 +305,7 @@ class NotificationRuleEngine:
         """
         inserted = 0
         for a in alerts:
-            dedupe_key = self._cache_key(tenant_id, f"notif:{a.rule_type.value}:{a.severity}")
+            dedupe_key = self._cache_key(tenant_id, f"notif:{self._rule_type_value(cast(object, a.rule_type))}:{a.severity}")
             if self.cache.get("notifications", dedupe_key):
                 # Recently sent similar notification
                 continue
@@ -481,7 +323,7 @@ class NotificationRuleEngine:
                 try:
                     legacy_row: dict[str, object] = {
                         "business_id": tenant_id,
-                        "type": a.rule_type.value,
+                        "type": self._rule_type_value(cast(object, a.rule_type)),
                         "data": {
                             "title": a.title,
                             "message": a.message,
