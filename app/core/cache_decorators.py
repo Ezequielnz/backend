@@ -13,6 +13,30 @@ logger = logging.getLogger(__name__)
 P = ParamSpec("P")
 R = TypeVar("R", covariant=True)
 
+def _is_bound_celery_task(args: tuple[object, ...]) -> bool:
+    """Detecta si la función decorada es una tarea de Celery con bind=True (self como primer arg)."""
+    if not args:
+        return False
+    first = args[0]
+    # Heurística liviana: las tareas de Celery tienen atributos 'request' y 'name'
+    return hasattr(first, "request") and hasattr(first, "name")
+
+def _extract_param(
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+    name: str,
+    pos_unbound: int = 0,
+    pos_bound: int = 1,
+) -> object:
+    """Obtiene un parámetro por nombre o posición, considerando si la función está ligada (Celery bind=True)."""
+    if name in kwargs:
+        return kwargs[name]
+    if args:
+        index = pos_bound if _is_bound_celery_task(args) else pos_unbound
+        if len(args) > index:
+            return args[index]
+    return "unknown"
+
 class CacheableFunction(Protocol[P, R]):
     """Protocol para funciones con soporte de caché e invalidación"""
     def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R: ...
@@ -87,7 +111,7 @@ def cached(
 def cache_ml_features(ttl: int = 3600) -> Callable[[Callable[P, R]], CacheableFunction[P, R]]:
     """Decorador específico para features ML"""
     def key_func(*args: object, **kwargs: object) -> str:
-        business_id = kwargs.get('business_id') or (args[0] if args else 'unknown')
+        business_id = _extract_param(args, kwargs, 'business_id', 0, 1)
         return f"features_{business_id}"
     
     return cached('ml_features', ttl, key_func)
@@ -95,8 +119,8 @@ def cache_ml_features(ttl: int = 3600) -> Callable[[Callable[P, R]], CacheableFu
 def cache_ml_predictions(ttl: int = 1800) -> Callable[[Callable[P, R]], CacheableFunction[P, R]]:  # 30 minutos
     """Decorador específico para predicciones ML"""
     def key_func(*args: object, **kwargs: object) -> str:
-        business_id = kwargs.get('business_id') or (args[0] if args else 'unknown')
-        prediction_type = kwargs.get('prediction_type') or (args[1] if len(args) > 1 else 'default')
+        business_id = _extract_param(args, kwargs, 'business_id', 0, 1)
+        prediction_type = _extract_param(args, kwargs, 'prediction_type', 1, 2) or 'default'
         return f"prediction_{business_id}_{prediction_type}"
     
     return cached('ml_predictions', ttl, key_func)
@@ -104,7 +128,7 @@ def cache_ml_predictions(ttl: int = 1800) -> Callable[[Callable[P, R]], Cacheabl
 def cache_notification_rules(ttl: int = 600) -> Callable[[Callable[P, R]], CacheableFunction[P, R]]:  # 10 minutos
     """Decorador específico para reglas de notificación"""
     def key_func(*args: object, **kwargs: object) -> str:
-        business_id = kwargs.get('business_id') or (args[0] if args else 'unknown')
+        business_id = _extract_param(args, kwargs, 'business_id', 0, 1)
         return f"rules_{business_id}"
     
     return cached('notification_rules', ttl, key_func)
@@ -112,7 +136,7 @@ def cache_notification_rules(ttl: int = 600) -> Callable[[Callable[P, R]], Cache
 def cache_business_config(ttl: int = 1800) -> Callable[[Callable[P, R]], CacheableFunction[P, R]]:  # 30 minutos
     """Decorador específico para configuración de negocio"""
     def key_func(*args: object, **kwargs: object) -> str:
-        business_id = kwargs.get('business_id') or (args[0] if args else 'unknown')
+        business_id = _extract_param(args, kwargs, 'business_id', 0, 1)
         return f"config_{business_id}"
     
     return cached('business_config', ttl, key_func)
@@ -139,12 +163,36 @@ def invalidate_on_update(
                 cache_manager.delete(cache_namespace, cache_key)
                 logger.info(f"Cache invalidated after update: {cache_namespace}:{cache_key}")
             else:
-                # Usar business_id por defecto
-                business_id = kwargs.get('business_id') or (args[0] if args else None)
-                if business_id:
-                    cache_key = str(business_id)
-                    cache_manager.delete(cache_namespace, cache_key)
-                    logger.info(f"Cache invalidated after update: {cache_namespace}:{cache_key}")
+                # Invalidación por defecto basada en namespace
+                business_id = _extract_param(args, kwargs, 'business_id', 0, 1)
+                if business_id and business_id != "unknown":
+                    bid = str(business_id)
+                    if cache_namespace == 'ml_features':
+                        cache_key = f"features_{bid}"
+                        cache_manager.delete(cache_namespace, cache_key)
+                        logger.info(f"Cache invalidated after update: {cache_namespace}:{cache_key}")
+                    elif cache_namespace == 'ml_predictions':
+                        prediction_type = _extract_param(args, kwargs, 'prediction_type', 1, 2)
+                        if prediction_type and prediction_type != "unknown":
+                            cache_key = f"prediction_{bid}_{prediction_type}"
+                            cache_manager.delete(cache_namespace, cache_key)
+                            logger.info(f"Cache invalidated after update: {cache_namespace}:{cache_key}")
+                        else:
+                            # Invalidar todas las predicciones para el negocio si no se especifica tipo
+                            cache_manager.invalidate_pattern(f"{cache_namespace}:prediction_{bid}_")
+                            logger.info(f"Cache invalidated after update (pattern): {cache_namespace}:prediction_{bid}_*")
+                    elif cache_namespace == 'notification_rules':
+                        cache_key = f"rules_{bid}"
+                        cache_manager.delete(cache_namespace, cache_key)
+                        logger.info(f"Cache invalidated after update: {cache_namespace}:{cache_key}")
+                    elif cache_namespace == 'business_config':
+                        cache_key = f"config_{bid}"
+                        cache_manager.delete(cache_namespace, cache_key)
+                        logger.info(f"Cache invalidated after update: {cache_namespace}:{cache_key}")
+                    else:
+                        # Fallback: invalidar por business_id simple
+                        cache_manager.delete(cache_namespace, bid)
+                        logger.info(f"Cache invalidated after update: {cache_namespace}:{bid}")
             
             return result
         

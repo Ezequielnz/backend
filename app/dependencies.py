@@ -91,7 +91,9 @@ async def verify_permission_logic(request: Request, business_id: str, required_p
                 "puede_editar_facturacion": "editar facturación",
                 "puede_ver_tareas": "ver tareas",
                 "puede_asignar_tareas": "asignar tareas",
-                "puede_editar_tareas": "editar tareas"
+                "puede_editar_tareas": "editar tareas",
+                "puede_ver_configuracion": "ver configuración",
+                "puede_editar_configuracion": "editar configuración"
             }
             
             message = permission_messages.get(required_permission, f"usar {required_permission}")
@@ -135,7 +137,13 @@ async def verify_resource_permission_logic(request: Request, business_id: str, r
             ("facturacion", "editar"): "puede_editar_facturacion",
             ("tareas", "ver"): "puede_ver_tareas",
             ("tareas", "asignar"): "puede_asignar_tareas",
-            ("tareas", "editar"): "puede_editar_tareas"
+            ("tareas", "editar"): "puede_editar_tareas",
+            # Configuración/Notificaciones (para configurar reglas y preferencias)
+            ("configuracion", "ver"): "puede_ver_configuracion",
+            ("configuracion", "editar"): "puede_editar_configuracion",
+            # Alias opcional por si alguna ruta usa "notifications"
+            ("notifications", "ver"): "puede_ver_configuracion",
+            ("notifications", "editar"): "puede_editar_configuracion"
         }
         
         permission_name = permission_mapping.get((recurso, accion))

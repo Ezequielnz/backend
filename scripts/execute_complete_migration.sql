@@ -20,6 +20,18 @@ BEGIN
     END IF;
 END $$;
 
+-- Asegurar tabla de log de migración antes del primer uso
+DO $$
+BEGIN
+    CREATE TABLE IF NOT EXISTS migration_log (
+        id SERIAL PRIMARY KEY,
+        migration_name VARCHAR(255) NOT NULL,
+        executed_at TIMESTAMP DEFAULT NOW(),
+        status VARCHAR(50) DEFAULT 'completed',
+        notes TEXT
+    );
+END $$;
+
 -- Log del snapshot
 INSERT INTO migration_log (migration_name, status, notes) 
 VALUES (
@@ -31,7 +43,7 @@ VALUES (
     )
 );
 
-RAISE NOTICE 'PASO 0 COMPLETADO: Snapshots de seguridad creados';
+SELECT 'PASO 0 COMPLETADO: Snapshots de seguridad creados' AS notice;
 
 -- PASO 1: DESHABILITAR TRIGGERS HEREDADOS
 -- =====================================================
@@ -77,9 +89,25 @@ VALUES (
     'Deshabilitados triggers automáticos de notificaciones. Control transferido a FastAPI.'
 );
 
-RAISE NOTICE 'PASO 1 COMPLETADO: Triggers deshabilitados exitosamente';
+SELECT 'PASO 1 COMPLETADO: Triggers deshabilitados exitosamente' AS notice;
 
--- PASO 2: CREAR ESQUEMA DE NOTIFICACIONES Y ML
+-- PASO 2: PRE-PATCH DE ESQUEMA (ALINEACIÓN)
+-- =====================================================
+-- Asegura columnas/tablas requeridas por el backend antes de crear el esquema completo
+
+\i premigration_patch_notifications_ml.sql
+
+SELECT 'PASO 2 COMPLETADO: Pre-parche aplicado' AS notice;
+
+-- PASO 2B: PERMISOS DE CONFIGURACIÓN (ALINEACIÓN)
+-- =====================================================
+-- Agrega columnas booleanas en permisos_usuario_negocio para Configuración
+
+\i add_config_permissions_columns.sql
+
+SELECT 'PASO 2B COMPLETADO: Permisos de configuración agregados' AS notice;
+
+-- PASO 3: CREAR ESQUEMA DE NOTIFICACIONES Y ML
 -- =====================================================
 
 -- Extensiones necesarias
@@ -89,15 +117,15 @@ CREATE EXTENSION IF NOT EXISTS "pg_trgm";
 -- Crear todas las tablas del nuevo esquema
 \i create_notifications_ml_schema.sql
 
-RAISE NOTICE 'PASO 2 COMPLETADO: Esquema de notificaciones y ML creado';
+SELECT 'PASO 3 COMPLETADO: Esquema de notificaciones y ML creado' AS notice;
 
 -- PASO 3: POBLAR TEMPLATES INICIALES
 -- =====================================================
 
--- Poblar templates de mensajes y reglas por rubro
-\i populate_notification_templates.sql
+-- Poblar templates de mensajes y reglas por rubro (idempotente)
+\i seed_notifications_ml_templates.sql
 
-RAISE NOTICE 'PASO 3 COMPLETADO: Templates poblados exitosamente';
+SELECT 'PASO 3 COMPLETADO: Templates poblados exitosamente' AS notice;
 
 -- PASO 4: MIGRAR DATOS EXISTENTES
 -- =====================================================
@@ -177,7 +205,7 @@ VALUES (
     )
 );
 
-RAISE NOTICE 'PASO 4 COMPLETADO: Datos migrados exitosamente';
+SELECT 'PASO 4 COMPLETADO: Datos migrados exitosamente' AS notice;
 
 -- PASO 5: VALIDACIÓN FINAL COMPLETA
 -- =====================================================

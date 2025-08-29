@@ -5,7 +5,7 @@ from app.celery_app import celery_app
 from datetime import datetime, timezone
 from supabase.client import create_client
 from app.core.config import settings
-from app.core.cache_decorators import cache_notification_rules, invalidate_on_update
+from app.core.cache_decorators import invalidate_on_update
 import logging
 
 logger = logging.getLogger(__name__)
@@ -19,12 +19,12 @@ def send_daily_notifications(self):
         supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
         
         # Obtener negocios activos
-        businesses = supabase.table("businesses").select("id, name").eq("active", True).execute()
+        businesses = supabase.table("negocios").select("id, nombre").execute()
         
         notifications_sent = 0
         for business in businesses.data:
             # Aquí iría la lógica de notificaciones diarias
-            logger.info(f"Procesando notificaciones diarias para negocio: {business['name']}")
+            logger.info(f"Procesando notificaciones diarias para negocio: {business['nombre']}")
             notifications_sent += 1
         
         return {
@@ -39,7 +39,6 @@ def send_daily_notifications(self):
         raise self.retry(exc=e, countdown=60, max_retries=3)
 
 @celery_app.task(bind=True)
-@cache_notification_rules(ttl=600)
 def check_notification_rules(self):
     """
     Verifica reglas de notificación cada 5 minutos
@@ -48,7 +47,7 @@ def check_notification_rules(self):
         supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
         
         # Obtener reglas activas
-        rules = supabase.table("business_notification_config").select("*").eq("enabled", True).execute()
+        rules = supabase.table("business_notification_config").select("*").eq("is_active", True).execute()
         
         rules_processed = 0
         for rule in rules.data:
@@ -77,10 +76,11 @@ def send_notification(self, business_id: str, notification_type: str, data: dict
         
         # Crear registro de notificación
         notification = {
-            "business_id": business_id,
-            "type": notification_type,
-            "data": data,
-            "status": "sent",
+            "tenant_id": business_id,
+            "title": data.get("title") or f"Notificación: {notification_type}",
+            "message": data.get("message") or str(data),
+            "metadata": data,
+            "severity": data.get("severity", "info"),
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         

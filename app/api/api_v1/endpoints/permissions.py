@@ -77,7 +77,9 @@ async def get_user_permissions(
             "puede_editar_facturacion": True,
             "puede_ver_tareas": True,
             "puede_asignar_tareas": True,
-            "puede_editar_tareas": True
+            "puede_editar_tareas": True,
+            "puede_ver_configuracion": True,
+            "puede_editar_configuracion": True
         }
         
         if has_full_access:
@@ -102,7 +104,7 @@ async def get_user_permissions(
                 else:
                     # Mapear permisos específicos
                     permissions = {
-                        key: permisos.get(key, False) 
+                        key: bool(permisos.get(key, False)) 
                         for key in all_permissions.keys()
                     }
 

@@ -1,7 +1,7 @@
 """
 Worker para tareas de mantenimiento del sistema
 """
-from celery import current_app as celery_app
+from app.celery_app import celery_app
 from supabase.client import create_client
 from app.core.config import settings
 import logging
@@ -60,7 +60,7 @@ def health_check(self):
         supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
         
         # Test conexión a Supabase
-        result = supabase.table("tenant_settings").select("id").limit(1).execute()
+        result = supabase.table("tenant_settings").select("tenant_id").limit(1).execute()
         
         return {
             "status": "healthy",

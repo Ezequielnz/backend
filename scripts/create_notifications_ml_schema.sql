@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS business_notification_config (
     rubro VARCHAR(50) NOT NULL DEFAULT 'general',
     template_version VARCHAR(20) NOT NULL DEFAULT 'latest',
     custom_overrides JSONB DEFAULT '{}'::jsonb,
+    strategy_config JSONB DEFAULT '{}'::jsonb,
     is_active BOOLEAN DEFAULT true,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -42,6 +43,7 @@ CREATE TABLE IF NOT EXISTS notification_rule_templates (
     condition_config JSONB NOT NULL,
     default_parameters JSONB NOT NULL,
     description TEXT,
+    priority VARCHAR(20) DEFAULT 'medium',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     
     -- Constraints
@@ -226,6 +228,7 @@ ALTER TABLE ml_predictions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE notification_audit_log ENABLE ROW LEVEL SECURITY;
 
 -- Políticas para business_notification_config
+DROP POLICY IF EXISTS "Users can view their business notification config" ON business_notification_config;
 CREATE POLICY "Users can view their business notification config" ON business_notification_config
     FOR SELECT USING (
         tenant_id IN (
@@ -234,6 +237,7 @@ CREATE POLICY "Users can view their business notification config" ON business_no
         )
     );
 
+DROP POLICY IF EXISTS "Business admins can manage notification config" ON business_notification_config;
 CREATE POLICY "Business admins can manage notification config" ON business_notification_config
     FOR ALL USING (
         tenant_id IN (
@@ -246,6 +250,7 @@ CREATE POLICY "Business admins can manage notification config" ON business_notif
     );
 
 -- Políticas para notifications
+DROP POLICY IF EXISTS "Users can view their business notifications" ON notifications;
 CREATE POLICY "Users can view their business notifications" ON notifications
     FOR SELECT USING (
         tenant_id IN (
@@ -255,6 +260,7 @@ CREATE POLICY "Users can view their business notifications" ON notifications
     );
 
 -- Políticas para ML tables (solo admins)
+DROP POLICY IF EXISTS "Business admins can view ML data" ON ml_features;
 CREATE POLICY "Business admins can view ML data" ON ml_features
     FOR SELECT USING (
         tenant_id IN (
@@ -266,6 +272,7 @@ CREATE POLICY "Business admins can view ML data" ON ml_features
         )
     );
 
+DROP POLICY IF EXISTS "Business admins can view ML models" ON ml_models;
 CREATE POLICY "Business admins can view ML models" ON ml_models
     FOR SELECT USING (
         tenant_id IN (
@@ -277,6 +284,7 @@ CREATE POLICY "Business admins can view ML models" ON ml_models
         )
     );
 
+DROP POLICY IF EXISTS "Business admins can view ML predictions" ON ml_predictions;
 CREATE POLICY "Business admins can view ML predictions" ON ml_predictions
     FOR SELECT USING (
         tenant_id IN (
@@ -289,9 +297,11 @@ CREATE POLICY "Business admins can view ML predictions" ON ml_predictions
     );
 
 -- Política pública para templates (solo lectura)
+DROP POLICY IF EXISTS "Anyone can view notification templates" ON notification_templates;
 CREATE POLICY "Anyone can view notification templates" ON notification_templates
     FOR SELECT USING (true);
 
+DROP POLICY IF EXISTS "Anyone can view notification rule templates" ON notification_rule_templates;
 CREATE POLICY "Anyone can view notification rule templates" ON notification_rule_templates
     FOR SELECT USING (true);
 
@@ -320,7 +330,7 @@ VALUES (
     'Creado esquema completo de notificaciones y ML con RLS y índices optimizados'
 );
 
-RAISE NOTICE 'Esquema de notificaciones y ML creado exitosamente';
+SELECT 'Esquema de notificaciones y ML creado exitosamente' AS notice;
 
 -- COMENTARIOS IMPORTANTES:
 -- ========================

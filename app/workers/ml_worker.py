@@ -20,12 +20,12 @@ def retrain_all_models(self):
         supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
         
         # Obtener negocios activos
-        businesses = supabase.table("businesses").select("id, name").eq("active", True).execute()
+        businesses = supabase.table("negocios").select("id, nombre").execute()
         
         models_retrained = 0
         for business in businesses.data:
             # Aquí iría la lógica de re-entrenamiento
-            logger.info(f"Re-entrenando modelos para negocio: {business['name']}")
+            logger.info(f"Re-entrenando modelos para negocio: {business['nombre']}")
             models_retrained += 1
         
         return {
@@ -49,24 +49,31 @@ def update_business_features(self):
         supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
         
         # Obtener negocios activos
-        businesses = supabase.table("businesses").select("id, name").eq("active", True).execute()
+        businesses = supabase.table("negocios").select("id, nombre").execute()
         
         features_updated = 0
         for business in businesses.data:
             # Simular actualización de features
-            features = {
-                "business_id": business["id"],
-                "sales_trend": np.random.random(),
-                "inventory_level": np.random.random(),
-                "customer_activity": np.random.random(),
-                "updated_at": datetime.now(timezone.utc).isoformat()
+            features_row = {
+                "tenant_id": business["id"],
+                "feature_date": datetime.now(timezone.utc).date().isoformat(),
+                "feature_type": "business_context",
+                "features": {
+                    "sales_trend": np.random.random(),
+                    "inventory_level": np.random.random(),
+                    "customer_activity": np.random.random()
+                },
+                "metadata": {"source": "scheduled_update"}
             }
             
             # Guardar features en BD
-            supabase.table("ml_features").upsert(features).execute()
+            supabase.table("ml_features").upsert(
+                features_row,
+                on_conflict="tenant_id,feature_date,feature_type"
+            ).execute()
             features_updated += 1
             
-            logger.info(f"Features actualizadas para negocio: {business['name']}")
+            logger.info(f"Features actualizadas para negocio: {business['nombre']}")
         
         return {
             "task": "update_business_features",
@@ -96,17 +103,30 @@ def generate_predictions(self, business_id: str, prediction_type: str):
         prediction_value = np.random.uniform(1000, 5000)
         confidence = np.random.uniform(0.7, 0.95)
         
-        # Guardar predicción
-        prediction = {
-            "business_id": business_id,
-            "type": prediction_type,
-            "value": prediction_value,
-            "confidence": confidence,
-            "model_version": "1.0",
-            "created_at": datetime.now(timezone.utc).isoformat()
-        }
+        prediction_date = datetime.now(timezone.utc).date().isoformat()
         
-        result = supabase.table("ml_predictions").insert(prediction).execute()
+        # Reemplaza el insert directo por lógica compatible con el esquema
+        existing = supabase.table("ml_predictions").select("id").eq("tenant_id", business_id).eq("prediction_type", prediction_type).eq("prediction_date", prediction_date).limit(1).execute()
+        model = supabase.table("ml_models").select("id").eq("tenant_id", business_id).eq("is_active", True).limit(1).execute()
+        if existing.data:
+            supabase.table("ml_predictions").update(
+                {"predicted_values": {"value": prediction_value}, "confidence_score": confidence}
+            ).eq("id", existing.data[0]["id"]).execute()
+            prediction_id = existing.data[0]["id"]
+        elif model.data:
+            row = {
+                "tenant_id": business_id,
+                "model_id": model.data[0]["id"],
+                "prediction_date": prediction_date,
+                "prediction_type": prediction_type,
+                "predicted_values": {"value": prediction_value},
+                "confidence_score": confidence
+            }
+            result = supabase.table("ml_predictions").insert(row).execute()
+            prediction_id = result.data[0]["id"] if result.data else None
+        else:
+            logger.warning(f"No active ML model found for tenant {business_id}; skipping DB insert")
+            prediction_id = None
         
         logger.info(f"Predicción generada: {prediction_type} para negocio {business_id}")
         
@@ -114,7 +134,7 @@ def generate_predictions(self, business_id: str, prediction_type: str):
             "task": "generate_predictions",
             "business_id": business_id,
             "prediction_type": prediction_type,
-            "prediction_id": result.data[0]["id"] if result.data else None,
+            "prediction_id": prediction_id,
             "value": prediction_value,
             "confidence": confidence,
             "timestamp": datetime.now(timezone.utc).isoformat()
@@ -134,7 +154,7 @@ def analyze_business_trends(self, business_id: str):
         supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
         
         # Obtener datos del negocio
-        business = supabase.table("businesses").select("*").eq("id", business_id).single().execute()
+        business = supabase.table("negocios").select("*").eq("id", business_id).single().execute()
         
         if not business.data:
             raise ValueError(f"Negocio {business_id} no encontrado")
@@ -147,12 +167,12 @@ def analyze_business_trends(self, business_id: str):
             "profit_margin": np.random.uniform(0.1, 0.4)
         }
         
-        logger.info(f"Análisis de tendencias completado para negocio: {business.data['name']}")
+        logger.info(f"Análisis de tendencias completado para negocio: {business.data['nombre']}")
         
         return {
             "task": "analyze_business_trends",
             "business_id": business_id,
-            "business_name": business.data["name"],
+            "business_name": business.data["nombre"],
             "trends": trends,
             "timestamp": datetime.now(timezone.utc).isoformat()
         }

@@ -1,4 +1,4 @@
-@echo off
+    @echo off
 echo === Iniciando Celery Workers ===
 
 REM Verificar si Redis está corriendo
@@ -12,7 +12,7 @@ if errorlevel 1 (
 
 REM Iniciar Celery Worker en una nueva ventana
 echo Iniciando Celery Worker...
-start "Celery Worker" cmd /k "python -m celery -A app.celery_app worker --loglevel=info --concurrency=2"
+start "Celery Worker" cmd /k "python -m celery -A app.celery_app worker --loglevel=info --concurrency=2 -Q notifications,ml_processing,celery"
 
 REM Esperar un poco
 timeout /t 2 >nul
