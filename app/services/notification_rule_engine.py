@@ -8,7 +8,7 @@ Hybrid Notification Rule Engine
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import cast, TypeVar, Callable, Protocol
+from typing import cast, TypeVar, Callable
 from collections.abc import Awaitable
 import logging
 from supabase.client import Client
@@ -18,7 +18,7 @@ from app.services.notification_service import (
     NotificationRule,
     NotificationRuleType,
 )
-from app.db.supabase_client import get_supabase_service_client
+from app.db.supabase_client import get_supabase_service_client, TableQueryProto
 from app.core.cache_manager import cache_manager, CacheManager
 from app.services.notifications.schemas import NotificationAlert, AlertSource
 from app.services.notifications.rules.registry import evaluate_rule as _evaluate_static_rule
@@ -43,10 +43,10 @@ class NotificationRuleEngine:
         self.cache: CacheManager = cache_manager
         self.logger: logging.Logger = logging.getLogger(__name__)
     
-    def _table(self, name: str) -> _SyncTable:
-        """Return a sync table builder typed as _SyncTable, avoiding unknown member type warnings."""
+    def _table(self, name: str) -> TableQueryProto:
+        """Return a sync table builder typed as TableQueryProto, avoiding unknown member type warnings."""
         table_fn = cast(Callable[[str], object], getattr(self.supabase, "table"))
-        return cast(_SyncTable, table_fn(name))
+        return cast(TableQueryProto, table_fn(name))
     
     def _run_coro(self, coro: Awaitable[T]) -> T:
         """Run an async coroutine in a safe way from sync context (Celery)."""
@@ -215,22 +215,37 @@ class NotificationRuleEngine:
         if not rules:
             return []
 
+        self.logger.debug(f"evaluate:start tenant_id={tenant_id} rules={len(rules)}")
         feat = features or self.get_latest_features(tenant_id)
         preds = predictions or self.get_recent_predictions(tenant_id)
+        try:
+            feat_keys = list(feat.keys())
+        except Exception:
+            feat_keys = []
+        self.logger.debug(
+            f"evaluate:context tenant_id={tenant_id} feature_keys={feat_keys[:10]} features_count={len(feat_keys)} predictions_count={len(preds)}"
+        )
 
         static_alerts: list[NotificationAlert] = []
         for rule in rules:
             if not rule.is_active:
                 continue
             try:
+                self.logger.debug(f"evaluate:rule_start tenant_id={tenant_id} type={self._rule_type_value(rule.rule_type)}")
                 ra = self._evaluate_rule(rule, feat)
                 if ra:
+                    self.logger.debug(
+                        f"evaluate:rule_alert tenant_id={tenant_id} type={self._rule_type_value(rule.rule_type)} severity={ra.severity} score={ra.score}"
+                    )
                     static_alerts.append(ra)
             except Exception as e:
                 self.logger.error(f"Error evaluating rule {rule.rule_type} for {tenant_id}: {e}")
 
         combined = self._combine_with_ml(static_alerts, preds)
         deduped = self._dedupe_alerts(combined)
+        self.logger.debug(
+            f"evaluate:end tenant_id={tenant_id} static={len(static_alerts)} combined_total={len(combined)} deduped={len(deduped)}"
+        )
         return deduped
 
     def _evaluate_rule(self, rule: NotificationRule, features: dict[str, object]) -> NotificationAlert | None:
@@ -303,11 +318,13 @@ class NotificationRuleEngine:
         Write alerts into notifications table, with lightweight cache-based dedupe to avoid spam.
         Returns number of notifications inserted.
         """
+        self.logger.info(f"persist:start tenant_id={tenant_id} alerts={len(alerts)}")
         inserted = 0
         for a in alerts:
             dedupe_key = self._cache_key(tenant_id, f"notif:{self._rule_type_value(cast(object, a.rule_type))}:{a.severity}")
             if self.cache.get("notifications", dedupe_key):
                 # Recently sent similar notification
+                self.logger.debug(f"persist:dedupe_skip tenant_id={tenant_id} key={dedupe_key}")
                 continue
 
             row = a.to_db_row(tenant_id)
@@ -318,6 +335,9 @@ class NotificationRuleEngine:
                 inserted += 1
                 # Avoid re-sending same alert for 1 hour
                 self.cache.set("notifications", dedupe_key, True, ttl=3600)
+                self.logger.debug(
+                    f"persist:ok tenant_id={tenant_id} key={dedupe_key} title={a.title!s} severity={a.severity}"
+                )
             except Exception as e:
                 # Fallback to legacy schema: business_id/type/data/status
                 try:
@@ -340,10 +360,14 @@ class NotificationRuleEngine:
                     _ = _resp2
                     inserted += 1
                     self.cache.set("notifications", dedupe_key, True, ttl=3600)
+                    self.logger.debug(
+                        f"persist:ok_legacy tenant_id={tenant_id} key={dedupe_key} title={a.title!s} severity={a.severity}"
+                    )
                 except Exception as e2:
                     self.logger.error(
                         f"Failed to insert notification for {tenant_id}: {e}; legacy insert also failed: {e2}"
                     )
+        self.logger.info(f"persist:end tenant_id={tenant_id} inserted={inserted}")
         return inserted
 
     # Convenience: evaluate and persist in one call
@@ -357,11 +381,4 @@ class NotificationRuleEngine:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
-# Minimal protocol to type Supabase sync table builders we use
-class _SyncTable(Protocol):
-    def select(self, columns: str) -> "_SyncTable": ...
-    def eq(self, column: str, value: object) -> "_SyncTable": ...
-    def order(self, column: str, desc: bool = False) -> "_SyncTable": ...
-    def limit(self, n: int) -> "_SyncTable": ...
-    def insert(self, data: dict[str, object] | list[dict[str, object]], *, count: object | None = None, returning: object | None = None, upsert: bool = False) -> "_SyncTable": ...
-    def execute(self) -> object: ...
+# (Removed local _SyncTable Protocol in favor of shared TableQueryProto.)

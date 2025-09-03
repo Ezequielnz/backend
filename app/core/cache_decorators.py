@@ -62,11 +62,11 @@ def cached(
             if key_func:
                 cache_key = key_func(*args, **kwargs)
             else:
-                # Generar clave automática basada en argumentos
-                key_data = {
+                # Generar clave automática basada en argumentos (tipado explícito)
+                key_data: dict[str, object] = {
                     'func': func.__name__,
-                    'args': args,
-                    'kwargs': kwargs
+                    'args': cast(tuple[object, ...], args),
+                    'kwargs': cast(dict[str, object], dict(kwargs)),
                 }
                 key_str = json.dumps(key_data, sort_keys=True, default=str)
                 cache_key = hashlib.md5(key_str.encode()).hexdigest()
@@ -90,10 +90,10 @@ def cached(
             if key_func:
                 cache_key = key_func(*args, **kwargs)
             else:
-                key_data = {
+                key_data: dict[str, object] = {
                     'func': func.__name__,
-                    'args': args,
-                    'kwargs': kwargs
+                    'args': cast(tuple[object, ...], args),
+                    'kwargs': cast(dict[str, object], dict(kwargs)),
                 }
                 key_str = json.dumps(key_data, sort_keys=True, default=str)
                 cache_key = hashlib.md5(key_str.encode()).hexdigest()
@@ -168,9 +168,9 @@ def invalidate_on_update(
                 if business_id and business_id != "unknown":
                     bid = str(business_id)
                     if cache_namespace == 'ml_features':
-                        cache_key = f"features_{bid}"
-                        cache_manager.delete(cache_namespace, cache_key)
-                        logger.info(f"Cache invalidated after update: {cache_namespace}:{cache_key}")
+                        # Invalidate all feature keys for this tenant (prefix-based)
+                        cache_manager.invalidate_pattern(f"{cache_namespace}:features_{bid}")
+                        logger.info(f"Cache invalidated after update (pattern): {cache_namespace}:features_{bid}*")
                     elif cache_namespace == 'ml_predictions':
                         prediction_type = _extract_param(args, kwargs, 'prediction_type', 1, 2)
                         if prediction_type and prediction_type != "unknown":

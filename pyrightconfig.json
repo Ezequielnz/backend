@@ -1,6 +1,14 @@
 {
     "pythonVersion": "3.12",
     "pythonPlatform": "Windows",
+    "include": [
+        "app"
+    ],
+    "exclude": [
+        "**/tests/**",
+        "**/test_*.py",
+        "scripts/**"
+    ],
     "executionEnvironments": [
         {
             "root": ".",

@@ -3,10 +3,10 @@ from enum import Enum
 from datetime import datetime
 from fastapi import HTTPException
 import logging
-from typing import cast, Protocol
+from typing import cast, Protocol, Callable
 from supabase.client import Client
 
-from app.db.supabase_client import get_supabase_client
+from app.db.supabase_client import get_supabase_client, TableQueryProto
 from app.core.cache_manager import cache_manager, CacheManager
 from app.core.cache_decorators import cache_notification_rules, invalidate_on_update
 from app.services.rubro_strategies import RubroCompositionService, RubroStrategyFactory
@@ -45,9 +45,15 @@ class NotificationRule:
 
 class NotificationConfigService:
     def __init__(self):
+        super().__init__()
         self.supabase: Client = get_supabase_client()
         self.cache_manager: CacheManager = cache_manager
         self.logger: logging.Logger = logging.getLogger(__name__)
+    
+    def _table(self, name: str) -> TableQueryProto:
+        """Typed supabase table builder to reduce 'Unknown' types."""
+        table_fn = cast(Callable[[str], object], getattr(self.supabase, "table"))
+        return cast(TableQueryProto, table_fn(name))
     
     async def initialize_business_notifications(
         self, 
@@ -61,12 +67,18 @@ class NotificationConfigService:
         """
         try:
             # 1. Validar que el negocio existe
-            business_rows = cast(list[dict[str, object]], self.supabase.table("negocios").select("id").eq("id", tenant_id).execute().data or [])
+            table_neg = self._table("negocios")
+            resp_neg = table_neg.select("id").eq("id", tenant_id).execute()
+            neg_data = resp_neg.data
+            business_rows: list[dict[str, object]] = neg_data if neg_data is not None else []
             if not business_rows:
                 raise HTTPException(status_code=404, detail="Negocio no encontrado")
             
             # 2. Verificar si ya tiene configuración
-            existing_rows = cast(list[dict[str, object]], self.supabase.table("business_notification_config").select("*").eq("tenant_id", tenant_id).execute().data or [])
+            table_cfg_q = self._table("business_notification_config")
+            cfg_resp = table_cfg_q.select("*").eq("tenant_id", tenant_id).execute()
+            cfg_data = cfg_resp.data
+            existing_rows: list[dict[str, object]] = cfg_data if cfg_data is not None else []
             if existing_rows:
                 return {
                     "message": "Configuración ya existe",
@@ -76,10 +88,10 @@ class NotificationConfigService:
             
             # 3. Usar estrategia híbrida para obtener configuración inicial
             composition_service: _RubroCompositionProto = cast(_RubroCompositionProto, RubroCompositionService(rubro))
-            initial_config = cast(dict[str, object], composition_service.get_initial_configuration(user_preferences))
+            initial_config = composition_service.get_initial_configuration(user_preferences)
             
             # 4. Crear configuración del negocio
-            config_data = {
+            config_data: dict[str, object] = {
                 "tenant_id": tenant_id,
                 "rubro": rubro,
                 "template_version": "latest",
@@ -92,7 +104,10 @@ class NotificationConfigService:
             }
             
             # 5. Insertar configuración
-            inserted = cast(list[dict[str, object]], self.supabase.table("business_notification_config").insert(config_data).execute().data or [])
+            table_cfg = self._table("business_notification_config")
+            ins_resp = table_cfg.insert(config_data).execute()
+            ins_data = ins_resp.data
+            inserted: list[dict[str, object]] = ins_data if ins_data is not None else []
             if not inserted:
                 raise HTTPException(status_code=500, detail="Error al crear configuración")
             
@@ -127,10 +142,14 @@ class NotificationConfigService:
     async def get_rubro_templates(self, rubro: str, version: str = "latest") -> list[dict[str, object]]:
         """Obtener templates de reglas para un rubro específico"""
         try:
+            builder = self._table("notification_rule_templates")
+            q = builder.select("*").eq("rubro", rubro)
             if version == "latest":
-                rows = cast(list[dict[str, object]], self.supabase.table("notification_rule_templates").select("*").eq("rubro", rubro).eq("is_latest", True).execute().data or [])
+                resp = q.eq("is_latest", True).execute()
             else:
-                rows = cast(list[dict[str, object]], self.supabase.table("notification_rule_templates").select("*").eq("rubro", rubro).eq("version", version).execute().data or [])
+                resp = q.eq("version", version).execute()
+            data = resp.data
+            rows: list[dict[str, object]] = data if data is not None else []
             
             # Si no hay templates específicos para el rubro, usar 'general'
             if not rows and rubro != "general":
@@ -154,10 +173,10 @@ class NotificationConfigService:
                 return
             
             # Crear templates para el rubro basados en las reglas de la estrategia
-            template_data = []
+            template_data: list[dict[str, object]] = []
             
             for rule in rules:
-                template = {
+                template: dict[str, object] = {
                     "rubro": rubro,
                     "rule_type": rule["rule_type"],
                     "condition_config": rule["condition_config"],
@@ -172,7 +191,10 @@ class NotificationConfigService:
             
             # Insertar templates en la BD
             if template_data:
-                inserted_templates = cast(list[dict[str, object]], self.supabase.table("notification_rule_templates").insert(template_data).execute().data or [])
+                table_tpl = self._table("notification_rule_templates")
+                tpl_resp = table_tpl.insert(template_data).execute()
+                tpl_data = tpl_resp.data
+                inserted_templates: list[dict[str, object]] = tpl_data if tpl_data is not None else []
                 
                 if inserted_templates:
                     self.logger.info(f"Created {len(inserted_templates)} templates for rubro '{rubro}'")
@@ -222,7 +244,10 @@ class NotificationConfigService:
     async def get_business_config(self, tenant_id: str) -> dict[str, object] | None:
         """Obtener configuración de notificaciones del negocio"""
         try:
-            rows = cast(list[dict[str, object]], self.supabase.table("business_notification_config").select("*").eq("tenant_id", tenant_id).execute().data or [])
+            table_cfg_q = self._table("business_notification_config")
+            resp = table_cfg_q.select("*").eq("tenant_id", tenant_id).execute()
+            data = resp.data
+            rows: list[dict[str, object]] = data if data is not None else []
             return rows[0] if rows else None
         except Exception as e:
             logger.error(f"Error getting business config for {tenant_id}: {str(e)}")
@@ -240,14 +265,14 @@ class NotificationConfigService:
             condition_config = cast(dict[str, object], template["condition_config"]).copy()
             
             # Aplicar transformaciones específicas del rubro usando la estrategia
-            rubro_params = cast(dict[str, object], composition_service.apply_rubro_transformations(rule_type, base_params))
+            rubro_params = composition_service.apply_rubro_transformations(rule_type, base_params)
             
             # Aplicar overrides personalizados si existen
             if rule_type in overrides:
                 override_data = cast(dict[str, object], overrides[rule_type])
                 
                 # Validar override usando la estrategia del rubro
-                validated_override = cast(dict[str, object], composition_service.validate_rule_override(rule_type, override_data))
+                validated_override = composition_service.validate_rule_override(rule_type, override_data)
                 
                 # Merge parameters con validación
                 if "parameters" in validated_override:
@@ -343,12 +368,9 @@ class NotificationConfigService:
             
             # 2. Validar override usando estrategia del rubro
             composition_service: _RubroCompositionProto = cast(_RubroCompositionProto, RubroCompositionService(cast(str, config["rubro"])))
-            validated_overrides = cast(
-                dict[str, object],
-                composition_service.validate_rule_override(
-                    rule_type.value,
-                    overrides
-                )
+            validated_overrides: dict[str, object] = composition_service.validate_rule_override(
+                rule_type.value,
+                overrides,
             )
             
             # 3. Actualizar overrides
@@ -356,10 +378,13 @@ class NotificationConfigService:
             current_overrides[rule_type.value] = validated_overrides
             
             # 4. Guardar en BD
-            updated_rows = cast(list[dict[str, object]], self.supabase.table("business_notification_config").update({
+            table_cfg = self._table("business_notification_config")
+            upd_resp = table_cfg.update({
                 "custom_overrides": current_overrides,
                 "updated_at": datetime.now().isoformat()
-            }).eq("tenant_id", tenant_id).execute().data or [])
+            }).eq("tenant_id", tenant_id).execute()
+            upd_data = upd_resp.data
+            updated_rows: list[dict[str, object]] = upd_data if upd_data is not None else []
             
             if not updated_rows:
                 raise HTTPException(status_code=500, detail="Error al actualizar regla")
@@ -398,14 +423,15 @@ class NotificationConfigService:
     async def log_config_creation(self, tenant_id: str, rubro: str, config_data: dict[str, object]):
         """Log creación de configuración"""
         try:
-            log_data = {
+            log_data: dict[str, object] = {
                 "tenant_id": tenant_id,
                 "action": "create",
                 "entity_type": "config",
                 "entity_id": config_data["id"],
                 "new_values": {"rubro": rubro, "config": config_data}
             }
-            resp_obj = cast(object, self.supabase.table("notification_audit_log").insert(log_data).execute())
+            table_log = self._table("notification_audit_log")
+            resp_obj = table_log.insert(log_data).execute()
             _ = resp_obj
         except Exception as e:
             logger.error(f"Error logging config creation: {e}")
@@ -413,13 +439,14 @@ class NotificationConfigService:
     async def log_rule_update(self, tenant_id: str, rule_type: str, overrides: dict[str, object]):
         """Log actualización de regla"""
         try:
-            log_data = {
+            log_data: dict[str, object] = {
                 "tenant_id": tenant_id,
                 "action": "update",
                 "entity_type": "rule",
                 "new_values": {"rule_type": rule_type, "overrides": overrides}
             }
-            resp_obj = cast(object, self.supabase.table("notification_audit_log").insert(log_data).execute())
+            table_log = self._table("notification_audit_log")
+            resp_obj = table_log.insert(log_data).execute()
             _ = resp_obj
         except Exception as e:
             logger.error(f"Error logging rule update: {e}")

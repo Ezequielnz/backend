@@ -177,7 +177,7 @@ class CacheManager:
     def _extract_from_identifier(self, namespace: str, identifier: str) -> dict[str, str]:
         """Extrae tenant_id y/o tipos desde el identificador de caché específico por namespace.
         Espera formatos:
-          - ml_features: "features_<tenant_id>"
+          - ml_features: "features_<tenant_id>[_...]"  (acepta sufijos como sales_timeseries_...)
           - ml_predictions: "prediction_<tenant_id>_<prediction_type>"
           - notification_rules: "rules_<tenant_id>"
           - business_config: "config_<tenant_id>"
@@ -185,7 +185,10 @@ class CacheManager:
         """
         try:
             if namespace == "ml_features" and identifier.startswith("features_"):
-                return {"tenant_id": identifier.split("features_", 1)[1]}
+                # Acepta formas 'features_<tenant_id>' o con sufijos adicionales
+                rest = identifier.split("features_", 1)[1]
+                tenant_id = rest.split("_", 1)[0]
+                return {"tenant_id": tenant_id}
             if namespace == "ml_predictions" and identifier.startswith("prediction_"):
                 _, rest = identifier.split("prediction_", 1)
                 parts = rest.split("_", 1)

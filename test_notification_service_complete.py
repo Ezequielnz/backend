@@ -34,7 +34,7 @@ else:
     except Exception:
         pass
 
-class TestNotificationConfigService(NotificationConfigService):
+class ConfigServiceForTest(NotificationConfigService):
     """Lightweight subclass that skips Supabase client creation for local tests."""
     supabase: Client
     cache_manager: CacheManager
@@ -46,14 +46,14 @@ class TestNotificationConfigService(NotificationConfigService):
         self.logger = logging.getLogger(__name__)
 
 
-async def test_notification_service_complete():
+async def _async_test_notification_service_complete():
     """Test completo del servicio de configuración de notificaciones"""
     
     print("🚀 Iniciando test completo del NotificationConfigService")
     print("=" * 60)
     
     # Inicializar servicio (sin requerir variables de entorno de Supabase)
-    service = TestNotificationConfigService()
+    service = ConfigServiceForTest()
     
     # Test data
     test_tenant_id = "test_tenant_123"
@@ -232,6 +232,8 @@ async def test_notification_service_complete():
         import traceback
         traceback.print_exc()
 
+def test_notification_service_complete():
+    asyncio.run(_async_test_notification_service_complete())
 
 if __name__ == "__main__":
-    asyncio.run(test_notification_service_complete())
+    asyncio.run(_async_test_notification_service_complete())

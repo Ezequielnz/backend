@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import cast
 
 
-def as_float(v: Any, default: float) -> float:
+def as_float(v: object, default: float) -> float:
     if isinstance(v, (int, float)):
         return float(v)
     if isinstance(v, str):
@@ -14,9 +14,9 @@ def as_float(v: Any, default: float) -> float:
     return default
 
 
-def listv(features: dict[str, Any], name: str) -> list[Any]:
+def listv(features: dict[str, object], name: str) -> list[object]:
     v = features.get(name)
-    return cast(list[Any], v) if isinstance(v, list) else []
+    return cast(list[object], v) if isinstance(v, list) else []
 
 
 def sev_rank(s: str) -> int:
