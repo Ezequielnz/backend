@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import logging
+import json
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import cast, Callable
+from collections.abc import Mapping
 
 import pandas as pd
 import numpy as np
@@ -17,6 +19,15 @@ from app.db.supabase_client import (
 )
 
 _logger = logging.getLogger(__name__)
+
+
+def _log_ml(level: int, event: str, **fields: object) -> None:
+    """Emit structured JSON logs for ML feature engineering events."""
+    try:
+        payload: dict[str, object] = {"event": event, **fields}
+        _logger.log(level, json.dumps(payload, ensure_ascii=False, default=str))
+    except Exception:
+        _logger.log(level, f"{event} | {fields}")
 
 
 def _to_iso_date_str(x: object) -> str:
@@ -73,12 +84,16 @@ def _as_int(x: object, default: int = 0) -> int:
 # -----------------------------
 # Pandas typing-safe helpers
 # -----------------------------
-def _to_datetime_series(values: object, errors: str = "coerce") -> pd.Series:
+def _to_datetime_series(values: object, errors: str = "coerce", utc: bool | None = True) -> pd.Series:
     """Typed wrapper around pandas.to_datetime returning a Series.
-    Uses getattr to avoid overload signature issues in stubs.
+    Uses getattr to avoid overload signature issues in stubs. Sets utc=True by default
+    to normalize mixed tz-aware/naive inputs and avoid NaT coercion when series contains
+    both. Pass utc=None to inherit pandas default behavior.
     """
     to_dt_any: Callable[..., object] = cast(Callable[..., object], getattr(pd, "to_datetime"))
-    return cast(pd.Series, to_dt_any(values, errors=errors))
+    if utc is None:
+        return cast(pd.Series, to_dt_any(values, errors=errors))
+    return cast(pd.Series, to_dt_any(values, errors=errors, utc=utc))
 
 
 def _to_numeric_series(values: object, errors: str = "coerce") -> pd.Series:
@@ -194,6 +209,13 @@ class FeatureEngineer:
         data_list = cast(list[dict[str, object]] | None, getattr(resp, "data", None))
         rows: list[dict[str, object]] = data_list if data_list is not None else []
         _logger.debug("[FE] ventas rows tenant=%s count=%s", business_id, len(rows))
+        _log_ml(
+            logging.INFO,
+            "fe_get_sales_rows",
+            tenant_id=business_id,
+            rows=len(rows),
+            has_timerange=timerange is not None,
+        )
         return rows
 
     def sales_timeseries_daily(
@@ -225,7 +247,8 @@ class FeatureEngineer:
         df.loc[:, "y"] = y_num_filled
         grp: pd.DataFrame = _groupby_sum(df, "ds", "y")
         # Ensure continuous date index (fill missing days with 0)
-        grp.loc[:, "ds"] = _to_datetime_series(_df_col(grp, "ds"), errors="coerce")
+        # Convert to naive datetime for stable reindexing
+        grp.loc[:, "ds"] = _to_datetime_series(_df_col(grp, "ds"), errors="coerce", utc=None)
         # If all dates are NaT after coercion, return an empty frame (typed-safe boolean)
         if _series_isna_all(_df_col(grp, "ds")):
             return pd.DataFrame({"ds": pd.Series(dtype="object"), "y": pd.Series(dtype="float")})
@@ -233,7 +256,14 @@ class FeatureEngineer:
         full_idx = _date_range(start_dt, end_dt, freq="D")
         grp = _set_index_reindex_rename_reset(grp, "ds", full_idx, "ds", fill_value=0.0)
         # Convert back to date objects for downstream compatibility
-        grp.loc[:, "ds"] = _series_dt_date(_to_datetime_series(_df_col(grp, "ds"), errors="coerce"))
+        grp.loc[:, "ds"] = _series_dt_date(_to_datetime_series(_df_col(grp, "ds"), errors="coerce", utc=None))
+        _log_ml(
+            logging.INFO,
+            "fe_sales_timeseries_built",
+            tenant_id=business_id,
+            days=int(days),
+            rows=int(len(grp)),
+        )
         return grp  # columns: ds (date), y (float)
 
     def persist_sales_features(self, business_id: str, daily_ts: pd.DataFrame) -> int:
@@ -288,12 +318,18 @@ class FeatureEngineer:
             _ = self._table("ml_features").upsert(
                 payloads[i : i + chunk], on_conflict="tenant_id,feature_date,feature_type"
             ).execute()
+        _log_ml(
+            logging.INFO,
+            "fe_sales_features_upsert",
+            tenant_id=business_id,
+            rows=len(payloads),
+        )
         return len(payloads)
 
     # -----------------------------
     # Inventory features
     # -----------------------------
-    def inventory_snapshot(self, business_id: str) -> dict[str, object]:
+    def inventory_snapshot(self, business_id: str) -> Mapping[str, object]:
         """
         Compute simple inventory metrics from `productos`.
         Columns used: id, negocio_id, activo, stock_actual, precio_compra (optional)
@@ -307,12 +343,21 @@ class FeatureEngineer:
         data_list = cast(list[dict[str, object]] | None, getattr(resp, "data", None))
         rows: list[dict[str, object]] = data_list if data_list is not None else []
         if not rows:
-            return {
-                "total_items": 0,
-                "active_items": 0,
-                "total_stock_units": 0,
-                "avg_stock_per_item": 0.0,
+            out: dict[str, object] = {
+                "total_items": int(0),
+                "active_items": int(0),
+                "total_stock_units": int(0),
+                "avg_stock_per_item": float(0.0),
             }
+            _log_ml(
+                logging.INFO,
+                "fe_inventory_snapshot",
+                tenant_id=business_id,
+                total_items=0,
+                active_items=0,
+                total_stock_units=0,
+            )
+            return out
         df: pd.DataFrame = pd.DataFrame(rows)
         # Normalize columns to expected types
         act_series: pd.Series = _df_col(df, "activo")
@@ -343,25 +388,40 @@ class FeatureEngineer:
         total_stock_units = _as_int(sum_stock_any(), 0)
         mean_stock_any: Callable[..., object] = cast(Callable[..., object], getattr(stock_np, "mean"))
         avg_stock_per_item = _as_float(mean_stock_any(), 0.0) if total_items > 0 else 0.0
-        return {
-            "total_items": total_items,
-            "active_items": active_items,
-            "total_stock_units": total_stock_units,
-            "avg_stock_per_item": avg_stock_per_item,
+        result: dict[str, object] = {
+            "total_items": int(total_items),
+            "active_items": int(active_items),
+            "total_stock_units": int(total_stock_units),
+            "avg_stock_per_item": float(avg_stock_per_item),
         }
+        _log_ml(
+            logging.INFO,
+            "fe_inventory_snapshot",
+            tenant_id=business_id,
+            total_items=total_items,
+            active_items=active_items,
+            total_stock_units=total_stock_units,
+        )
+        return result
 
-    def persist_inventory_features(self, business_id: str, snapshot: dict[str, object]) -> None:
+    def persist_inventory_features(self, business_id: str, snapshot: Mapping[str, object]) -> None:
         today = datetime.now(timezone.utc).date().isoformat()
         payload: dict[str, object] = {
             "tenant_id": business_id,
             "feature_date": today,
             "feature_type": "inventory_metrics",
-            "features": snapshot,
+            "features": dict(snapshot),
             "metadata": {"source": "feature_engineer"},
         }
         _ = self._table("ml_features").upsert(
             payload, on_conflict="tenant_id,feature_date,feature_type"
         ).execute()
+        _log_ml(
+            logging.INFO,
+            "fe_inventory_features_upsert",
+            tenant_id=business_id,
+            feature_date=today,
+        )
 
 
 # Lightweight cached accessor for sales time series

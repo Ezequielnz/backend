@@ -21,9 +21,12 @@ prophet==1.1.7
 pandas==2.2.3
 numpy==2.2.6
 joblib==1.5.1
+statsmodels==0.14.3
+# Country holiday calendars for Prophet and AR-specific seasonality handling
+holidays==0.55
 # Async Processing
 celery[redis]==5.5.3
 redis==5.2.1
 APScheduler==3.11.0
 # Monitoring
-flower==2.0.1 
+flower==2.0.1

@@ -1,6 +1,6 @@
 import os
 import json
-from typing import List, Union
+from typing import ClassVar, cast
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -16,30 +16,32 @@ class Settings(BaseSettings):
     
     # CORS configuration
     # Añadir http://localhost:5173 para aceptar peticiones del frontend de Vite
-    BACKEND_CORS_ORIGINS: List[str] = [
+    BACKEND_CORS_ORIGINS: list[str] = [
         "http://localhost:5173",  # Frontend Vite
         "http://localhost:3000",  # Frontend alternativo (por si se usa otro puerto)
         "http://localhost:8080",  # Frontend alternativo (por si se usa otro puerto)
     ]
 
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")
-    def assemble_cors_origins(cls, v: Union[str, List[str]]) -> List[str]:
+    def assemble_cors_origins(cls, v: object) -> list[str]:
         if isinstance(v, str):
             s = v.strip()
             if not s:
                 return []
             if s.startswith("[") and s.endswith("]"):
                 try:
-                    data = json.loads(s)
-                    if isinstance(data, list):
-                        return [str(i).strip() for i in data]
+                    parsed_obj: object = cast(object, json.loads(s))
+                    if isinstance(parsed_obj, list):
+                        data_list: list[object] = cast(list[object], parsed_obj)
+                        return [str(i).strip() for i in data_list]
                 except Exception:
                     # Fallback to comma-separated parsing
                     return [i.strip() for i in s.strip("[]").split(",") if i.strip()]
             return [i.strip() for i in s.split(",") if i.strip()]
         elif isinstance(v, list):
-            return [str(i).strip() for i in v]
-        raise ValueError(v)
+            v_list: list[object] = cast(list[object], v)
+            return [str(i).strip() for i in v_list]
+        raise ValueError(str(v))
 
     # Supabase settings - usar los valores de .env o los predeterminados
     SUPABASE_URL: str = os.getenv("SUPABASE_URL", "https://aupmnxxauxasetwnqkma.supabase.co")
@@ -62,6 +64,20 @@ class Settings(BaseSettings):
     # ML Configuration
     ML_MODEL_PATH: str = os.getenv("ML_MODEL_PATH", "./models/")
     ML_FEATURE_CACHE_TTL: int = int(os.getenv("ML_FEATURE_CACHE_TTL", "3600"))
+    # ML Tuning Flags
+    ML_CV_FOLDS: int = int(os.getenv("ML_CV_FOLDS", "3"))
+    ML_SEASONALITY_MODE: str = os.getenv("ML_SEASONALITY_MODE", "additive")  # additive|multiplicative
+    ML_HOLIDAYS_COUNTRY: str = os.getenv("ML_HOLIDAYS_COUNTRY", "")  # e.g., AR, US; empty to disable
+    ML_LOG_TRANSFORM: bool = os.getenv("ML_LOG_TRANSFORM", "false").lower() == "true"
+    ML_MODEL_CANDIDATES: str = os.getenv("ML_MODEL_CANDIDATES", "prophet")  # comma-separated: prophet,sarimax
+    ML_SELECT_BEST: bool = os.getenv("ML_SELECT_BEST", "false").lower() == "true"
+    ML_CV_PRIMARY_METRIC: str = os.getenv("ML_CV_PRIMARY_METRIC", "mape")  # mape|smape|mae|rmse
+    # SARIMAX options (tuples as comma-separated). Leave seasonal empty to disable seasonal part
+    ML_SARIMAX_ORDER: str = os.getenv("ML_SARIMAX_ORDER", "1,1,1")
+    ML_SARIMAX_SEASONAL: str = os.getenv("ML_SARIMAX_SEASONAL", "")  # e.g., "1,1,1,7"
+    # Anomaly detection options
+    ML_ANOMALY_METHOD: str = os.getenv("ML_ANOMALY_METHOD", "iforest")  # iforest|stl_resid
+    ML_STL_PERIOD: int = int(os.getenv("ML_STL_PERIOD", "7"))
 
     # Notification Configuration
     NOTIFICATION_CACHE_TTL: int = int(os.getenv("NOTIFICATION_CACHE_TTL", "3600"))
@@ -85,7 +101,7 @@ class Settings(BaseSettings):
         # Si no hay contraseña configurada, usar SQLite para desarrollo
         return "sqlite:///./micropymes.db"
     
-    model_config = SettingsConfigDict(
+    model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         # case_sensitive=True,  # default behavior is case-sensitive

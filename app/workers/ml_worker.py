@@ -3,11 +3,12 @@ Worker para procesamiento de Machine Learning
 """
 from app.celery_app import celery_app
 from datetime import datetime, timezone
-from supabase.client import create_client, Client
-from app.core.config import settings
+from supabase.client import Client
+from app.config.ml_settings import ml_settings
 from app.core.cache_decorators import cache_ml_features, cache_ml_predictions, invalidate_on_update
 from app.core.cache_manager import cache_manager
 import logging
+import json
 import time
 import math
 import numpy as np
@@ -28,6 +29,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 F = TypeVar("F", bound=Callable[..., object])
+
+def _log_ml(level: int, event: str, **fields: object) -> None:
+    """Emit structured JSON logs for ML worker events."""
+    try:
+        payload: dict[str, object] = {"event": event, **fields}
+        logger.log(level, json.dumps(payload, ensure_ascii=False, default=str))
+    except Exception:
+        logger.log(level, f"{event} | {fields}")
 
 class _RetryingTask(Protocol):
     def retry(
@@ -140,9 +149,10 @@ def retrain_all_models(self: "Task") -> dict[str, object]:
     Re-entrena todos los modelos ML (lunes 2 AM)
     """
     try:
-        supabase: Client = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
+        from app.db.supabase_client import get_supabase_service_client
+        supabase: Client = get_supabase_service_client()
         t0 = time.perf_counter()
-        logger.info("[ML] Retrain start")
+        _log_ml(logging.INFO, "ml_retrain_start")
         # Obtener negocios activos (usando getattr+cast para evitar Unknowns)
         sb_table = cast(Callable[[str], object], getattr(supabase, "table"))
         req = sb_table("negocios")
@@ -153,11 +163,34 @@ def retrain_all_models(self: "Task") -> dict[str, object]:
         models_retrained = 0
         forecasts_total = 0
         anomalies_total = 0
+        # Optional filtering by ML_TENANT_IDS
+        allowed = ml_settings.allowed_tenants()
         for business in biz_rows:
             bid = cast(str, business["id"])  # id siempre es str en nuestra tabla
+            if allowed and bid not in allowed:
+                continue
             try:
                 tb = time.perf_counter()
-                result = train_and_predict_sales(bid, horizon_days=14, history_days=365)
+                result = train_and_predict_sales(
+                    bid,
+                    horizon_days=ml_settings.ML_HORIZON_DAYS,
+                    history_days=ml_settings.ML_MAX_TRAIN_WINDOW_DAYS,
+                    cv_folds=ml_settings.ML_CV_FOLDS,
+                    # Prophet params
+                    seasonality_mode=ml_settings.ML_SEASONALITY_MODE,
+                    holidays_country=ml_settings.ML_HOLIDAYS_COUNTRY,
+                    log_transform=ml_settings.ML_LOG_TRANSFORM,
+                    # Model selection
+                    model_candidates=ml_settings.ML_MODEL_CANDIDATES,
+                    select_best=ml_settings.ML_SELECT_BEST,
+                    cv_primary_metric=ml_settings.ML_CV_PRIMARY_METRIC,
+                    # SARIMAX
+                    sarimax_order=ml_settings.ML_SARIMAX_ORDER,
+                    sarimax_seasonal=ml_settings.ML_SARIMAX_SEASONAL,
+                    # Anomalies
+                    anomaly_method=ml_settings.ML_ANOMALY_METHOD,
+                    stl_period=ml_settings.ML_STL_PERIOD,
+                )
                 if result.get("trained"):
                     models_retrained += 1
                 forecasts_total += _as_int(result.get("forecasts_inserted", 0), 0)
@@ -167,6 +200,41 @@ def retrain_all_models(self: "Task") -> dict[str, object]:
                     an_dict = cast(dict[str, object], an_raw)
                     inserted_anoms = _as_int(an_dict.get("inserted", 0), 0)
                 anomalies_total += inserted_anoms
+                # Log CV summary metrics if available
+                ms = cast(dict[str, object] | None, result.get("metrics_summary"))
+                if isinstance(ms, dict):
+                    sel = cast(str, ms.get("selected_model", "unknown"))
+                    mape = ms.get("mape")
+                    smape = ms.get("smape")
+                    mae = ms.get("mae")
+                    rmse = ms.get("rmse")
+                    cv = cast(dict[str, object], ms.get("cv", {}))
+                    folds = cv.get("folds")
+                    timing = cast(dict[str, object], ms.get("timing", {}))
+                    ttrain = timing.get("train_time")
+                    tinfer = timing.get("infer_time")
+                    _log_ml(
+                        logging.INFO,
+                        "ml_cv_summary",
+                        tenant_id=bid,
+                        model=sel,
+                        folds=_as_int(folds, 0),
+                        mape=_as_float(mape, float('nan')),
+                        smape=_as_float(smape, float('nan')),
+                        mae=_as_float(mae, float('nan')),
+                        rmse=_as_float(rmse, float('nan')),
+                        train_time=_as_float(ttrain, float('nan')),
+                        infer_time=_as_float(tinfer, float('nan')),
+                    )
+                    _log_ml(
+                        logging.INFO,
+                        "ml_retrain_tenant_done",
+                        tenant_id=bid,
+                        business_name=business['nombre'],
+                        forecasts=result.get('forecasts_inserted'),
+                        accuracy=result.get('accuracy'),
+                        took_seconds=round(time.perf_counter()-tb, 3),
+                    )
                 logger.info(
                     f"ML retrain completed for negocio={business['nombre']} (forecasts={result.get('forecasts_inserted')}, accuracy={result.get('accuracy')}, took={time.perf_counter()-tb:.2f}s)"
                 )
@@ -175,13 +243,14 @@ def retrain_all_models(self: "Task") -> dict[str, object]:
                 continue
 
         elapsed = time.perf_counter() - t0
-        logger.info(
-            "[ML] Retrain end businesses=%s models=%s forecasts=%s anomalies=%s took=%.2fs",
-            len(biz_rows),
-            models_retrained,
-            forecasts_total,
-            anomalies_total,
-            elapsed,
+        _log_ml(
+            logging.INFO,
+            "ml_retrain_end",
+            businesses=len(biz_rows),
+            models=models_retrained,
+            forecasts=forecasts_total,
+            anomalies=anomalies_total,
+            took_seconds=round(elapsed, 3),
         )
         return {
             "task": "retrain_all_models",
@@ -206,7 +275,8 @@ def update_business_features(self: "Task") -> dict[str, object]:
     Actualiza features ML cada hora
     """
     try:
-        supabase: Client = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
+        from app.db.supabase_client import get_supabase_service_client
+        supabase: Client = get_supabase_service_client()
         t0 = time.perf_counter()
         # Obtener negocios activos (usando getattr+cast para evitar Unknowns)
         sb_table = cast(Callable[[str], object], getattr(supabase, "table"))
@@ -217,8 +287,11 @@ def update_business_features(self: "Task") -> dict[str, object]:
 
         fe = FeatureEngineer()
         features_updated = 0
+        allowed = ml_settings.allowed_tenants()
         for business in biz_rows:
             bid = cast(str, business["id"])  # id es str
+            if allowed and bid not in allowed:
+                continue
             try:
                 # Sales metrics (last 30 days)
                 t_bus = time.perf_counter()
@@ -232,14 +305,24 @@ def update_business_features(self: "Task") -> dict[str, object]:
                 features_updated += 1
                 # Invalidate cached feature keys for this tenant (pattern)
                 cache_manager.invalidate_pattern(f"ml_features:features_{bid}")
-                logger.info(
-                    f"Features actualizadas para negocio: {business['nombre']} (took={time.perf_counter()-t_bus:.2f}s)"
+                _log_ml(
+                    logging.INFO,
+                    "ml_features_updated_tenant",
+                    tenant_id=bid,
+                    business_name=business['nombre'],
+                    took_seconds=round(time.perf_counter()-t_bus, 3),
                 )
             except Exception as ie:
                 logger.error(f"Error updating features for tenant={bid}: {ie}")
                 continue
 
-        logger.info("[ML] update_business_features end businesses=%s updated=%s took=%.2fs", len(biz_rows), features_updated, time.perf_counter()-t0)
+        _log_ml(
+            logging.INFO,
+            "ml_update_features_end",
+            businesses=len(biz_rows),
+            updated=features_updated,
+            took_seconds=round(time.perf_counter()-t0, 3),
+        )
         return {
             "task": "update_business_features",
             "businesses_processed": len(biz_rows),
@@ -261,16 +344,39 @@ def generate_predictions(self: "Task", business_id: str, prediction_type: str) -
     Genera predicciones ML para un negocio específico
     """
     try:
-        supabase: Client = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
+        from app.db.supabase_client import get_supabase_service_client
+        supabase: Client = get_supabase_service_client()
         t0 = time.perf_counter()
 
         # Try to use existing active model; if not present, train pipeline once
         store = ModelVersionManager()
         model = store.load_active_model(business_id, model_type="sales_forecasting")
         if model is None:
-            result = train_and_predict_sales(business_id, horizon_days=14, history_days=365)
-            logger.info(
-                f"Predicciones generadas via pipeline inicial tenant={business_id} forecasts={result.get('forecasts_inserted')}"
+            result = train_and_predict_sales(
+                business_id,
+                horizon_days=ml_settings.ML_HORIZON_DAYS,
+                history_days=ml_settings.ML_MAX_TRAIN_WINDOW_DAYS,
+                cv_folds=ml_settings.ML_CV_FOLDS,
+                # Prophet params
+                seasonality_mode=ml_settings.ML_SEASONALITY_MODE,
+                holidays_country=ml_settings.ML_HOLIDAYS_COUNTRY,
+                log_transform=ml_settings.ML_LOG_TRANSFORM,
+                # Model selection
+                model_candidates=ml_settings.ML_MODEL_CANDIDATES,
+                select_best=ml_settings.ML_SELECT_BEST,
+                cv_primary_metric=ml_settings.ML_CV_PRIMARY_METRIC,
+                # SARIMAX
+                sarimax_order=ml_settings.ML_SARIMAX_ORDER,
+                sarimax_seasonal=ml_settings.ML_SARIMAX_SEASONAL,
+                # Anomalies
+                anomaly_method=ml_settings.ML_ANOMALY_METHOD,
+                stl_period=ml_settings.ML_STL_PERIOD,
+            )
+            _log_ml(
+                logging.INFO,
+                "ml_initial_pipeline_predictions",
+                tenant_id=business_id,
+                forecasts=result.get('forecasts_inserted'),
             )
             return {
                 "task": "generate_predictions",
@@ -298,7 +404,11 @@ def generate_predictions(self: "Task", business_id: str, prediction_type: str) -
         model_id = cast(str, mid_rows[0]["id"]) if mid_rows else None
         inserted = 0
         if prediction_type == "sales_forecast":
-            fcst = engine.forecast_sales(cast(Prophet, model), horizon_days=14)
+            # Forecast depending on model type (Prophet vs SARIMAX)
+            if isinstance(model, Prophet):
+                fcst = engine.forecast_sales_prophet(model, horizon_days=14)
+            else:
+                fcst = engine.forecast_sales_sarimax(model, horizon_days=14)
             if model_id is None:
                 logger.warning(f"No active model_id found for tenant={business_id}; skipping forecast upsert")
             else:
@@ -344,9 +454,14 @@ def generate_predictions(self: "Task", business_id: str, prediction_type: str) -
         elif prediction_type == "sales_anomaly":
             ts = fe.sales_timeseries_daily(business_id, days=120)
             if not ts.empty:
-                iso = engine.train_anomaly_detection(ts)
-                # Build a typed view without using Any
-                an0 = cast(object, engine.detect_anomalies(iso, ts))
+                # Choose anomaly method based on settings; allow STL residuals using the loaded model
+                if ml_settings.ML_ANOMALY_METHOD.strip().lower() == "stl_resid":
+                    model_type = "prophet" if isinstance(model, Prophet) else "sarimax"
+                    an_df = engine.detect_anomalies_stl_residuals(model, ts, model_type, period=int(ml_settings.ML_STL_PERIOD))
+                    an0 = cast(object, an_df)
+                else:
+                    iso = engine.train_anomaly_detection(ts)
+                    an0 = cast(object, engine.detect_anomalies(iso, ts))
                 an_sorted = cast(object, getattr(an0, "sort_values")("ds"))
                 an_tail = cast(object, getattr(an_sorted, "iloc")[-30:])
                 if model_id is None:
@@ -384,8 +499,13 @@ def generate_predictions(self: "Task", business_id: str, prediction_type: str) -
                             getattr(up, "execute")()
                         inserted = len(anomaly_payloads)
 
-        logger.info(
-            f"Predicción generada: {prediction_type} para negocio {business_id} (rows={inserted}, took={time.perf_counter()-t0:.2f}s)"
+        _log_ml(
+            logging.INFO,
+            "ml_prediction_generated",
+            tenant_id=business_id,
+            prediction_type=prediction_type,
+            rows=inserted,
+            took_seconds=round(time.perf_counter()-t0, 3),
         )
 
         return {
@@ -410,7 +530,8 @@ def analyze_business_trends(self: "Task", business_id: str) -> dict[str, object]
     Analiza tendencias de negocio
     """
     try:
-        supabase: Client = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
+        from app.db.supabase_client import get_supabase_service_client
+        supabase: Client = get_supabase_service_client()
         t0 = time.perf_counter()
         # Obtener datos del negocio
         sb_table = cast(Callable[[str], object], getattr(supabase, "table"))
@@ -432,8 +553,12 @@ def analyze_business_trends(self: "Task", business_id: str) -> dict[str, object]
             "profit_margin": float(np.random.uniform(0.1, 0.4)),
         }
         
-        logger.info(
-            f"Análisis de tendencias completado para negocio: {business_data['nombre']} (took={time.perf_counter()-t0:.2f}s)"
+        _log_ml(
+            logging.INFO,
+            "ml_trends_done",
+            tenant_id=business_id,
+            business_name=business_data['nombre'],
+            took_seconds=round(time.perf_counter()-t0, 3),
         )
         
         return {
