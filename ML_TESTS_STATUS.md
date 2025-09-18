@@ -86,6 +86,47 @@ Este documento resume los resultados y detalles técnicos de los tests corridos 
 - `tests/ml/test_persist_sales_features.py`
 - `tests/ml/test_tenant_overrides_and_pipeline.py`
 
+## Resultados P0 — 2025-09-15 18:23 -03
+- P0-1 Backtest holdout temporal por tenant: `tests/ml/test_tenant_overrides_and_pipeline.py::test_holdout_stability_across_periods` — PASSED
+  - Detalle: estabilidad de MAPE entre períodos |ΔMAPE| ≤ 0.1 en series semanales sintéticas.
+  - Recomendaciones: no necesarias; el pipeline muestra estabilidad adecuada en este escenario.
+- P0-2 Cobertura de intervalos (80% nominal): `tests/ml/test_interval_coverage_sarimax.py::test_interval_coverage_sarimax_approx_80` — PASSED
+  - Detalle: cobertura empírica dentro de [0.65, 0.90] para 80% nominal en AR(1) sintético.
+  - Recomendaciones: no necesarias; los intervalos de SARIMAX cumplen tolerancias en este escenario.
+- P0-3 Patrón calendario (inicio de mes): `tests/ml/test_calendar_aware.py::test_snaive_month_start_pattern` — PASSED
+  - Detalle: el baseline SNaive con season≈30 anticipa pico de ventas al inicio de mes sobre el baseline.
+  - Recomendaciones: no necesarias para este caso; patrón detectado correctamente por baseline estacional.
+- P0-4 Anti-leakage temporal: `tests/ml/test_leakage_guards.py::test_forward_chaining_splits_no_future` — PASSED
+  - Detalle: splits forward-chaining con `folds=3`, `horizon=7` respetan train_rows esperados y test_rows==horizon.
+  - Recomendaciones: no necesarias; no se detecta leakage en la validación cruzada.
+- P0-5 Detección y reacción a drift: `test_ml_candidates_and_drift.py::test_pipeline_cv_selects_and_triggers_drift` — PASSED
+  - Detalle: al forzar umbral `ML_ERROR_ALERT_MAPE` muy bajo, el pipeline encola notificación `ml_drift_alert` vía `send_notification.delay`.
+  - Recomendaciones: no necesarias; la señal y el encolado de alerta funcionan como se espera.
+
+## Resultados P1 — 2025-09-15 18:52 -03
+- P1-6 Volatilidad súbita (ensanchamiento de PIs): `tests/ml/test_stress_volatility.py::test_intervals_widen_after_tail_volatility` — PASSED
+  - Detalle: mean(width_post) ≥ 1.5 × mean(width_pre) usando baseline Naive (PIs calibrados con std reciente).
+  - Recomendaciones: opcionalmente, replicar verificación en niveles Prophet/SARIMAX para cubrir modelos no-baseline.
+- P1-7 Bloques masivos de faltantes: `tests/ml/test_stress_missing_blocks.py::test_missing_blocks_increase_uncertainty_naive` — PASSED
+  - Detalle: sin crash, salidas válidas, y PI más anchos (≥1.5×) al simular bloque tail con ceros.
+  - Recomendaciones: opcionalmente, probar variante con días realmente ausentes (imputación vía FeatureEngineer/pipeline).
+- P1-8 Overrides por tenant: `tests/ml/test_tenant_overrides_and_pipeline.py::test_pipeline_saves_hyperparams_reflecting_overrides` — PASSED
+  - Detalle: el pipeline persiste `hyperparameters` reflejando overrides (cv_folds, seasonality_mode, holidays_country, cv_primary_metric, model_candidates, baseline_variant).
+  - Recomendaciones: no necesarias.
+
+## Resultados P2 — 2025-09-15 19:08 -03
+- P2-11 Calibración avanzada (PIT + sharpness/reliability): `tests/ml/test_prob_calibration.py` — PASSED
+  - Detalle: PIT mean≈0.5; q10∈[0.05,0.15], q90∈[0.85,0.95]; sharpness aumenta con σ y cobertura en [0.60,0.95].
+  - Recomendaciones: no necesarias.
+- P2-12 Explainability (importancias/SHAP): `tests/ml/test_explainability.py` — SKIPPED (xgboost no instalado)
+  - Recomendaciones: instalar `xgboost` (y opcionalmente `shap`) para habilitar la prueba y validar estabilidad del ranking de features.
+- P2-13 Fairness por cohortes: `tests/ml/test_fairness_cohorts.py` — PASSED
+  - Detalle: brecha de sMAPE entre cohortes ≤ 0.05 en escenarios comparables.
+  - Recomendaciones: extender a más cohortes/sectores y validar también a nivel pipeline.
+- P2-14 Export/ingest y CI gates: `tests/ml/test_export_and_gates.py` — PASSED
+  - Detalle: contrato `ml_predictions` válido; gate de cobertura sobre verdad futura sintética cumple (cov ≥ 0.60).
+  - Recomendaciones: calibrar umbrales (MASE/coverage p95) con datos reales y habilitar gates en CI.
+
 ## Nota
 - Los tests de XGBoost se ejecutan sólo si el paquete está instalado; de lo contrario se marcan `skip`.
 - Las advertencias registradas en la última corrida corresponden a tests locales de Celery (no ML) y no afectan los escenarios ML definidos arriba.
