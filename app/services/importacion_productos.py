@@ -122,4 +122,13 @@ class ImportacionProductosService:
         """
         Cancela el proceso de importación.
         """
-        pass 
+        pass
+
+    async def limpiar_importaciones_antiguas(self) -> int:
+        """
+        Limpia importaciones temporales antiguas.
+        Retorna el número de registros eliminados.
+        """
+        # TODO: Implementar limpieza de sesiones antiguas
+        # Por ahora, placeholder que no elimina nada
+        return 0
