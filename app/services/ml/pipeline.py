@@ -20,6 +20,7 @@ from app.db.supabase_client import get_supabase_service_client, TableQueryProto
 from .feature_engineer import FeatureEngineer
 from .ml_engine import BusinessMLEngine
 from .model_version_manager import ModelVersionManager
+from .recommendation_engine import check_stock_recommendations, check_sales_review_recommendations
 from app.config.ml_settings import ml_settings
 
 logger = logging.getLogger(__name__)
@@ -259,7 +260,8 @@ def train_and_predict_sales(
                         train_df_t = train_df
                     t_fold_train = time.perf_counter()
                     if model_name == "sarimax":
-                        m = engine.train_sarimax(train_df_t, order=sarimax_order_used, seasonal_order=sarimax_seasonal_used)
+                        exog_train = engine._make_time_features(cast(pd.Series, train_df_t["ds"]), business_id)[["is_holiday", "is_special_date"]]
+                        m = engine.train_sarimax(train_df_t, order=sarimax_order_used, seasonal_order=sarimax_seasonal_used, exog=exog_train)
                     elif model_name == "prophet":
                         m = engine.train_sales_forecasting_prophet(
                             train_df_t,
@@ -268,7 +270,7 @@ def train_and_predict_sales(
                         )
                     elif model_name == "xgboost":
                         try:
-                            m = engine.train_xgboost(train_df_t)
+                            m = engine.train_xgboost(train_df_t, business_id)
                         except Exception as ex:
                             _log_ml(logging.WARNING, "ml_cv_skip_model", tenant_id=business_id, model=model_name, reason=str(ex))
                             xgb_failed = True
@@ -279,7 +281,10 @@ def train_and_predict_sales(
                     total_train_time += time.perf_counter() - t_fold_train
                     t_fold_fc = time.perf_counter()
                     if model_name == "sarimax":
-                        fcst = engine.forecast_sales_sarimax(m, horizon_days=int(horizon_days))
+                        # Create future exog
+                        future_dates = pd.date_range(start=train_df_t["ds"].max() + pd.Timedelta(days=1), periods=int(horizon_days), freq="D")
+                        exog_future = engine._make_time_features(pd.Series(future_dates), business_id)[["is_holiday", "is_special_date"]]
+                        fcst = engine.forecast_sales_sarimax(m, horizon_days=int(horizon_days), exog=exog_future)
                         yhat = np.asarray(fcst["yhat"], dtype=float)
                     elif model_name == "prophet":
                         fcst = engine.forecast_sales_prophet(cast(Prophet, m), horizon_days=int(horizon_days))
@@ -298,7 +303,7 @@ def train_and_predict_sales(
                     elif model_name == "xgboost":
                         if xgb_failed:
                             break
-                        fcst = engine.forecast_sales_xgboost(m, train_df_t, horizon_days=int(horizon_days))
+                        fcst = engine.forecast_sales_xgboost(m, train_df_t, horizon_days=int(horizon_days), tenant_id=business_id)
                         fcst = pd.DataFrame(fcst)
                         fcst["ds"] = [
                             _to_iso_date_str(x) for x in cast(list[object], cast(pd.Series, fcst["ds"]).tolist())
@@ -475,7 +480,8 @@ def train_and_predict_sales(
     # Predeclare model for typing across branches
     model: object
     if selected_model == "sarimax":
-        model = engine.train_sarimax(ts_train, order=sarimax_order_used, seasonal_order=sarimax_seasonal_used)
+        exog_train_full = engine._make_time_features(cast(pd.Series, ts_train["ds"]), business_id)[["is_holiday", "is_special_date"]]
+        model = engine.train_sarimax(ts_train, order=sarimax_order_used, seasonal_order=sarimax_seasonal_used, exog=exog_train_full)
     elif selected_model == "prophet":
         model = engine.train_sales_forecasting_prophet(
             ts_train,
@@ -484,7 +490,7 @@ def train_and_predict_sales(
         )
     elif selected_model == "xgboost":
         try:
-            model = engine.train_xgboost(ts_train)
+            model = engine.train_xgboost(ts_train, business_id)
         except Exception as ex:
             _log_ml(logging.WARNING, "ml_train_xgb_failed_fallback", tenant_id=business_id, reason=str(ex))
             # Prefer baseline fallback if available among candidates to avoid heavy training
@@ -615,11 +621,14 @@ def train_and_predict_sales(
     t_fc = time.perf_counter()
     fcst: pd.DataFrame
     if selected_model == "sarimax":
-        fcst = engine.forecast_sales_sarimax(model, horizon_days=horizon_days)
+        # Create future exog for forecast
+        future_dates_full = pd.date_range(start=ts_train["ds"].max() + pd.Timedelta(days=1), periods=horizon_days, freq="D")
+        exog_future_full = engine._make_time_features(pd.Series(future_dates_full), business_id)[["is_holiday", "is_special_date"]]
+        fcst = engine.forecast_sales_sarimax(model, horizon_days=horizon_days, exog=exog_future_full)
     elif selected_model == "prophet":
         fcst = engine.forecast_sales_prophet(cast(Prophet, model), horizon_days=horizon_days)
     elif selected_model == "xgboost":
-        fcst = engine.forecast_sales_xgboost(model, ts_train, horizon_days=horizon_days)
+        fcst = engine.forecast_sales_xgboost(model, ts_train, horizon_days=horizon_days, tenant_id=business_id)
     else:
         if selected_model == "snaive":
             fcst = engine.forecast_baseline_snaive(ts, horizon_days=horizon_days, season=int(max(2, stl_period_used)))
@@ -783,6 +792,23 @@ def train_and_predict_sales(
             logger.warning("Anomaly pipeline failed for tenant=%s: %s", business_id, e)
             anomalies_summary = {"inserted": 0, "error": str(e)}
 
+    # 6) Generate recommendations
+    recommendations_summary: dict[str, object] = {}
+    try:
+        stock_recs = check_stock_recommendations(business_id)
+        sales_recs = check_sales_review_recommendations(business_id)
+        recommendations_summary = {"stock_recommendations": stock_recs, "sales_recommendations": sales_recs}
+        _log_ml(
+            logging.INFO,
+            "ml_recommendations_generated",
+            tenant_id=business_id,
+            stock_recs=stock_recs,
+            sales_recs=sales_recs,
+        )
+    except Exception as e:
+        logger.warning("Recommendations failed for tenant=%s: %s", business_id, e)
+        recommendations_summary = {"error": str(e)}
+
     total_time = time.perf_counter() - t0
     _log_ml(
         logging.INFO,
@@ -802,6 +828,7 @@ def train_and_predict_sales(
         "accuracy": accuracy,
         "forecasts_inserted": inserted,
         "anomalies": anomalies_summary,
+        "recommendations": recommendations_summary,
         "selected_model": metrics_summary.get("selected_model"),
         "metrics_summary": metrics_summary,
         "timestamp": datetime.now(timezone.utc).isoformat(),

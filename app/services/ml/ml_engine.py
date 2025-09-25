@@ -4,6 +4,7 @@ import logging
 import json
 from typing import cast, Callable, Protocol, SupportsFloat
 from collections.abc import Sequence
+from datetime import date, datetime
 
 import numpy as np
 from numpy.typing import NDArray
@@ -21,6 +22,12 @@ import importlib
 import math as _math
 import sys as _sys
 import types as _types
+
+# Holidays library for calendar features
+try:
+    import holidays
+except ImportError:
+    holidays = None  # type: ignore
 
 # Provide a vectorized shim for math.erf when called with numpy arrays (used in tests)
 try:
@@ -171,20 +178,24 @@ class BusinessMLEngine:
         daily_ts: pd.DataFrame,
         order: Sequence[int] = (1, 1, 1),
         seasonal_order: Sequence[int] | None = None,
+        exog: pd.DataFrame | None = None,
     ) -> object:
         if daily_ts.empty:
             raise ValueError("Empty time series for training")
         y = np.asarray(daily_ts["y"], dtype=float)
+        exog_arr = np.asarray(exog, dtype=float) if exog is not None else None
         _log_ml(
             logging.INFO,
             "engine_sarimax_train_start",
             rows=int(len(y)),
             order=[int(x) for x in order],
             seasonal_order=[int(x) for x in seasonal_order] if seasonal_order else None,
+            exog_cols=int(exog.shape[1]) if exog is not None else 0,
         )
         sarimax_ctor: SARIMAXCtor = SARIMAX
         model_obj = sarimax_ctor(
             y,
+            exog=exog_arr,
             order=tuple(int(x) for x in order),
             seasonal_order=(tuple(int(x) for x in seasonal_order) if seasonal_order else (0, 0, 0, 0)),
             enforce_stationarity=False,
@@ -199,10 +210,11 @@ class BusinessMLEngine:
         )
         return fit_res
 
-    def forecast_sales_sarimax(self, fit_res: object, horizon_days: int = 14) -> pd.DataFrame:
+    def forecast_sales_sarimax(self, fit_res: object, horizon_days: int = 14, exog: pd.DataFrame | None = None) -> pd.DataFrame:
         # get_forecast provides mean and conf_int; use 80% interval (alpha=0.2) similar to Prophet default
+        exog_arr = np.asarray(exog, dtype=float) if exog is not None else None
         get_fc: Callable[..., object] = cast(Callable[..., object], getattr(fit_res, "get_forecast"))
-        fc_obj = get_fc(steps=int(horizon_days))
+        fc_obj = get_fc(steps=int(horizon_days), exog=exog_arr)
         # predicted_mean is a property/series, not a callable
         mean_series = cast(pd.Series, getattr(fc_obj, "predicted_mean"))
         conf_any: Callable[..., object] = cast(Callable[..., object], getattr(fc_obj, "conf_int"))
@@ -399,7 +411,90 @@ class BusinessMLEngine:
     # -----------------------------
     # Optional XGBoost regressor
     # -----------------------------
-    def _make_time_features(self, ds: pd.Series) -> pd.DataFrame:
+    def _get_holidays_for_tenant(self, tenant_id: str, years: list[int]) -> set[date]:
+        """Get all holidays for a tenant including custom ones."""
+        if holidays is None:
+            return set()
+
+        # Base holidays for Argentina
+        ar_holidays_ctor = cast(Callable[..., object], getattr(holidays, "AR"))
+        ar_holidays = cast(dict[date, str], ar_holidays_ctor(years=years))
+
+        # Add custom tenant holidays
+        try:
+            from app.db.supabase_client import get_supabase_service_client
+            svc = get_supabase_service_client()
+            table_fn: Callable[[str], object] = cast(Callable[[str], object], getattr(svc, "table"))
+            tbl: object = table_fn("tenant_holidays")
+            select_fn: Callable[..., object] = cast(Callable[..., object], getattr(tbl, "select"))
+            eq_fn: Callable[..., object] = cast(Callable[..., object], getattr(select_fn("holiday_date"), "eq"))
+            execute_fn: Callable[..., object] = cast(Callable[..., object], getattr(eq_fn("tenant_id", tenant_id), "execute"))
+            res: object = execute_fn()
+            data: list[dict[str, object]] = cast(list[dict[str, object]], getattr(res, "data", []))
+            for row in data:
+                dt_str = cast(str, row.get("holiday_date", ""))
+                try:
+                    h_date = date.fromisoformat(dt_str)
+                    ar_holidays[h_date] = "Custom Holiday"
+                except ValueError:
+                    pass
+        except Exception:
+            # Ignore errors fetching custom holidays
+            pass
+
+        return set(ar_holidays.keys())
+
+    def _get_special_dates(self, ds: pd.Series) -> pd.Series:
+        """Get special commercial dates as boolean series."""
+        to_dt_any: Callable[..., object] = cast(Callable[..., object], getattr(pd, "to_datetime"))
+        dt = cast(pd.Series, to_dt_any(ds))
+
+        class _DateTimeAccessor(Protocol):
+            @property
+            def year(self) -> pd.Series: ...
+            @property
+            def month(self) -> pd.Series: ...
+            @property
+            def day(self) -> pd.Series: ...
+
+        dt_acc = cast(_DateTimeAccessor, getattr(dt, "dt"))
+        year = dt_acc.year
+        month = dt_acc.month
+        day = dt_acc.day
+
+        # Black Friday: último viernes de noviembre
+        # Cyber Monday: lunes siguiente a Black Friday
+        # Día de la Madre: segundo domingo de mayo
+        # Día del Padre: tercer domingo de junio
+        # Fin de mes: último día del mes
+        # Inicio de mes: primeros 5 días
+        # Fechas fiscales: 10 y 15 de cada mes
+        # San Valentín: 14 feb
+        # Halloween: 31 oct
+        # Fin de año: 31 dic
+
+        is_black_friday = ((month == 11) & (day >= 23) & (day <= 29) & (dt.dt.dayofweek == 4))  # Viernes 23-29 nov
+        is_cyber_monday = ((month == 11) & (day >= 24) & (day <= 30) & (dt.dt.dayofweek == 0))  # Lunes 24-30 nov
+        is_mother_day = ((month == 5) & (day >= 8) & (day <= 14) & (dt.dt.dayofweek == 6))  # Domingo 8-14 may
+        is_father_day = ((month == 6) & (day >= 15) & (day <= 21) & (dt.dt.dayofweek == 6))  # Domingo 15-21 jun
+        is_end_of_month = (day >= 25)  # Simplificado
+        is_start_of_month = (day <= 5)
+        is_fiscal_10 = (day == 10)
+        is_fiscal_15 = (day == 15)
+        is_valentine = ((month == 2) & (day == 14))
+        is_halloween = ((month == 10) & (day == 31))
+        is_new_year_eve = ((month == 12) & (day == 31))
+
+        # Combinar en una serie booleana
+        is_special_date = (
+            is_black_friday | is_cyber_monday | is_mother_day | is_father_day |
+            is_end_of_month | is_start_of_month | is_fiscal_10 | is_fiscal_15 |
+            is_valentine | is_halloween | is_new_year_eve
+        )
+
+        return is_special_date.astype(int)
+
+    def _make_time_features(self, ds: pd.Series, tenant_id: str = "") -> pd.DataFrame:
         to_dt_any5: Callable[..., object] = cast(Callable[..., object], getattr(pd, "to_datetime"))
         dt = cast(pd.Series, to_dt_any5(ds))
         # Provide a protocol type for the .dt accessor to avoid Unknowns
@@ -415,14 +510,30 @@ class BusinessMLEngine:
         dow_series = dt_acc.dayofweek
         dom_series = dt_acc.day
         month_series = dt_acc.month
+
         # astype with getattr to keep typing happy
         astype_dow: Callable[..., object] = cast(Callable[..., object], getattr(dow_series, "astype"))
         astype_dom: Callable[..., object] = cast(Callable[..., object], getattr(dom_series, "astype"))
         astype_month: Callable[..., object] = cast(Callable[..., object], getattr(month_series, "astype"))
+
+        # Get years for holidays
+        years = sorted(set(dt.dt.year.dropna().astype(int).tolist()))
+        if not years:
+            years = [datetime.now().year]
+
+        # Holidays
+        holiday_dates = self._get_holidays_for_tenant(tenant_id, years)
+        is_holiday = ds.isin([pd.Timestamp(d).date() for d in holiday_dates]).astype(int)
+
+        # Special dates
+        is_special_date = self._get_special_dates(ds)
+
         df = pd.DataFrame({
             "dow": astype_dow(int),
             "dom": astype_dom(int),
             "month": astype_month(int),
+            "is_holiday": is_holiday,
+            "is_special_date": is_special_date,
         })
         return df
 
@@ -433,7 +544,7 @@ class BusinessMLEngine:
             data[f"lag_{L}"] = shift_any(int(L))
         return pd.DataFrame(data)
 
-    def train_xgboost(self, daily_ts: pd.DataFrame) -> object:
+    def train_xgboost(self, daily_ts: pd.DataFrame, tenant_id: str = "") -> object:
         if XGBRegressor is None:
             raise ImportError("xgboost not installed; add 'xgboost' to requirements to enable")
         if daily_ts.empty:
@@ -442,7 +553,7 @@ class BusinessMLEngine:
         to_dt_any: Callable[..., object] = cast(Callable[..., object], getattr(pd, "to_datetime"))
         df.loc[:, "ds"] = cast(pd.Series, to_dt_any(df["ds"]))
         # features
-        feats_time = self._make_time_features(cast(pd.Series, df["ds"]))
+        feats_time = self._make_time_features(cast(pd.Series, df["ds"]), tenant_id)
         lags_df = self._add_lags(cast(pd.Series, df["y"]), [1, 7])
         X = pd.concat([feats_time, lags_df], axis=1)
         y = np.asarray(df["y"], dtype=float)
@@ -460,7 +571,7 @@ class BusinessMLEngine:
         _log_ml(logging.INFO, "engine_xgb_train_end", rows=rows_count)
         return reg
 
-    def forecast_sales_xgboost(self, model: object, daily_ts: pd.DataFrame, horizon_days: int = 14) -> pd.DataFrame:
+    def forecast_sales_xgboost(self, model: object, daily_ts: pd.DataFrame, horizon_days: int = 14, tenant_id: str = "") -> pd.DataFrame:
         if XGBRegressor is None:
             raise ImportError("xgboost not installed; add 'xgboost' to requirements to enable")
         if daily_ts.empty:
@@ -481,7 +592,7 @@ class BusinessMLEngine:
         for h in range(int(horizon_days)):
             cur_ds = cast(pd.Timestamp, last_ds + pd.Timedelta(days=h + 1))
             dates.append(cur_ds)
-            feats_time = self._make_time_features(pd.Series([cur_ds]))
+            feats_time = self._make_time_features(pd.Series([cur_ds]), tenant_id)
             # build lag features from y_hist
             y_series = pd.Series(y_hist)
             tmp_lag_df: pd.DataFrame = cast(pd.DataFrame, self._add_lags(y_series, [1, 7]).iloc[[-1]])

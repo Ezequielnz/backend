@@ -193,4 +193,68 @@ ImportError: email-validator is not installed, run `pip install pydantic[email]`
 
 ---
 
-**✅ Estado:** Listo para desplegar. Todas las dependencias están resueltas y el proyecto funciona localmente sin errores. 
+**✅ Estado:** Listo para desplegar. Todas las dependencias están resueltas y el proyecto funciona localmente sin errores.
+
+## Nuevas Funcionalidades ML Implementadas
+
+### ✅ **Sistema de Predicciones ML Mejorado**
+
+**Nuevas Features Incorporadas:**
+- **Holidays Argentinos:** Integración con librería `holidays` para feriados nacionales y provinciales
+- **Fechas Especiales:** Black Friday, Cyber Monday, Día de la Madre/Padre, fin de mes, fechas fiscales
+- **Recomendaciones Automáticas:** Sistema de alertas para reposición de stock y revisiones de ventas
+- **Overrides por Tenant:** Tabla `tenant_holidays` para holidays custom por PYME
+
+**Archivos Nuevos/Modificados:**
+- `scripts/create_tenant_holidays_table.sql`: Nueva tabla para holidays custom
+- `app/services/ml/ml_engine.py`: Features de holidays y fechas especiales
+- `app/services/ml/recommendation_engine.py`: Motor de recomendaciones
+- `app/services/ml/pipeline.py`: Integración de recomendaciones en pipeline
+- `tests/ml/test_holidays_and_recommendations.py`: Tests para nuevas funcionalidades
+
+**Dependencias Agregadas:**
+- `holidays==0.55`: Para calendario de feriados argentinos
+
+**Configuración ML:**
+- Variables de entorno existentes (`ML_HOLIDAYS_COUNTRY`, etc.) siguen funcionando
+- Nuevos thresholds configurables para recomendaciones
+
+### ✅ **Monitoreo y Alerting**
+
+**Alertas Implementadas:**
+- Drift de precisión ML (MAPE > threshold)
+- Recomendaciones de stock bajo
+- Alertas de anomalías en ventas
+- Todas integradas con sistema de notificaciones existente
+
+**Logs Estructurados:**
+- Eventos ML en JSON para mejor monitoreo
+- Métricas de accuracy y performance
+- Logs de recomendaciones generadas
+
+## Próximos Pasos Actualizados
+
+1. **Aplicar Migración de Base de Datos:**
+   ```sql
+   -- Ejecutar en Supabase
+   \i scripts/create_tenant_holidays_table.sql
+   ```
+
+2. **Hacer commit y push:**
+   ```
+   git add .
+   git commit -m "Feat: Sistema ML mejorado con holidays, fechas especiales y recomendaciones automáticas"
+   git push origin main
+   ```
+
+3. **Desplegar en Render** con la configuración indicada
+
+4. **Configurar Holidays Custom (Opcional):**
+   - Insertar holidays específicos por tenant en `tenant_holidays`
+   - Ejemplo: Feriados provinciales, aniversarios de empresa
+
+5. **Probar funcionalidad completa** en producción
+
+---
+
+**✅ Estado Final:** Sistema ML completamente funcional con holidays, fechas especiales y recomendaciones inteligentes.
