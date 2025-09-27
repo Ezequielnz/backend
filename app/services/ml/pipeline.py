@@ -22,6 +22,7 @@ from .ml_engine import BusinessMLEngine
 from .model_version_manager import ModelVersionManager
 from .recommendation_engine import check_stock_recommendations, check_sales_review_recommendations
 from app.config.ml_settings import ml_settings
+from app.workers.ml_worker import compute_anomaly_attributions
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,148 @@ def _rmse(y_true: NDArray[np.float64], y_pred: NDArray[np.float64]) -> float:
     diff = y_true - y_pred
     mse = float(np.mean(np.square(diff)))
     return float(math.sqrt(mse))
+
+
+def _compute_shap_attributions(
+    model: object,
+    model_type: str,
+    data: pd.DataFrame,
+    anomalous_indices: list[int],
+    max_evals: int = 1000,
+    timeout_seconds: float = 30.0,
+    sample_size: int | None = None,
+) -> dict[str, object]:
+    """
+    Compute SHAP attributions for anomalous points with performance controls.
+
+    Args:
+        model: Trained model
+        model_type: Type of model ('isolation_forest', 'stl', etc.)
+        data: Feature data
+        anomalous_indices: Indices of anomalous points
+        max_evals: Max evaluations for SHAP
+        timeout_seconds: Timeout for computation
+        sample_size: Sample size for background data
+
+    Returns:
+        Dict with attributions and metadata
+    """
+    shap = None  # predeclare for type checkers
+    psutil = None  # predeclare for type checkers
+    try:
+        import shap  # type: ignore[assignment]
+        import psutil  # type: ignore[assignment]
+        import os
+        SHAP_AVAILABLE = True
+        PSUTIL_AVAILABLE = True
+    except ImportError as e:
+        logger.warning(f"Optional dependencies not available: {e}")
+        SHAP_AVAILABLE = False
+        PSUTIL_AVAILABLE = False
+        import os  # os is standard
+    start_time = time.perf_counter()
+    attributions = {}
+    errors = []
+
+    # Resource monitoring
+    process = None
+    initial_memory = 0.0
+    if PSUTIL_AVAILABLE:
+        try:
+            process = psutil.Process(os.getpid())
+            initial_memory = process.memory_info().rss / 1024 / 1024  # MB
+        except Exception as e:
+            errors.append(f"psutil init failed: {e}")
+    if model_type == "isolation_forest" and hasattr(model, 'estimators_') and SHAP_AVAILABLE:
+        # Use TreeExplainer for IsolationForest
+        background_data = data
+        if sample_size and len(background_data) > sample_size:
+            background_data = background_data.sample(n=sample_size, random_state=42)
+
+        explainer = shap.TreeExplainer(model, data=background_data)
+
+        for idx in anomalous_indices[:10]:
+            if time.perf_counter() - start_time > timeout_seconds:
+                errors.append("Timeout exceeded")
+                break
+
+            try:
+                instance = data.iloc[[idx]]
+                shap_values = explainer(instance, max_evals=max_evals)
+                attributions[str(idx)] = {
+                    "shap_values": shap_values.values.tolist(),
+                    "base_value": float(shap_values.base_values[0]),
+                    "feature_names": data.columns.tolist(),
+                }
+            except Exception as e:
+                errors.append(f"SHAP computation failed for index {idx}: {str(e)}")
+                # Fallback: simple feature importance
+                attributions[str(idx)] = {
+                    "fallback": True,
+                    "feature_importance": {col: float(data[col].iloc[idx]) for col in data.columns},
+                }
+
+    elif model_type == "isolation_forest" and hasattr(model, 'estimators_') and not SHAP_AVAILABLE:
+        # Fallback for all anomalies when SHAP not available
+        for idx in anomalous_indices[:10]:
+            attributions[str(idx)] = {
+                "fallback": True,
+                "feature_importance": {col: float(data[col].iloc[idx]) for col in data.columns},
+            }
+
+    elif model_type == "stl":
+        # For STL, use statistical explanation
+        for idx in anomalous_indices[:10]:
+            if time.perf_counter() - start_time > timeout_seconds:
+                errors.append("Timeout exceeded")
+                break
+
+            try:
+                # Simple explanation based on deviation from trend
+                point = data.iloc[idx]
+                trend = data['trend'].mean() if 'trend' in data.columns else 0
+                seasonal = data['seasonal'].mean() if 'seasonal' in data.columns else 0
+                resid = data['resid'].iloc[idx] if 'resid' in data.columns else point.get('y', 0)
+
+                attributions[str(idx)] = {
+                    "explanation": "Statistical anomaly detection",
+                    "deviation_from_trend": float(resid - trend),
+                    "seasonal_component": float(seasonal),
+                    "residual": float(resid),
+                }
+            except Exception as e:
+                errors.append(f"STL explanation failed for index {idx}: {str(e)}")
+
+    else:
+        # Fallback for other models
+        for idx in anomalous_indices[:5]:
+            attributions[str(idx)] = {
+                "fallback": True,
+                "message": f"No SHAP support for model type {model_type}",
+                "feature_values": {col: float(data[col].iloc[idx]) for col in data.columns},
+            }
+
+    # Resource monitoring
+    if PSUTIL_AVAILABLE and process is not None:
+        try:
+            final_memory = process.memory_info().rss / 1024 / 1024
+            memory_used = final_memory - initial_memory
+        except Exception as e:
+            errors.append(f"psutil read failed: {e}")
+            memory_used = 0.0
+    else:
+        memory_used = 0.0
+    return {
+        "attributions": attributions,
+        "metadata": {
+            "computation_time": time.perf_counter() - start_time,
+            "memory_used_mb": memory_used,
+            "anomalies_processed": len(attributions),
+            "total_anomalies": len(anomalous_indices),
+            "errors": errors,
+        }
+    }
+
 
 
 def _to_iso_date_str(x: object) -> str:
@@ -787,7 +930,48 @@ def train_and_predict_sales(
                 rows=a_inserted,
                 took_seconds=round(time.perf_counter() - t_an, 3),
             )
-            anomalies_summary = {"inserted": a_inserted}
+
+            # Phase 1: Async SHAP Attribution Computation
+            attribution_summary = {}
+            if a_inserted > 0 and records:
+                try:
+                    # Determine model type for attributions
+                    model_type = "stl" if anomaly_method_used == "stl_resid" else "isolation_forest"
+
+                    # Get the anomaly model for attributions
+                    anomaly_model = None
+                    if anomaly_method_used == "stl_resid":
+                        anomaly_model = model  # Use the forecasting model
+                    else:
+                        anomaly_model = engine.train_anomaly_detection(ts)  # IsolationForest
+
+                    # Trigger async attribution computation
+                    cast(CeleryTaskProto, compute_anomaly_attributions).delay(
+                        business_id,
+                        records,
+                        anomaly_model,
+                        model_type
+                    )
+
+                    attribution_summary = {
+                        "task_triggered": True,
+                        "anomalies_count": len([r for r in records if r.get("is_anomaly")]),
+                        "model_type": model_type,
+                    }
+
+                    _log_ml(
+                        logging.INFO,
+                        "ml_attribution_task_queued",
+                        tenant_id=business_id,
+                        anomalies=len([r for r in records if r.get("is_anomaly")]),
+                        model_type=model_type,
+                    )
+
+                except Exception as e:
+                    logger.warning("Failed to queue attribution task for tenant=%s: %s", business_id, e)
+                    attribution_summary = {"error": str(e), "task_triggered": False}
+
+            anomalies_summary = {"inserted": a_inserted, "attributions": attribution_summary}
         except Exception as e:
             logger.warning("Anomaly pipeline failed for tenant=%s: %s", business_id, e)
             anomalies_summary = {"inserted": 0, "error": str(e)}

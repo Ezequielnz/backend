@@ -455,7 +455,7 @@ def generate_predictions(self: "Task", business_id: str, prediction_type: str) -
             ts = fe.sales_timeseries_daily(business_id, days=120)
             if not ts.empty:
                 # Choose anomaly method based on settings; allow STL residuals using the loaded model
-                if ml_settings.ML_ANOMALY_METHOD.strip().lower() == "stl_resid":
+                if str(ml_settings.ML_ANOMALY_METHOD).strip().lower() == "stl_resid":
                     model_type = "prophet" if isinstance(model, Prophet) else "sarimax"
                     an_df = engine.detect_anomalies_stl_residuals(model, ts, model_type, period=int(ml_settings.ML_STL_PERIOD))
                     an0 = cast(object, an_df)
@@ -522,6 +522,176 @@ def generate_predictions(self: "Task", business_id: str, prediction_type: str) -
     except Exception as e:
         logger.error(f"Error generando predicción: {str(e)}")
         raise cast(_RetryingTask, self).retry(exc=e, countdown=60, max_retries=3)
+
+@task_typed(bind=True, soft_time_limit=120, time_limit=180)
+def compute_anomaly_attributions(self: "Task", business_id: str, anomaly_records: list[dict[str, object]], model: object, model_type: str) -> dict[str, object]:
+    """
+    Compute SHAP attributions for detected anomalies asynchronously.
+    Phase 1: Attribution Foundation
+    """
+    try:
+        shap = None  # predeclare for type checkers
+        psutil = None  # predeclare for type checkers
+        try:
+            import shap  # type: ignore[assignment]
+            import psutil  # type: ignore[assignment]
+            import os
+            SHAP_AVAILABLE = True
+            PSUTIL_AVAILABLE = True
+        except ImportError as e:
+            logger.warning(f"Optional dependencies not available: {e}")
+            SHAP_AVAILABLE = False
+            PSUTIL_AVAILABLE = False
+            import os  # os is standard
+
+        from app.services.ml import BusinessMLEngine, FeatureEngineer
+
+        t0 = time.perf_counter()
+        _log_ml(logging.INFO, "ml_attribution_start", tenant_id=business_id, anomalies=len(anomaly_records))
+
+        engine = BusinessMLEngine()
+        fe = FeatureEngineer()
+
+        # Prepare containers
+        attributions = {}
+        errors = []
+
+        # Resource monitoring
+        process = None
+        initial_memory = 0.0
+        if PSUTIL_AVAILABLE:
+            try:
+                process = psutil.Process(os.getpid())
+                initial_memory = process.memory_info().rss / 1024 / 1024  # MB
+            except Exception as e:
+                errors.append(f"psutil init failed: {e}")
+
+        # Prepare data based on model type
+        if model_type == "isolation_forest":
+            # For IsolationForest, use original time series features
+            ts = fe.sales_timeseries_daily(business_id, days=365)
+            if ts.empty:
+                return {"error": "No time series data available"}
+            attr_data = ts.copy()
+        elif model_type == "stl":
+            # For STL, use decomposed components
+            ts = fe.sales_timeseries_daily(business_id, days=365)
+            if ts.empty:
+                return {"error": "No time series data available"}
+            attr_data = engine._make_time_features(ts["ds"], business_id)
+        else:
+            # Fallback
+            attr_data = None
+
+        if attr_data is None or attr_data.empty:
+            return {"error": "No attribution data available"}
+
+        # Sample background data for performance
+        background_size = min(100, len(attr_data))
+        background_data = attr_data.sample(n=background_size, random_state=42) if len(attr_data) > background_size else attr_data
+
+        anomalous_indices = [i for i, rec in enumerate(anomaly_records) if rec.get("is_anomaly")]
+
+        if model_type == "isolation_forest" and hasattr(model, 'estimators_'):
+            if SHAP_AVAILABLE and shap is not None:
+                try:
+                    explainer = shap.TreeExplainer(model, data=background_data)
+                    for idx in anomalous_indices[:10]:  # Limit for performance
+                        if time.perf_counter() - t0 > 30:  # 30 second timeout
+                            errors.append("Timeout exceeded")
+                            break
+
+                        instance = attr_data.iloc[[idx]]
+                        shap_values = explainer(instance, max_evals=500)
+                        attributions[str(idx)] = {
+                            "shap_values": shap_values.values.tolist(),
+                            "base_value": float(shap_values.base_values[0]),
+                            "feature_names": attr_data.columns.tolist(),
+                        }
+                except Exception as e:
+                    errors.append(f"SHAP computation failed: {str(e)}")
+                    # Fallback to simple feature importance
+                    for idx in anomalous_indices[:5]:
+                        attributions[str(idx)] = {
+                            "fallback": True,
+                            "feature_importance": {col: float(attr_data[col].iloc[idx]) for col in attr_data.columns},
+                        }
+            else:
+                # Fallback when SHAP not available
+                for idx in anomalous_indices[:10]:
+                    attributions[str(idx)] = {
+                        "fallback": True,
+                        "feature_importance": {col: float(attr_data[col].iloc[idx]) for col in attr_data.columns},
+                    }
+
+        elif model_type == "stl":
+            # Statistical explanation for STL
+            for idx in anomalous_indices[:10]:
+                if time.perf_counter() - t0 > 30:
+                    errors.append("Timeout exceeded")
+                    break
+
+                try:
+                    point = attr_data.iloc[idx]
+                    trend = attr_data['trend'].mean() if 'trend' in attr_data.columns else 0
+                    seasonal = attr_data['seasonal'].mean() if 'seasonal' in attr_data.columns else 0
+                    resid = attr_data['resid'].iloc[idx] if 'resid' in attr_data.columns else point.get('y', 0)
+
+                    attributions[str(idx)] = {
+                        "explanation": "Statistical anomaly detection",
+                        "deviation_from_trend": float(resid - trend),
+                        "seasonal_component": float(seasonal),
+                        "residual": float(resid),
+                    }
+                except Exception as e:
+                    errors.append(f"STL explanation failed for index {idx}: {str(e)}")
+
+        # Resource monitoring
+        if PSUTIL_AVAILABLE and process is not None:
+            try:
+                final_memory = process.memory_info().rss / 1024 / 1024
+                memory_used = final_memory - initial_memory
+            except Exception as e:
+                errors.append(f"psutil read failed: {e}")
+                memory_used = 0.0
+        else:
+            memory_used = 0.0
+
+        # Store attributions in database (optional - for now just return)
+        # Could upsert to a new table or extend ml_predictions
+
+        _log_ml(
+            logging.INFO,
+            "ml_attribution_completed",
+            tenant_id=business_id,
+            attributions_computed=len(attributions),
+            errors=len(errors),
+            memory_used_mb=memory_used,
+            took_seconds=round(time.perf_counter() - t0, 3),
+        )
+
+        return {
+            "task": "compute_anomaly_attributions",
+            "business_id": business_id,
+            "attributions": attributions,
+            "metadata": {
+                "anomalies_processed": len(attributions),
+                "total_anomalies": len(anomalous_indices),
+                "errors": errors,
+                "computation_time": time.perf_counter() - t0,
+                "memory_used_mb": memory_used,
+            },
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+    except Exception as e:
+        logger.error(f"Error computing attributions for tenant={business_id}: {str(e)}")
+        return {
+            "task": "compute_anomaly_attributions",
+            "business_id": business_id,
+            "error": str(e),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
 
 @task_typed(bind=True, soft_time_limit=300, time_limit=600)
 @cache_ml_features(ttl=3600)

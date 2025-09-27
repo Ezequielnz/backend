@@ -32,3 +32,4 @@ APScheduler==3.11.0
 flower==2.0.1
 # Optional ML extras
 xgboost==2.1.4
+shap==0.45.0
