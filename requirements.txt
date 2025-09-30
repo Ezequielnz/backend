@@ -33,3 +33,10 @@ flower==2.0.1
 # Optional ML extras
 xgboost==2.1.4
 shap==0.45.0
+# Vector database and embeddings
+pgvector==0.2.4
+sentence-transformers==2.7.0
+torch==2.1.0
+transformers==4.36.0
+numpy==2.2.6
+faiss-cpu==1.7.4
