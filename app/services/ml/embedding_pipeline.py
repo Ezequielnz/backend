@@ -5,6 +5,7 @@ Phase 2: Vector Enrichment
 
 import logging
 import asyncio
+import numpy as np
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timezone
 from dataclasses import dataclass
