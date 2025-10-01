@@ -20,8 +20,8 @@ from billiard.exceptions import SoftTimeLimitExceeded
 from app.services.ml import (
     FeatureEngineer,
     ModelVersionManager,
-    train_and_predict_sales,
 )
+from app.services.ml.pipeline import train_and_predict_sales
 
 if TYPE_CHECKING:
     from celery.app.task import Task

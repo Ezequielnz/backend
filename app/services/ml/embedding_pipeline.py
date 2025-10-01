@@ -12,6 +12,7 @@ from enum import Enum
 
 from .pii_utils import PIIHashingUtility, PIIComplianceValidator, PIIDetectionResult
 from .vector_db_service import VectorDBService, VectorSearchResult
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -83,8 +84,11 @@ class EmbeddingPipeline:
 
             elif self.config.model_type == EmbeddingModelType.OPENAI:
                 # Initialize OpenAI client (requires API key)
-                import openai
-                self._embedding_model = openai
+                from openai import OpenAI
+                if not settings.OPENAI_API_KEY:
+                    logger.error("OPENAI_API_KEY not configured in environment variables")
+                    raise ValueError("OPENAI_API_KEY must be set to use OpenAI embeddings")
+                self._embedding_model = OpenAI(api_key=settings.OPENAI_API_KEY)
                 logger.info("Initialized OpenAI embedding client")
 
             elif self.config.model_type == EmbeddingModelType.HUGGINGFACE:
@@ -119,12 +123,11 @@ class EmbeddingPipeline:
                 return embedding.tolist()
 
             elif self.config.model_type == EmbeddingModelType.OPENAI:
-                import openai
-                response = openai.Embedding.create(
+                response = self._embedding_model.embeddings.create(
                     input=text,
                     model=self.config.model_name
                 )
-                return response['data'][0]['embedding']
+                return response.data[0].embedding
 
             elif self.config.model_type == EmbeddingModelType.HUGGINGFACE:
                 # HuggingFace pipeline returns nested arrays
