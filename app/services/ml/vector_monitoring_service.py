@@ -11,8 +11,8 @@ from dataclasses import dataclass
 from collections import defaultdict, deque
 import json
 import smtplib
-from email.mime.text import MimeText
-from email.mime.multipart import MimeMultipart
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 from .vector_db_service import VectorDBService
 from .embedding_pipeline import EmbeddingPipeline
@@ -291,7 +291,7 @@ class VectorMonitoringService:
         try:
             # This is a placeholder for email sending
             # In production, you'd use a proper email service
-            msg = MimeText(f"Vector Alert: {alert['rule_name']}\n\n{json.dumps(alert, indent=2)}")
+            msg = MIMEText(f"Vector Alert: {alert['rule_name']}\n\n{json.dumps(alert, indent=2)}")
             msg['Subject'] = f"Vector Alert: {alert['rule_name']}"
             msg['From'] = "vector-monitor@example.com"
             msg['To'] = "admin@example.com"

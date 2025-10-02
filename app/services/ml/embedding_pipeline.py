@@ -79,30 +79,51 @@ class EmbeddingPipeline:
         """Initialize the embedding model based on configuration."""
         try:
             if self.config.model_type == EmbeddingModelType.SENTENCE_TRANSFORMERS:
-                from sentence_transformers import SentenceTransformer
-                self._embedding_model = SentenceTransformer(self.config.model_name)
-                logger.info(f"Initialized SentenceTransformer model: {self.config.model_name}")
+                try:
+                    from sentence_transformers import SentenceTransformer
+                    self._embedding_model = SentenceTransformer(self.config.model_name)
+                    logger.info(f"Initialized SentenceTransformer model: {self.config.model_name}")
+                except ImportError as e:
+                    logger.error(f"sentence-transformers package not installed: {e}")
+                    logger.error("Install with: pip install sentence-transformers")
+                    raise ImportError("sentence-transformers package is required for SENTENCE_TRANSFORMERS model type") from e
 
             elif self.config.model_type == EmbeddingModelType.OPENAI:
                 # Initialize OpenAI client (requires API key)
-                from openai import OpenAI
-                if not settings.OPENAI_API_KEY:
+                try:
+                    from openai import OpenAI
+                except ImportError as e:
+                    logger.error(f"openai package not installed: {e}")
+                    logger.error("Install with: pip install openai")
+                    raise ImportError("openai package is required for OPENAI model type") from e
+                
+                if not hasattr(settings, 'OPENAI_API_KEY') or not settings.OPENAI_API_KEY:
                     logger.error("OPENAI_API_KEY not configured in environment variables")
                     raise ValueError("OPENAI_API_KEY must be set to use OpenAI embeddings")
                 self._embedding_model = OpenAI(api_key=settings.OPENAI_API_KEY)
                 logger.info("Initialized OpenAI embedding client")
 
             elif self.config.model_type == EmbeddingModelType.HUGGINGFACE:
-                from transformers import pipeline
-                self._embedding_model = pipeline(
-                    "feature-extraction",
-                    model=self.config.model_name
-                )
-                logger.info(f"Initialized HuggingFace embedding pipeline: {self.config.model_name}")
+                try:
+                    from transformers import pipeline
+                    self._embedding_model = pipeline(
+                        "feature-extraction",
+                        model=self.config.model_name
+                    )
+                    logger.info(f"Initialized HuggingFace embedding pipeline: {self.config.model_name}")
+                except ImportError as e:
+                    logger.error(f"transformers package not installed: {e}")
+                    logger.error("Install with: pip install transformers")
+                    raise ImportError("transformers package is required for HUGGINGFACE model type") from e
 
-        except Exception as e:
+        except (ImportError, ValueError) as e:
             logger.error(f"Failed to initialize embedding model: {e}")
             self._embedding_model = None
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error initializing embedding model: {e}")
+            self._embedding_model = None
+            raise
 
     def _generate_embedding(self, text: str) -> List[float]:
         """
@@ -113,6 +134,10 @@ class EmbeddingPipeline:
 
         Returns:
             Embedding vector as list of floats
+        
+        Raises:
+            RuntimeError: If embedding model is not initialized
+            ValueError: If model type is not supported
         """
         if self._embedding_model is None:
             raise RuntimeError("Embedding model not initialized")
@@ -137,6 +162,10 @@ class EmbeddingPipeline:
                 import numpy as np
                 embedding = np.mean(results[0], axis=0)
                 return embedding.tolist()
+            
+            else:
+                # This should never happen due to enum validation, but satisfies type checker
+                raise ValueError(f"Unsupported model type: {self.config.model_type}")
 
         except Exception as e:
             logger.error(f"Failed to generate embedding: {e}")

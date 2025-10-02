@@ -132,10 +132,45 @@ def _compute_shap_attributions(
 
             try:
                 instance = data.iloc[[idx]]
-                shap_values = explainer(instance, max_evals=max_evals)
+                # TreeExplainer doesn't accept max_evals parameter
+                shap_values = explainer(instance)
+                
+                # Safely extract SHAP values - handle different return types
+                # Use type: ignore to suppress Pylance warnings for dynamic SHAP types
+                if hasattr(shap_values, 'values'):
+                    values_array = shap_values.values  # type: ignore[attr-defined]
+                else:
+                    values_array = shap_values
+                
+                # Convert to list safely
+                try:
+                    if hasattr(values_array, 'tolist'):
+                        shap_list = values_array.tolist()  # type: ignore[attr-defined]
+                    elif isinstance(values_array, list):
+                        shap_list = values_array
+                    else:
+                        # Fallback: convert numpy array or similar to list
+                        import numpy as np
+                        shap_list = np.asarray(values_array).tolist()
+                except Exception:
+                    # Ultimate fallback
+                    shap_list = []
+                
+                # Handle both array and scalar base_values
+                base_value_float = 0.0
+                if hasattr(shap_values, 'base_values'):
+                    base_val = shap_values.base_values  # type: ignore[attr-defined]
+                    try:
+                        if hasattr(base_val, '__getitem__') and not isinstance(base_val, str):
+                            base_value_float = float(base_val[0])  # type: ignore[index]
+                        else:
+                            base_value_float = float(base_val)  # type: ignore[arg-type]
+                    except (TypeError, IndexError, ValueError):
+                        base_value_float = 0.0
+                
                 attributions[str(idx)] = {
-                    "shap_values": shap_values.values.tolist(),
-                    "base_value": float(shap_values.base_values[0]),
+                    "shap_values": shap_list,
+                    "base_value": base_value_float,
                     "feature_names": data.columns.tolist(),
                 }
             except Exception as e:

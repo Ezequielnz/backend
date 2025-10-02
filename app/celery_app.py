@@ -7,7 +7,7 @@ celery_app = Celery(
     "micropymes",
     broker=settings.CELERY_BROKER_URL,
     backend=settings.CELERY_RESULT_BACKEND,
-    include=["app.workers.notification_worker", "app.workers.ml_worker", "app.workers.maintenance_worker"]
+    include=["app.workers.notification_worker", "app.workers.ml_worker", "app.workers.maintenance_worker", "app.workers.embedding_worker"]
 )
 
 # Configuración de Celery

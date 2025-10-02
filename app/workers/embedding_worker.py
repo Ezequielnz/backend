@@ -8,10 +8,35 @@ import asyncio
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timezone
 
-from app.celery_app import celery_app
-from app.services.ml.embedding_pipeline import EmbeddingPipeline, EmbeddingConfig
-from app.services.ml.vector_db_service import VectorDBService
-from app.db.supabase_client import get_supabase_service_client
+logger = logging.getLogger(__name__)
+
+try:
+    from app.celery_app import celery_app
+    logger.info("Successfully imported celery_app")
+except ImportError as e:
+    logger.error(f"Failed to import celery_app: {e}")
+    raise
+
+try:
+    from app.services.ml.embedding_pipeline import EmbeddingPipeline, EmbeddingConfig
+    logger.info("Successfully imported EmbeddingPipeline and EmbeddingConfig")
+except ImportError as e:
+    logger.error(f"Failed to import EmbeddingPipeline and EmbeddingConfig: {e}")
+    raise
+
+try:
+    from app.services.ml.vector_db_service import VectorDBService
+    logger.info("Successfully imported VectorDBService")
+except ImportError as e:
+    logger.error(f"Failed to import VectorDBService: {e}")
+    raise
+
+try:
+    from app.db.supabase_client import get_supabase_service_client
+    logger.info("Successfully imported get_supabase_service_client")
+except ImportError as e:
+    logger.error(f"Failed to import get_supabase_service_client: {e}")
+    raise
 
 logger = logging.getLogger(__name__)
 

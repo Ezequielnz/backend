@@ -1,11 +1,24 @@
 """
 Worker para tareas de mantenimiento del sistema
 """
-from app.celery_app import celery_app
-from supabase.client import create_client
-from app.core.config import settings
 import logging
 from datetime import datetime, timedelta, timezone
+
+logger = logging.getLogger(__name__)
+
+try:
+    from app.celery_app import celery_app
+    logger.info("Successfully imported celery_app")
+except ImportError as e:
+    logger.error(f"Failed to import celery_app: {e}")
+    raise
+
+try:
+    from app.db.supabase_client import get_supabase_service_client
+    logger.info("Successfully imported get_supabase_service_client")
+except ImportError as e:
+    logger.error(f"Failed to import get_supabase_service_client: {e}")
+    raise
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +28,7 @@ def cleanup_old_notifications(self):
     Limpia notificaciones antiguas (más de 30 días)
     """
     try:
-        supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
+        supabase = get_supabase_service_client()
         cutoff_date = datetime.now(timezone.utc) - timedelta(days=30)
         
         # Eliminar notificaciones antiguas
@@ -36,7 +49,7 @@ def cleanup_old_ml_predictions(self):
     Limpia predicciones ML antiguas (más de 90 días)
     """
     try:
-        supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
+        supabase = get_supabase_service_client()
         cutoff_date = datetime.now(timezone.utc) - timedelta(days=90)
         
         # Eliminar predicciones antiguas
@@ -57,7 +70,7 @@ def health_check(self):
     Verificación de salud del sistema
     """
     try:
-        supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
+        supabase = get_supabase_service_client()
         
         # Test conexión a Supabase
         result = supabase.table("tenant_settings").select("tenant_id").limit(1).execute()

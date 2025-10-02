@@ -1,13 +1,9 @@
 """
 Worker para procesamiento de Machine Learning
 """
-from app.celery_app import celery_app
+import logging
 from datetime import datetime, timezone
 from supabase.client import Client
-from app.config.ml_settings import ml_settings
-from app.core.cache_decorators import cache_ml_features, cache_ml_predictions, invalidate_on_update
-from app.core.cache_manager import cache_manager
-import logging
 import json
 import time
 import math
@@ -17,11 +13,50 @@ from typing import TYPE_CHECKING, cast, Callable, TypeVar, Protocol
 from collections.abc import Mapping, Iterable
 from prophet import Prophet
 from billiard.exceptions import SoftTimeLimitExceeded
-from app.services.ml import (
-    FeatureEngineer,
-    ModelVersionManager,
-)
-from app.services.ml.pipeline import train_and_predict_sales
+
+logger = logging.getLogger(__name__)
+
+try:
+    from app.celery_app import celery_app
+    logger.info("Successfully imported celery_app")
+except ImportError as e:
+    logger.error(f"Failed to import celery_app: {e}")
+    raise
+
+try:
+    from app.config.ml_settings import ml_settings
+    logger.info("Successfully imported ml_settings")
+except ImportError as e:
+    logger.error(f"Failed to import ml_settings: {e}")
+    raise
+
+try:
+    from app.core.cache_decorators import cache_ml_features, cache_ml_predictions, invalidate_on_update
+    logger.info("Successfully imported cache decorators")
+except ImportError as e:
+    logger.error(f"Failed to import cache decorators: {e}")
+    raise
+
+try:
+    from app.core.cache_manager import cache_manager
+    logger.info("Successfully imported cache_manager")
+except ImportError as e:
+    logger.error(f"Failed to import cache_manager: {e}")
+    raise
+
+try:
+    from app.services.ml.feature_engineer import FeatureEngineer
+    logger.info("Successfully imported FeatureEngineer")
+except ImportError as e:
+    logger.error(f"Failed to import FeatureEngineer: {e}")
+    raise
+
+try:
+    from app.services.ml.model_version_manager import ModelVersionManager
+    logger.info("Successfully imported ModelVersionManager")
+except ImportError as e:
+    logger.error(f"Failed to import ModelVersionManager: {e}")
+    raise
 
 if TYPE_CHECKING:
     from celery.app.task import Task
@@ -150,9 +185,22 @@ def retrain_all_models(self: "Task") -> dict[str, object]:
     """
     try:
         from app.db.supabase_client import get_supabase_service_client
+        logger.info("Successfully imported get_supabase_service_client in generate_predictions")
+    except ImportError as e:
+        logger.error(f"Failed to import get_supabase_service_client in generate_predictions: {e}")
+        raise
+
+    try:
         supabase: Client = get_supabase_service_client()
         t0 = time.perf_counter()
         _log_ml(logging.INFO, "ml_retrain_start")
+        # Local import to avoid circular dependency with pipeline importing ml_worker
+        try:
+            from app.services.ml.pipeline import train_and_predict_sales  # type: ignore
+            logger.info("Successfully imported train_and_predict_sales in generate_predictions")
+        except ImportError as e:
+            logger.error(f"Failed to import train_and_predict_sales in generate_predictions: {e}")
+            raise
         # Obtener negocios activos (usando getattr+cast para evitar Unknowns)
         sb_table = cast(Callable[[str], object], getattr(supabase, "table"))
         req = sb_table("negocios")
@@ -276,6 +324,12 @@ def update_business_features(self: "Task") -> dict[str, object]:
     """
     try:
         from app.db.supabase_client import get_supabase_service_client
+        logger.info("Successfully imported get_supabase_service_client in update_business_features")
+    except ImportError as e:
+        logger.error(f"Failed to import get_supabase_service_client in update_business_features: {e}")
+        raise
+
+    try:
         supabase: Client = get_supabase_service_client()
         t0 = time.perf_counter()
         # Obtener negocios activos (usando getattr+cast para evitar Unknowns)
@@ -345,8 +399,21 @@ def generate_predictions(self: "Task", business_id: str, prediction_type: str) -
     """
     try:
         from app.db.supabase_client import get_supabase_service_client
+        logger.info("Successfully imported get_supabase_service_client in retrain_all_models")
+    except ImportError as e:
+        logger.error(f"Failed to import get_supabase_service_client in retrain_all_models: {e}")
+        raise
+
+    try:
         supabase: Client = get_supabase_service_client()
         t0 = time.perf_counter()
+        # Local import to avoid circular dependency with pipeline importing ml_worker
+        try:
+            from app.services.ml.pipeline import train_and_predict_sales  # type: ignore
+            logger.info("Successfully imported train_and_predict_sales in retrain_all_models")
+        except ImportError as e:
+            logger.error(f"Failed to import train_and_predict_sales in retrain_all_models: {e}")
+            raise
 
         # Try to use existing active model; if not present, train pipeline once
         store = ModelVersionManager()
@@ -388,7 +455,19 @@ def generate_predictions(self: "Task", business_id: str, prediction_type: str) -
             }
 
         # If we have a model, generate according to requested type
-        from app.services.ml import BusinessMLEngine, FeatureEngineer  # local import to avoid cyclical
+        try:
+            from app.services.ml.ml_engine import BusinessMLEngine  # local import to avoid cyclical
+            logger.info("Successfully imported BusinessMLEngine in generate_predictions")
+        except ImportError as e:
+            logger.error(f"Failed to import BusinessMLEngine in generate_predictions: {e}")
+            raise
+
+        try:
+            from app.services.ml.feature_engineer import FeatureEngineer
+            logger.info("Successfully imported FeatureEngineer in generate_predictions")
+        except ImportError as e:
+            logger.error(f"Failed to import FeatureEngineer in generate_predictions: {e}")
+            raise
         engine = BusinessMLEngine()
         fe = FeatureEngineer()
         # Fetch active model_id once for reuse
@@ -544,7 +623,19 @@ def compute_anomaly_attributions(self: "Task", business_id: str, anomaly_records
             PSUTIL_AVAILABLE = False
             import os  # os is standard
 
-        from app.services.ml import BusinessMLEngine, FeatureEngineer
+        try:
+            from app.services.ml.ml_engine import BusinessMLEngine
+            logger.info("Successfully imported BusinessMLEngine in compute_anomaly_attributions")
+        except ImportError as e:
+            logger.error(f"Failed to import BusinessMLEngine in compute_anomaly_attributions: {e}")
+            raise
+
+        try:
+            from app.services.ml.feature_engineer import FeatureEngineer
+            logger.info("Successfully imported FeatureEngineer in compute_anomaly_attributions")
+        except ImportError as e:
+            logger.error(f"Failed to import FeatureEngineer in compute_anomaly_attributions: {e}")
+            raise
 
         t0 = time.perf_counter()
         _log_ml(logging.INFO, "ml_attribution_start", tenant_id=business_id, anomalies=len(anomaly_records))
@@ -602,9 +693,9 @@ def compute_anomaly_attributions(self: "Task", business_id: str, anomaly_records
                             break
 
                         instance = attr_data.iloc[[idx]]
-                        shap_values = explainer(instance, max_evals=500)
+                        shap_values = explainer(instance)
                         attributions[str(idx)] = {
-                            "shap_values": shap_values.values.tolist(),
+                            "shap_values": shap_values.values.tolist(),  # type: ignore[attr-defined]
                             "base_value": float(shap_values.base_values[0]),
                             "feature_names": attr_data.columns.tolist(),
                         }
@@ -701,6 +792,12 @@ def analyze_business_trends(self: "Task", business_id: str) -> dict[str, object]
     """
     try:
         from app.db.supabase_client import get_supabase_service_client
+        logger.info("Successfully imported get_supabase_service_client in analyze_business_trends")
+    except ImportError as e:
+        logger.error(f"Failed to import get_supabase_service_client in analyze_business_trends: {e}")
+        raise
+
+    try:
         supabase: Client = get_supabase_service_client()
         t0 = time.perf_counter()
         # Obtener datos del negocio

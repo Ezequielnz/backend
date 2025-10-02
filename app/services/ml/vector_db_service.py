@@ -552,8 +552,8 @@ class VectorDBService:
                 content_type_counts[content_type] = content_type_counts.get(content_type, 0) + 1
                 status_counts[status] = status_counts.get(status, 0) + 1
 
-            stats["by_content_type"] = content_type_counts
-            stats["by_status"] = status_counts
+            stats["by_content_type"] = content_type_counts  # type: ignore[assignment]
+            stats["by_status"] = status_counts  # type: ignore[assignment]
 
             # Get last updated timestamp
             latest_result = table.select("updated_at").eq("tenant_id", tenant_id).order("updated_at", desc=True).limit(1).execute()

@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     ]
 
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")
+    @classmethod
     def assemble_cors_origins(cls, v: object) -> list[str]:
         if isinstance(v, str):
             s = v.strip()
