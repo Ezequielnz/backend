@@ -109,7 +109,8 @@ class Settings(BaseSettings):
     model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        # case_sensitive=True,  # default behavior is case-sensitive
+        extra="ignore",
+        case_sensitive=True,
     )
 
 
