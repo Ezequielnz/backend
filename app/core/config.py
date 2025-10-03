@@ -66,6 +66,9 @@ class Settings(BaseSettings):
     ML_MODEL_PATH: str = os.getenv("ML_MODEL_PATH", "./models/")
     ML_FEATURE_CACHE_TTL: int = int(os.getenv("ML_FEATURE_CACHE_TTL", "3600"))
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
+    # Embedding / LLM settings (used by Phase 3 LLM Reasoning Core)
+    EMBEDDING_MODEL_NAME: str = os.getenv("EMBEDDING_MODEL_NAME", "sentence-transformers/all-MiniLM-L6-v2")
+    EMBEDDING_DIM: int = int(os.getenv("EMBEDDING_DIM", "384"))
     # ML Tuning Flags
     ML_CV_FOLDS: int = int(os.getenv("ML_CV_FOLDS", "3"))
     ML_SEASONALITY_MODE: str = os.getenv("ML_SEASONALITY_MODE", "additive")  # additive|multiplicative
