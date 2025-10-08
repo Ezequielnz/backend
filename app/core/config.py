@@ -69,6 +69,17 @@ class Settings(BaseSettings):
     # Embedding / LLM settings (used by Phase 3 LLM Reasoning Core)
     EMBEDDING_MODEL_NAME: str = os.getenv("EMBEDDING_MODEL_NAME", "sentence-transformers/all-MiniLM-L6-v2")
     EMBEDDING_DIM: int = int(os.getenv("EMBEDDING_DIM", "384"))
+    # LLM Configuration
+    LLM_DEFAULT_MODEL: str = os.getenv("LLM_DEFAULT_MODEL", "gpt-4")
+    LLM_FALLBACK_MODELS: str = os.getenv("LLM_FALLBACK_MODELS", "gpt-3.5-turbo")
+    LLM_MAX_COST_PER_REQUEST: float = float(os.getenv("LLM_MAX_COST_PER_REQUEST", "0.10"))
+    LLM_DAILY_BUDGET: float = float(os.getenv("LLM_DAILY_BUDGET", "50.00"))
+    LLM_CACHE_TTL: int = int(os.getenv("LLM_CACHE_TTL", "3600"))
+    LLM_CIRCUIT_BREAKER_WINDOW: int = int(os.getenv("LLM_CIRCUIT_BREAKER_WINDOW", "60"))
+    LLM_CIRCUIT_BREAKER_THRESHOLD: int = int(os.getenv("LLM_CIRCUIT_BREAKER_THRESHOLD", "5"))
+    LLM_CIRCUIT_BREAKER_OPEN_SECONDS: int = int(os.getenv("LLM_CIRCUIT_BREAKER_OPEN_SECONDS", "120"))
+    LLM_CONFIDENCE_THRESHOLD: float = float(os.getenv("LLM_CONFIDENCE_THRESHOLD", "0.8"))
+    LLM_HUMAN_REVIEW_THRESHOLD: float = float(os.getenv("LLM_HUMAN_REVIEW_THRESHOLD", "0.6"))
     # ML Tuning Flags
     ML_CV_FOLDS: int = int(os.getenv("ML_CV_FOLDS", "3"))
     ML_SEASONALITY_MODE: str = os.getenv("ML_SEASONALITY_MODE", "additive")  # additive|multiplicative

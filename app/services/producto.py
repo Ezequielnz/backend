@@ -27,8 +27,11 @@ def create(db: Session, *, obj_in: ProductoCreate) -> Producto:
     db_obj = Producto(
         nombre=obj_in.nombre,
         descripcion=obj_in.descripcion,
-        precio=obj_in.precio,
-        stock=obj_in.stock,
+        precio_compra=obj_in.precio_compra,
+        precio_venta=obj_in.precio_venta,
+        stock_actual=obj_in.stock_actual,
+        stock_minimo=obj_in.stock_minimo,
+        categoria_id=obj_in.categoria_id,
         codigo=obj_in.codigo,
         activo=obj_in.activo,
     )
@@ -52,6 +55,8 @@ def update(
 
 def remove(db: Session, *, producto_id: int) -> Producto:
     obj = db.query(Producto).get(producto_id)
+    if obj is None:
+        raise ValueError(f"Producto with id {producto_id} not found")
     db.delete(obj)
     db.commit()
-    return obj 
+    return obj

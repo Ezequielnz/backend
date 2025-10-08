@@ -82,14 +82,14 @@ class PIIHashingUtility:
                 re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'),
             ],
             PIIFieldType.PHONE: [
-                re.compile(r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b'),  # US format
-                re.compile(r'\b\d{2}[-.\s]?\d{4}[-.\s]?\d{4}\b'),  # Argentina format
-                re.compile(r'\b\d{4}[-.\s]?\d{4}\b'),  # Short format
+                re.compile(r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b'),  # US format: 555-123-4567
+                re.compile(r'\b\d{2}[-.\s]?\d{4}[-.\s]?\d{4}\b'),  # Argentina format: 11-1234-5678
+                re.compile(r'\b\d{4}[-.\s]\d{4}\b'),  # Short format with required separator: 1234-5678
             ],
             PIIFieldType.DOCUMENT: [
-                re.compile(r'\b\d{8}\b'),  # DNI Argentina
-                re.compile(r'\b\d{2}\.\d{3}\.\d{3}\b'),  # DNI with dots
-                re.compile(r'\b[A-Z]{2}\d{7}\b'),  # Passport-like
+                re.compile(r'\b\d{7,8}\b(?!\d)'),  # DNI Argentina (7-8 digits, not followed by more digits)
+                re.compile(r'\b\d{2}\.\d{3}\.\d{3}\b'),  # DNI with dots: 12.345.678
+                re.compile(r'\b[A-Z]{2}\d{7}\b'),  # Passport-like: AB1234567
             ],
             PIIFieldType.CREDIT_CARD: [
                 re.compile(r'\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b'),
@@ -104,10 +104,10 @@ class PIIHashingUtility:
             ],
             PIIFieldType.BANK_ACCOUNT: [
                 re.compile(r'\b\d{3}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{2}\b'),  # CBU Argentina
-                re.compile(r'\b\d{20}\b'),  # Account numbers
+                re.compile(r'\b\d{18,25}\b'),  # Account numbers (flexible length)
             ],
             PIIFieldType.LICENSE_NUMBER: [
-                re.compile(r'\b\d{8,12}\b'),  # Various license formats
+                re.compile(r'\b\d{8,12}\b(?!\d)'),  # Various license formats (not followed by more digits)
             ],
         }
 
@@ -274,6 +274,10 @@ class PIIHashingUtility:
                     sanitized = sanitized.replace(field['value'], '[PHONE_MASKED]')
                 elif field['type'] == 'document':
                     sanitized = sanitized.replace(field['value'], '[DOCUMENT_MASKED]')
+                elif field['type'] == 'credit_card':
+                    sanitized = sanitized.replace(field['value'], '[CREDIT_CARD_MASKED]')
+                elif field['type'] == 'bank_account':
+                    sanitized = sanitized.replace(field['value'], '[BANK_ACCOUNT_MASKED]')
                 else:
                     sanitized = sanitized.replace(field['value'], '[PII_MASKED]')
 

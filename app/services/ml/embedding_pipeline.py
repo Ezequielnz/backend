@@ -125,7 +125,7 @@ class EmbeddingPipeline:
             self._embedding_model = None
             raise
 
-    def _generate_embedding(self, text: str) -> List[float]:
+    def generate_embedding(self, text: str) -> List[float]:
         """
         Generate embedding vector for text.
 
@@ -134,7 +134,7 @@ class EmbeddingPipeline:
 
         Returns:
             Embedding vector as list of floats
-        
+
         Raises:
             RuntimeError: If embedding model is not initialized
             ValueError: If model type is not supported
@@ -229,7 +229,7 @@ class EmbeddingPipeline:
 
             # Step 3: Generate Embedding
             try:
-                embedding_vector = self._generate_embedding(pii_result.sanitized_content)
+                embedding_vector = self.generate_embedding(pii_result.sanitized_content)
             except Exception as e:
                 return EmbeddingResult(
                     success=False,
@@ -372,7 +372,7 @@ class EmbeddingPipeline:
             List of similar content results
         """
         # Generate embedding for query
-        query_embedding = self._generate_embedding(query)
+        query_embedding = self.generate_embedding(query)
 
         # Search vector database
         results = await self.vector_db.search_similar(
