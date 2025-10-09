@@ -2,6 +2,7 @@ from typing import Dict, Any, Optional, TypedDict
 from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordBearer, HTTPBearer, HTTPAuthorizationCredentials
 from app.db.supabase_client import get_supabase_client
+from app.db.session import get_db
 from app.types.auth import User
 import jwt
 
@@ -260,3 +261,11 @@ async def verify_basic_business_access(business_id: str, user: User) -> dict:
     Permite a todos los usuarios del negocio ver tareas, pero filtra según el rol.
     """
     return await verify_business_access(business_id, user)
+
+async def get_current_tenant_id(current_user: UserData = Depends(get_current_user)) -> str:
+    """
+    Get the current tenant ID from the authenticated user.
+    For now, return a default tenant ID.
+    """
+    # TODO: Implement proper tenant ID extraction from user context
+    return "default_tenant"
