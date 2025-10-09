@@ -8,7 +8,7 @@ import json
 from dateutil.relativedelta import relativedelta
 
 from app.types.auth import User
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user_from_request as get_current_user
 from app.db.supabase_client import get_supabase_client
 from app.schemas.finanzas import (
     CategoriaFinancieraCreate, CategoriaFinancieraUpdate, CategoriaFinanciera,

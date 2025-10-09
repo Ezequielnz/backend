@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request, Body
 from fastapi.responses import JSONResponse
 import logging
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user_from_request as get_current_user
 from app.dependencies import PermissionDependency
 from app.services.notification_service import NotificationConfigService, NotificationRuleType
 from app.schemas.tenant_settings import RubroEnum
@@ -86,7 +86,17 @@ async def get_notification_rules(
     """
     service = NotificationConfigService()
     
-    rules = await service.get_effective_rules(business_id)
+    logger.info(f"Calling get_effective_rules with business_id: {business_id}")
+
+    # Cast the bound (possibly decorated) method to an explicit async callable
+    # so the type-checker sees the correct signature (tenant_id: str) and stops
+    # reporting the spurious "missing self" / "missing tenant_id" issue.
+    from typing import Callable, Coroutine, Any, cast
+    typed_get_effective: Callable[[str], Coroutine[Any, Any, list]] = cast(
+        Callable[[str], Coroutine[Any, Any, list]],
+        service.get_effective_rules
+    )
+    rules = await typed_get_effective(business_id)
     
     if not include_inactive:
         rules = [r for r in rules if r.is_active]

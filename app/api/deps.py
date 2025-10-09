@@ -8,7 +8,7 @@ import jwt
 
 class UserData(TypedDict):
     id: str
-    email: str
+    email: Optional[str]
     rol: str
     activo: bool
 
@@ -138,7 +138,7 @@ async def get_current_user_with_access_check(request: Request) -> UserData:
 
 security = HTTPBearer()
 
-async def get_current_user(request: Request) -> User:
+async def get_current_user_from_request(request: Request) -> User:
     """Get current user from request state (set by auth middleware)"""
     user = getattr(request.state, "user", None)
     if not user:

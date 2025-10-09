@@ -2,7 +2,8 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from fastapi.responses import JSONResponse
 
-from app.api.deps import get_current_user, UserData
+from app.api.deps import get_current_user_from_request as get_current_user, get_current_tenant_id
+from app.types.auth import User
 from app.services.importacion_productos import ImportacionProductosService
 from app.schemas.importacion import (
     ImportacionResultado,
@@ -17,11 +18,12 @@ from app.dependencies import PermissionDependency
 router = APIRouter()
 
 @router.post("/upload", response_model=ImportacionResultado,
-             dependencies=[Depends(PermissionDependency("productos", "create"))])
+            dependencies=[Depends(PermissionDependency("productos", "create"))])
 async def upload_excel(
     file: UploadFile = File(...),
     sheet_name: Optional[str] = Form(None),
-    current_user: UserData = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    tenant_id: str = Depends(get_current_tenant_id)
 ):
     """
     Subir y procesar archivo Excel para importación de productos.
@@ -44,8 +46,8 @@ async def upload_excel(
     try:
         service = ImportacionProductosService()
         resultado = await service.procesar_archivo_excel(
-            content, 
-            current_user.negocio_id,
+            content,
+            tenant_id,
             sheet_name
         )
         return resultado
@@ -58,14 +60,15 @@ async def upload_excel(
 @router.get("/sheets/{session_id}")
 async def get_sheets(
     session_id: str,
-    current_user: UserData = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    tenant_id: str = Depends(get_current_tenant_id)
 ):
     """
     Obtener nombres de hojas del archivo Excel subido.
     """
     try:
         service = ImportacionProductosService()
-        sheets = await service.obtener_hojas_excel(session_id, current_user.negocio_id)
+        sheets = await service.obtener_hojas_excel(session_id, tenant_id)
         return {"sheets": sheets}
     except Exception as e:
         raise HTTPException(
@@ -76,14 +79,15 @@ async def get_sheets(
 @router.get("/preview/{session_id}", response_model=ResumenImportacion)
 async def get_preview(
     session_id: str,
-    current_user: UserData = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    tenant_id: str = Depends(get_current_tenant_id)
 ):
     """
     Obtener vista previa de los productos a importar.
     """
     try:
         service = ImportacionProductosService()
-        preview = await service.obtener_preview(session_id, current_user.negocio_id)
+        preview = await service.obtener_preview(session_id, tenant_id)
         return preview
     except Exception as e:
         raise HTTPException(
@@ -95,7 +99,8 @@ async def get_preview(
 async def update_mapping(
     session_id: str,
     mapping: dict,
-    current_user: UserData = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    tenant_id: str = Depends(get_current_tenant_id)
 ):
     """
     Actualizar el mapeo de columnas Excel a campos de producto.
@@ -104,7 +109,7 @@ async def update_mapping(
         service = ImportacionProductosService()
         resultado = await service.actualizar_mapeo(
             session_id, 
-            current_user.negocio_id, 
+            tenant_id, 
             mapping
         )
         return resultado
@@ -118,17 +123,20 @@ async def update_mapping(
 async def update_products(
     session_id: str,
     productos: List[ProductoImportacionUpdate],
-    current_user: UserData = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    tenant_id: str = Depends(get_current_tenant_id)
 ):
     """
     Actualizar productos antes de la importación final.
     """
     try:
         service = ImportacionProductosService()
+        # Convert Pydantic models to plain dicts because the service expects List[Dict[str, Any]]
+        productos_payload = [p.model_dump() for p in productos]
         resultado = await service.actualizar_productos_temporales(
             session_id,
-            current_user.negocio_id,
-            productos
+            tenant_id,
+            productos_payload
         )
         return resultado
     except Exception as e:
@@ -141,7 +149,8 @@ async def update_products(
 async def confirm_import(
     session_id: str,
     confirmacion: ConfirmacionImportacion,
-    current_user: UserData = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    tenant_id: str = Depends(get_current_tenant_id)
 ):
     """
     Confirmar e importar productos definitivamente.
@@ -150,7 +159,7 @@ async def confirm_import(
         service = ImportacionProductosService()
         resultado = await service.confirmar_importacion(
             session_id,
-            current_user.negocio_id,
+            tenant_id,
             confirmacion
         )
         return resultado
@@ -163,14 +172,15 @@ async def confirm_import(
 @router.delete("/cancel/{session_id}")
 async def cancel_import(
     session_id: str,
-    current_user: UserData = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    tenant_id: str = Depends(get_current_tenant_id)
 ):
     """
     Cancelar proceso de importación.
     """
     try:
         service = ImportacionProductosService()
-        await service.cancelar_importacion(session_id, current_user.negocio_id)
+        await service.cancelar_importacion(session_id, tenant_id)
         return {"message": "Importación cancelada exitosamente"}
     except Exception as e:
         raise HTTPException(

@@ -3,6 +3,7 @@ Decoradores para cachear funciones automáticamente
 """
 import functools
 import hashlib
+import inspect
 import json
 from typing import Callable, Protocol, ParamSpec, TypeVar, cast
 from app.core.cache_manager import cache_manager
@@ -46,7 +47,7 @@ def cached(
     namespace: str,
     ttl: int | None = None,
     key_func: Callable[..., str] | None = None,
-) -> Callable[[Callable[P, R]], CacheableFunction[P, R]]:
+) -> Callable[[Callable[P, R]], Callable[P, R]]:
     """
     Decorador para cachear resultados de funciones
     
@@ -56,34 +57,66 @@ def cached(
         key_func: Función personalizada para generar la clave de cache
     """
     def decorator(func: Callable[P, R]) -> CacheableFunction[P, R]:
-        @functools.wraps(func)
-        def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-            # Generar clave de cache
-            if key_func:
-                cache_key = key_func(*args, **kwargs)
-            else:
-                # Generar clave automática basada en argumentos (tipado explícito)
-                key_data: dict[str, object] = {
-                    'func': func.__name__,
-                    'args': cast(tuple[object, ...], args),
-                    'kwargs': cast(dict[str, object], dict(kwargs)),
-                }
-                key_str = json.dumps(key_data, sort_keys=True, default=str)
-                cache_key = hashlib.md5(key_str.encode()).hexdigest()
-            
-            # Intentar obtener del cache
-            cached_result = cache_manager.get(namespace, cache_key, ttl)
-            if cached_result is not None:
-                logger.debug(f"Cache hit para {func.__name__}: {cache_key}")
-                return cast(R, cached_result)
-            
-            # Ejecutar función y cachear resultado
-            result: R = func(*args, **kwargs)
-            if result is not None:
-                cache_manager.set(namespace, cache_key, result, ttl)
-                logger.debug(f"Cache set para {func.__name__}: {cache_key}")
-            
-            return result
+        if inspect.iscoroutinefunction(func):
+            @functools.wraps(func)
+            async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+                # Generar clave de cache
+                if key_func:
+                    cache_key = key_func(*args, **kwargs)
+                else:
+                    # Generar clave automática basada en argumentos (tipado explícito)
+                    key_data: dict[str, object] = {
+                        'func': func.__name__,
+                        'args': cast(tuple[object, ...], args),
+                        'kwargs': cast(dict[str, object], dict(kwargs)),
+                    }
+                    key_str = json.dumps(key_data, sort_keys=True, default=str)
+                    cache_key = hashlib.md5(key_str.encode()).hexdigest()
+
+                # Intentar obtener del cache
+                cached_result = cache_manager.get(namespace, cache_key, ttl)
+                if cached_result is not None:
+                    logger.debug(f"Cache hit para {func.__name__}: {cache_key}")
+                    return cast(R, cached_result)
+
+                # Ejecutar función y cachear resultado
+                result: R = await func(*args, **kwargs)
+                if result is not None:
+                    cache_manager.set(namespace, cache_key, result, ttl)
+                    logger.debug(f"Cache set para {func.__name__}: {cache_key}")
+
+                return result
+            wrapper = async_wrapper
+        else:
+            @functools.wraps(func)
+            def sync_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+                # Generar clave de cache
+                if key_func:
+                    cache_key = key_func(*args, **kwargs)
+                else:
+                    # Generar clave automática basada en argumentos (tipado explícito)
+                    key_data: dict[str, object] = {
+                        'func': func.__name__,
+                        'args': cast(tuple[object, ...], args),
+                        'kwargs': cast(dict[str, object], dict(kwargs)),
+                    }
+                    key_str = json.dumps(key_data, sort_keys=True, default=str)
+                    cache_key = hashlib.md5(key_str.encode()).hexdigest()
+
+                # Intentar obtener del cache
+                cached_result = cache_manager.get(namespace, cache_key, ttl)
+                if cached_result is not None:
+                    logger.debug(f"Cache hit para {func.__name__}: {cache_key}")
+                    return cast(R, cached_result)
+
+                # Ejecutar función y cachear resultado
+                result: R = func(*args, **kwargs)
+                if result is not None:
+                    cache_manager.set(namespace, cache_key, result, ttl)
+                    logger.debug(f"Cache set para {func.__name__}: {cache_key}")
+
+                return result
+            wrapper = sync_wrapper
         
         # Agregar método para invalidar cache
         def invalidate_cache(*args: P.args, **kwargs: P.kwargs) -> None:
@@ -108,7 +141,7 @@ def cached(
     
     return decorator
 
-def cache_ml_features(ttl: int = 3600) -> Callable[[Callable[P, R]], CacheableFunction[P, R]]:
+def cache_ml_features(ttl: int = 3600) -> Callable[[Callable[P, R]], Callable[P, R]]:
     """Decorador específico para features ML"""
     def key_func(*args: object, **kwargs: object) -> str:
         business_id = _extract_param(args, kwargs, 'business_id', 0, 1)
@@ -116,7 +149,7 @@ def cache_ml_features(ttl: int = 3600) -> Callable[[Callable[P, R]], CacheableFu
     
     return cached('ml_features', ttl, key_func)
 
-def cache_ml_predictions(ttl: int = 1800) -> Callable[[Callable[P, R]], CacheableFunction[P, R]]:  # 30 minutos
+def cache_ml_predictions(ttl: int = 1800) -> Callable[[Callable[P, R]], Callable[P, R]]:  # 30 minutos
     """Decorador específico para predicciones ML"""
     def key_func(*args: object, **kwargs: object) -> str:
         business_id = _extract_param(args, kwargs, 'business_id', 0, 1)
@@ -125,15 +158,17 @@ def cache_ml_predictions(ttl: int = 1800) -> Callable[[Callable[P, R]], Cacheabl
     
     return cached('ml_predictions', ttl, key_func)
 
-def cache_notification_rules(ttl: int = 600) -> Callable[[Callable[P, R]], CacheableFunction[P, R]]:  # 10 minutos
+def cache_notification_rules(ttl: int = 600) -> Callable[[Callable[P, R]], Callable[P, R]]:  # 10 minutos
     """Decorador específico para reglas de notificación"""
     def key_func(*args: object, **kwargs: object) -> str:
-        business_id = _extract_param(args, kwargs, 'business_id', 0, 1)
-        return f"rules_{business_id}"
-    
+        # For NotificationConfigService.get_effective_rules(self, tenant_id: str)
+        # args[0] is self, args[1] is tenant_id
+        tenant_id = args[1] if len(args) > 1 else "unknown"
+        return f"rules_{tenant_id}"
+
     return cached('notification_rules', ttl, key_func)
 
-def cache_business_config(ttl: int = 1800) -> Callable[[Callable[P, R]], CacheableFunction[P, R]]:  # 30 minutos
+def cache_business_config(ttl: int = 1800) -> Callable[[Callable[P, R]], Callable[P, R]]:  # 30 minutos
     """Decorador específico para configuración de negocio"""
     def key_func(*args: object, **kwargs: object) -> str:
         business_id = _extract_param(args, kwargs, 'business_id', 0, 1)

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from app.db.supabase_client import get_supabase_client
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user_from_request as get_current_user
 from typing import Dict, Any
 from pydantic import BaseModel
 

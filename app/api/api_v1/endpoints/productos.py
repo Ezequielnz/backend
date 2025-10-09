@@ -2,11 +2,12 @@ from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Response, Query
 from pydantic import BaseModel, ValidationError
 from app.types.auth import User
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user_from_request as get_current_user
 from app.db.supabase_client import get_supabase_client
 from app.schemas.producto import ProductoCreate, ProductoUpdate, Producto
 from app.dependencies import PermissionDependency
 import logging
+import datetime
 
 router = APIRouter()
 
@@ -55,21 +56,20 @@ async def read_products(
                 # Handle datetime fields properly
                 if item.get('creado_en') and isinstance(item['creado_en'], str):
                     # If it's a string, try to parse it
-                    from datetime import datetime
                     try:
-                        item['creado_en'] = datetime.fromisoformat(item['creado_en'].replace('Z', '+00:00'))
+                        item['creado_en'] = datetime.datetime.fromisoformat(item['creado_en'].replace('Z', '+00:00'))
                     except ValueError:
                         logger.warning(f"Invalid creado_en format for product {item.get('id')}: {item.get('creado_en')}")
                         # Set a default value
-                        item['creado_en'] = datetime.now()
+                        item['creado_en'] = datetime.datetime.now()
                 
                 if item.get('actualizado_en') and isinstance(item['actualizado_en'], str):
                     try:
-                        item['actualizado_en'] = datetime.fromisoformat(item['actualizado_en'].replace('Z', '+00:00'))
+                        item['actualizado_en'] = datetime.datetime.fromisoformat(item['actualizado_en'].replace('Z', '+00:00'))
                     except ValueError:
                         logger.warning(f"Invalid actualizado_en format for product {item.get('id')}: {item.get('actualizado_en')}")
                         # Set a default value
-                        item['actualizado_en'] = datetime.now()
+                        item['actualizado_en'] = datetime.datetime.now()
                 
                 # Ensure required fields have default values
                 if item.get('activo') is None:
