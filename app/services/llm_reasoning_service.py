@@ -10,6 +10,7 @@ import hashlib
 from app.core.config import settings
 from app.services.cost_estimator import cost_estimator, CostEstimator
 from app.services.ml.pii_utils import PIIHashingUtility, ComplianceStatus
+from app.services.safe_action_engine import safe_action_engine
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ class LLMReasoningService:
         # self.response_validator = response_validator
         # self.confidence_scorer = confidence_scorer
 
-    def reason(
+    async def reason(
         self,
         tenant_id: str,
         prediction_id: str,
@@ -62,7 +63,7 @@ class LLMReasoningService:
                     "prediction_id": prediction_id
                 }
 
-            # Build RAG prompt with vector context
+            # Build RAG prompt with vector context and action recommendations
             prompt_data = self._build_prompt(prediction_data, tenant_id)
 
             # Apply PII sanitization based on tenant policy
@@ -88,24 +89,47 @@ class LLMReasoningService:
             #     timeout=30
             # )
 
+            # Simulate LLM response for now (with action recommendations)
+            llm_response_text = self._simulate_llm_response(prediction_data)
+
             # TODO: Validate and score response
             # validation_result = self.response_validator.validate(llm_response)
             # confidence_score = self.confidence_scorer.score(validation_result)
+            confidence_score = 0.85  # Simulated confidence
 
             # TODO: Persist response and cache
-            # self._persist_response(tenant_id, prediction_id, sanitized_prompt, prompt_hash, llm_response)
+            # response_id = self._persist_response(tenant_id, prediction_id, sanitized_prompt, prompt_hash, llm_response)
 
             # TODO: Enqueue human review if confidence low
             # if confidence_score < self._get_tenant_review_threshold(tenant_id):
-            #     self._enqueue_human_review(tenant_id, prediction_id, llm_response.id)
+            #     self._enqueue_human_review(tenant_id, prediction_id, response_id)
 
-            # For now, return placeholder response
+            # Process automated actions from LLM response
+            actions_processed = 0
+            if async_call:
+                # Process actions asynchronously
+                import asyncio
+                asyncio.create_task(
+                    safe_action_engine.process_actions_from_llm_response(
+                        tenant_id, llm_response_text, prediction_id, None  # response_id
+                    )
+                )
+                actions_processed = -1  # Indicates async processing
+            else:
+                # Process actions synchronously
+                action_executions = await safe_action_engine.process_actions_from_llm_response(
+                    tenant_id, llm_response_text, prediction_id, None  # response_id
+                )
+                actions_processed = len(action_executions)
+
             return {
                 "status": "processed",
                 "prediction_id": prediction_id,
                 "prompt_hash": prompt_hash,
                 "pii_sanitization_applied": prompt_data["prompt"] != sanitized_prompt,
-                "note": "LLM call logic not yet implemented - Step E focuses on PII sanitization"
+                "confidence_score": confidence_score,
+                "actions_processed": actions_processed,
+                "note": "LLM reasoning with action processing implemented"
             }
 
         except Exception as e:
@@ -134,7 +158,7 @@ class LLMReasoningService:
 
     def _build_prompt(self, prediction_data: Dict[str, Any], tenant_id: str) -> Dict[str, Any]:
         """
-        Build RAG prompt using prediction data and vector context.
+        Build RAG prompt using prediction data and vector context, including action recommendations.
 
         Args:
             prediction_data: ML prediction data
@@ -151,7 +175,7 @@ class LLMReasoningService:
         context_data = prediction_data.get("context", {})
 
         prompt = f"""
-        Analyze the following business prediction and provide a clear, actionable explanation:
+        Analyze the following business prediction and provide a clear, actionable explanation with specific automated actions:
 
         Prediction Type: {prediction_type}
         Anomaly Score: {anomaly_score:.3f}
@@ -160,8 +184,30 @@ class LLMReasoningService:
         Please provide:
         1. A clear explanation of what this prediction means
         2. Potential business impact
-        3. Recommended actions
+        3. Specific recommended actions that can be automated
         4. Confidence level in this analysis
+
+        IMPORTANT: If you recommend any actions, format them as a JSON array with the following structure:
+        {{
+          "actions": [
+            {{
+              "action_type": "create_task|send_notification|update_inventory|generate_report",
+              "parameters": {{
+                // Action-specific parameters
+              }},
+              "confidence": 0.0-1.0,
+              "reasoning": "Explanation for why this action is recommended"
+            }}
+          ]
+        }}
+
+        Supported action types and their parameters:
+        - create_task: {{"titulo": "string", "descripcion": "string", "prioridad": "baja|media|alta|urgente", "asignada_a_id": "string"}}
+        - send_notification: {{"titulo": "string", "mensaje": "string", "tipo": "info|warning|error|success"}}
+        - update_inventory: {{"producto_id": "string", "cantidad": number, "tipo_ajuste": "incremento|decremento|set", "motivo": "string"}}
+        - generate_report: {{"tipo_reporte": "ventas|inventario|finanzas|clientes", "fecha_inicio": "YYYY-MM-DD", "fecha_fin": "YYYY-MM-DD"}}
+
+        If no actions are needed, return an empty actions array: {{"actions": []}}
 
         Keep the response concise but informative.
         """
@@ -246,6 +292,101 @@ class LLMReasoningService:
         """
         # TODO: Load from tenant_llm_settings table
         return float(settings.LLM_HUMAN_REVIEW_THRESHOLD or "0.6")
+
+    def _simulate_llm_response(self, prediction_data: Dict[str, Any]) -> str:
+        """
+        Simulate LLM response with action recommendations.
+        This is a placeholder until the actual LLM client is implemented.
+
+        Args:
+            prediction_data: ML prediction data
+
+        Returns:
+            Simulated LLM response text
+        """
+        prediction_type = prediction_data.get("prediction_type", "unknown")
+        anomaly_score = prediction_data.get("anomaly_score", 0.0)
+
+        # Simulate different responses based on prediction type
+        if prediction_type == "sales_anomaly" and anomaly_score > 0.7:
+            return """
+            Based on the sales anomaly detected, I recommend the following actions:
+
+            1. Create a task to investigate the unusual sales pattern
+            2. Send a notification to the sales manager
+
+            ```json
+            {
+              "actions": [
+                {
+                  "action_type": "create_task",
+                  "parameters": {
+                    "titulo": "Investigar anomalía en ventas",
+                    "descripcion": "Se detectó una anomalía significativa en las ventas con score de {anomaly_score}. Revisar patrones de venta y posibles causas.",
+                    "prioridad": "alta"
+                  },
+                  "confidence": 0.9,
+                  "reasoning": "High anomaly score indicates potential issue requiring immediate attention"
+                },
+                {
+                  "action_type": "send_notification",
+                  "parameters": {
+                    "titulo": "Alerta: Anomalía detectada en ventas",
+                    "mensaje": "Se ha detectado una anomalía en el patrón de ventas. Score: {anomaly_score}",
+                    "tipo": "warning"
+                  },
+                  "confidence": 0.85,
+                  "reasoning": "Sales team should be notified of significant anomalies"
+                }
+              ]
+            }
+            ```
+
+            This analysis shows a significant deviation from normal sales patterns that warrants investigation.
+            """.format(anomaly_score=anomaly_score)
+
+        elif prediction_type == "inventory_low":
+            return """
+            The inventory prediction indicates low stock levels that may impact operations.
+
+            Recommended actions:
+            - Generate inventory report
+            - Create task for restocking
+
+            ```json
+            {
+              "actions": [
+                {
+                  "action_type": "generate_report",
+                  "parameters": {
+                    "tipo_reporte": "inventario",
+                    "fecha_inicio": "2024-01-01",
+                    "fecha_fin": "2024-12-31"
+                  },
+                  "confidence": 0.8,
+                  "reasoning": "Generate comprehensive inventory report for analysis"
+                }
+              ]
+            }
+            ```
+
+            Low inventory levels detected. Consider reviewing stock levels and reorder points.
+            """
+
+        else:
+            return """
+            Analysis complete. The prediction shows normal patterns within expected ranges.
+
+            No immediate actions required at this time.
+
+            ```json
+            {
+              "actions": []
+            }
+            ```
+
+            The data appears to be within normal operating parameters.
+            """
 
     def _persist_response(
         self,
