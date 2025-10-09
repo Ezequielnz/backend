@@ -1,7 +1,8 @@
 """
-Action System API endpoints - Manage automated actions, approvals, and executions.
+Action System API endpoints - Manage automated actions,
+approvals, and executions.
 """
-from typing import List, Optional
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
@@ -23,8 +24,12 @@ router = APIRouter()
 @router.get("/executions", response_model=ActionExecutionListResponse)
 async def get_action_executions(
     tenant_id: str = Depends(deps.get_current_tenant_id),
-    status: Optional[str] = Query(None, description="Filter by execution status"),
-    action_type: Optional[str] = Query(None, description="Filter by action type"),
+    status: Optional[str] = Query(
+        None, description="Filter by execution status"
+    ),
+    action_type: Optional[str] = Query(
+        None, description="Filter by action type"
+    ),
     limit: int = Query(50, description="Maximum number of results"),
     offset: int = Query(0, description="Pagination offset"),
     current_user: dict = Depends(deps.get_current_user),
@@ -43,10 +48,14 @@ async def get_action_executions(
             offset=offset
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch action executions: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch action executions: {str(e)}"
+        )
 
 
-@router.get("/executions/{execution_id}", response_model=ActionExecutionResponse)
+@router.get("/executions/{execution_id}",
+            response_model=ActionExecutionResponse)
 async def get_action_execution(
     execution_id: str,
     tenant_id: str = Depends(deps.get_current_tenant_id),
@@ -57,18 +66,27 @@ async def get_action_execution(
     Get details of a specific action execution.
     """
     try:
-        execution = await safe_action_engine._get_action_execution(execution_id)
+        execution = await safe_action_engine._get_action_execution(
+            execution_id
+        )
         if not execution:
-            raise HTTPException(status_code=404, detail="Action execution not found")
+            raise HTTPException(
+                status_code=404, detail="Action execution not found"
+            )
 
         if execution.tenant_id != tenant_id:
-            raise HTTPException(status_code=403, detail="Access denied")
+            raise HTTPException(
+                status_code=403, detail="Access denied"
+            )
 
         return ActionExecutionResponse.from_execution(execution)
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch action execution: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch action execution: {str(e)}"
+        )
 
 
 @router.post("/executions/{execution_id}/approve")
@@ -90,13 +108,21 @@ async def approve_action(
         )
 
         if not success:
-            raise HTTPException(status_code=400, detail="Failed to approve action")
+            raise HTTPException(
+                status_code=400, detail="Failed to approve action"
+            )
 
-        return {"message": "Action approved successfully", "execution_id": execution_id}
+        return {
+            "message": "Action approved successfully",
+            "execution_id": execution_id
+        }
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to approve action: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to approve action: {str(e)}"
+        )
 
 
 @router.post("/executions/{execution_id}/reject")
@@ -118,19 +144,29 @@ async def reject_action(
         )
 
         if not success:
-            raise HTTPException(status_code=400, detail="Failed to reject action")
+            raise HTTPException(
+                status_code=400, detail="Failed to reject action"
+            )
 
-        return {"message": "Action rejected successfully", "execution_id": execution_id}
+        return {
+            "message": "Action rejected successfully",
+            "execution_id": execution_id
+        }
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to reject action: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to reject action: {str(e)}"
+        )
 
 
 @router.post("/executions/{execution_id}/rollback")
 async def rollback_action(
     execution_id: str,
-    rollback_reason: str = Query(..., description="Reason for rollback"),
+    rollback_reason: str = Query(
+        ..., description="Reason for rollback"
+    ),
     tenant_id: str = Depends(deps.get_current_tenant_id),
     current_user: dict = Depends(deps.get_current_user),
     db: Session = Depends(deps.get_db)
@@ -145,19 +181,30 @@ async def rollback_action(
         )
 
         if not success:
-            raise HTTPException(status_code=400, detail="Failed to rollback action or rollback not supported")
+            raise HTTPException(
+                status_code=400,
+                detail="Failed to rollback action or rollback not supported"
+            )
 
-        return {"message": "Action rolled back successfully", "execution_id": execution_id}
+        return {
+            "message": "Action rolled back successfully",
+            "execution_id": execution_id
+        }
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to rollback action: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to rollback action: {str(e)}"
+        )
 
 
 @router.get("/approvals", response_model=ActionApprovalListResponse)
 async def get_pending_approvals(
     tenant_id: str = Depends(deps.get_current_tenant_id),
-    assigned_to_me: bool = Query(False, description="Only show approvals assigned to current user"),
+    assigned_to_me: bool = Query(
+        False, description="Only show approvals assigned to current user"
+    ),
     limit: int = Query(50, description="Maximum number of results"),
     offset: int = Query(0, description="Pagination offset"),
     current_user: dict = Depends(deps.get_current_user),
@@ -176,7 +223,10 @@ async def get_pending_approvals(
             offset=offset
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch pending approvals: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch pending approvals: {str(e)}"
+        )
 
 
 @router.get("/approvals/{approval_id}", response_model=ActionApprovalResponse)
@@ -191,11 +241,16 @@ async def get_approval_details(
     """
     try:
         # TODO: Implement database query for approval details
-        raise HTTPException(status_code=404, detail="Approval not found")
+        raise HTTPException(
+            status_code=404, detail="Approval not found"
+        )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch approval details: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch approval details: {str(e)}"
+        )
 
 
 @router.get("/settings", response_model=TenantActionSettingsResponse)
@@ -208,10 +263,15 @@ async def get_tenant_action_settings(
     Get action automation settings for the tenant.
     """
     try:
-        settings = await safe_action_engine._get_tenant_action_settings(tenant_id)
+        settings = await safe_action_engine._get_tenant_action_settings(
+            tenant_id
+        )
         return TenantActionSettingsResponse(**settings)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch tenant settings: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch tenant settings: {str(e)}"
+        )
 
 
 @router.put("/settings", response_model=TenantActionSettingsResponse)
@@ -228,18 +288,23 @@ async def update_tenant_action_settings(
     try:
         # Check admin permissions
         if not current_user.get('is_admin', False):
-            raise HTTPException(status_code=403, detail="Admin permissions required")
+            raise HTTPException(
+                status_code=403, detail="Admin permissions required"
+            )
 
         # TODO: Implement settings update in database
         # For now, return the input as if updated
-        updated_settings = settings_update.dict()
+        updated_settings = settings_update.model_dump()
         updated_settings['tenant_id'] = tenant_id
 
         return TenantActionSettingsResponse(**updated_settings)
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to update tenant settings: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update tenant settings: {str(e)}"
+        )
 
 
 @router.get("/definitions")
@@ -269,7 +334,10 @@ async def get_action_definitions(
                     "properties": {
                         "titulo": {"type": "string", "maxLength": 200},
                         "descripcion": {"type": "string", "maxLength": 1000},
-                        "prioridad": {"type": "string", "enum": ["baja", "media", "alta", "urgente"]}
+                        "prioridad": {
+                            "type": "string",
+                            "enum": ["baja", "media", "alta", "urgente"]
+                        }
                     },
                     "required": ["titulo"]
                 }
@@ -288,7 +356,10 @@ async def get_action_definitions(
                     "properties": {
                         "titulo": {"type": "string", "maxLength": 200},
                         "mensaje": {"type": "string", "maxLength": 1000},
-                        "tipo": {"type": "string", "enum": ["info", "warning", "error", "success"]}
+                        "tipo": {
+                            "type": "string",
+                            "enum": ["info", "warning", "error", "success"]
+                        }
                     },
                     "required": ["titulo", "mensaje"]
                 }
@@ -297,7 +368,10 @@ async def get_action_definitions(
 
         return {"definitions": definitions}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch action definitions: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch action definitions: {str(e)}"
+        )
 
 
 @router.post("/executions/{execution_id}/execute")
@@ -311,13 +385,23 @@ async def execute_approved_action(
     Manually trigger execution of an approved action.
     """
     try:
-        success = await safe_action_engine.execute_approved_action(execution_id)
+        success = await safe_action_engine.execute_approved_action(
+            execution_id
+        )
 
         if not success:
-            raise HTTPException(status_code=400, detail="Failed to execute action")
+            raise HTTPException(
+                status_code=400, detail="Failed to execute action"
+            )
 
-        return {"message": "Action executed successfully", "execution_id": execution_id}
+        return {
+            "message": "Action executed successfully",
+            "execution_id": execution_id
+        }
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to execute action: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to execute action: {str(e)}"
+        )
