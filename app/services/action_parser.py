@@ -47,12 +47,47 @@ class ActionParserService:
     """
 
     def __init__(self):
+        # Use canonical string keys to avoid Enum/string mismatches and support variant inputs
         self.supported_actions = {
-            ActionType.CREATE_TASK: self._validate_create_task,
-            ActionType.SEND_NOTIFICATION: self._validate_send_notification,
-            ActionType.UPDATE_INVENTORY: self._validate_update_inventory,
-            ActionType.GENERATE_REPORT: self._validate_generate_report
+            "create_task": self._validate_create_task,
+            "send_notification": self._validate_send_notification,
+            "update_inventory": self._validate_update_inventory,
+            "generate_report": self._validate_generate_report,
         }
+
+    def _normalize_action_type(self, atype: Optional[str]) -> Optional[str]:
+        """
+        Normalize action type variants to canonical keys expected by the engine.
+
+        Accepts variants like:
+          - create_task / createtask / create-task
+          - send_notification / sendnotification / send-notification
+          - update_inventory / updateinventory / update-inventory
+          - generate_report / generatereport / generate-report
+        """
+        if not atype:
+            return None
+        s = atype.strip().lower().replace("-", "_").replace(" ", "_")
+        variants = {
+            "create_task": "create_task",
+            "createtask": "create_task",
+            "create-task": "create_task",
+            "send_notification": "send_notification",
+            "sendnotification": "send_notification",
+            "send-notification": "send_notification",
+            "update_inventory": "update_inventory",
+            "updateinventory": "update_inventory",
+            "update-inventory": "update_inventory",
+            "generate_report": "generate_report",
+            "generatereport": "generate_report",
+            "generate-report": "generate_report",
+        }
+        # Return mapped canonical or the original if already canonical
+        if s in variants:
+            return variants[s]
+        if s in variants.values():
+            return s
+        return None
 
     def parse_actions_from_response(self, llm_response: str, tenant_id: str) -> List[ParsedAction]:
         """
@@ -136,12 +171,10 @@ class ActionParserService:
     def _parse_single_action_json(self, action_data: Dict[str, Any]) -> Optional[ParsedAction]:
         """Parse a single action from JSON data"""
         try:
-            action_type = action_data.get('action_type') or action_data.get('type')
+            action_type_raw = action_data.get('action_type') or action_data.get('type')
+            action_type = self._normalize_action_type(str(action_type_raw) if action_type_raw else "")
             if not action_type:
                 return None
-
-            # Normalize action type
-            action_type = action_type.lower().replace('_', '')
 
             parameters = action_data.get('parameters', action_data.get('params', {}))
             confidence = action_data.get('confidence', 1.0)
@@ -220,14 +253,15 @@ class ActionParserService:
             True if action is valid
         """
         try:
-            # Check if action type is supported
-            if action.action_type not in self.supported_actions:
+            # Normalize to canonical key and check support
+            canonical = self._normalize_action_type(action.action_type)
+            if not canonical or canonical not in self.supported_actions:
                 logger.warning(f"Unsupported action type: {action.action_type}")
                 return False
 
             # Validate action parameters using type-specific validator
-            validator = self.supported_actions.get(ActionType(action.action_type))
-            return validator(action.parameters)
+            validator = self.supported_actions[canonical]
+            return bool(validator(action.parameters))
 
         except Exception as e:
             logger.error(f"Action validation failed: {e}")

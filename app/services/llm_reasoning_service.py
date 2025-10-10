@@ -343,7 +343,7 @@ class LLMReasoningService:
             ```
 
             This analysis shows a significant deviation from normal sales patterns that warrants investigation.
-            """.format(anomaly_score=anomaly_score)
+            """.replace("{anomaly_score}", str(anomaly_score))
 
         elif prediction_type == "inventory_low":
             return """

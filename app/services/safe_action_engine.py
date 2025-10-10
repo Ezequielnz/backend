@@ -7,11 +7,13 @@ from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 from enum import Enum
+from uuid import uuid4
 
 from app.core.config import settings
 from app.services.action_parser import ParsedAction, action_parser_service
 from app.db.supabase_client import get_supabase_client
 from app.core.cache_manager import cache_manager
+from uuid import UUID, uuid4
 
 logger = logging.getLogger(__name__)
 
@@ -319,12 +321,21 @@ class SafeActionEngine:
         self, tenant_id: str, action: ParsedAction, prediction_id: Optional[str], llm_response_id: Optional[str]
     ) -> ActionExecution:
         """Create action execution record in database"""
-        execution_id = f"exec_{tenant_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{hash(action.action_type) % 1000}"
+        # Use a proper UUID to satisfy DB constraint (id UUID PRIMARY KEY)
+        execution_id = str(uuid4())
+
+        # Normalize prediction_id to UUID or set None if not a valid UUID
+        pred_uuid = None
+        if prediction_id:
+            try:
+                pred_uuid = str(UUID(str(prediction_id)))
+            except Exception:
+                pred_uuid = None
 
         execution_data = {
             'id': execution_id,
             'tenant_id': tenant_id,
-            'prediction_id': prediction_id,
+            'prediction_id': pred_uuid,
             'llm_response_id': llm_response_id,
             'action_definition_id': await self._get_action_definition_id(action.action_type),
             'action_type': action.action_type,
@@ -338,7 +349,7 @@ class SafeActionEngine:
 
         # Insert into database
         table = self.supabase.table('action_executions')
-        result = table.insert(execution_data).execute()
+        _ = table.insert(execution_data).execute()
 
         return ActionExecution(
             id=execution_id,
