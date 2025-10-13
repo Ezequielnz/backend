@@ -2,7 +2,7 @@ from typing import Any, List
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Body
 from app.types.auth import User
 from app.api.deps import get_current_user
-from app.db.supabase_client import get_supabase_client # Revertir a cliente base
+from app.db.supabase_client import get_supabase_user_client, get_supabase_anon_client
 from app.schemas.business import BusinessCreate, Business
 from app.schemas.invitacion import InvitacionCreate, InvitacionResponse, UsuarioNegocioUpdate
 from supabase.lib.client_options import ClientOptions
@@ -22,7 +22,7 @@ async def create_business(business_data: BusinessCreate, request: Request) -> An
         )
 
     # Usar el cliente Supabase base - la autenticación para RLS debe venir del token en la cabecera
-    supabase = get_supabase_client()
+    supabase = get_supabase_user_client(request.headers.get("Authorization", ""))
 
     try:
         # 1. Create the new business in the 'negocios' table
@@ -214,7 +214,7 @@ async def get_businesses(request: Request) -> Any:
             detail="User not authenticated.",
         )
 
-    supabase = get_supabase_client()
+    supabase = get_supabase_user_client(request.headers.get("Authorization", ""))
 
     try:
         print(f"🔍 Getting businesses for user: {user.id}")
@@ -294,7 +294,7 @@ async def get_business_by_id(business_id: str, request: Request) -> Any:
             detail="User not authenticated.",
         )
 
-    supabase = get_supabase_client()
+    supabase = get_supabase_user_client(request.headers.get("Authorization", ""))
 
     try:
         # Verify that the user has access to this business through usuarios_negocios
@@ -352,7 +352,7 @@ async def delete_business(business_id: str, request: Request) -> Any:
             detail="User not authenticated.",
         )
 
-    supabase = get_supabase_client()
+    supabase = get_supabase_user_client(request.headers.get("Authorization", ""))
 
     try:
         # First, verify that the user has admin access to this business
@@ -447,7 +447,7 @@ async def delete_business(business_id: str, request: Request) -> Any:
 @router.get("/debug/{user_id}")
 async def debug_user_businesses(user_id: str, request: Request) -> Any:
     """Debug endpoint to see all data for a user."""
-    supabase = get_supabase_client()
+    supabase = get_supabase_user_client(request.headers.get("Authorization", ""))
     
     try:
         print(f"🐛 DEBUG: Checking data for user {user_id}")
@@ -497,7 +497,7 @@ async def debug_user_businesses(user_id: str, request: Request) -> Any:
 @router.post("/repair/{user_id}")
 async def repair_user_businesses(user_id: str, request: Request) -> Any:
     """Repair missing user-business relationships for orphaned businesses."""
-    supabase = get_supabase_client()
+    supabase = get_supabase_user_client(request.headers.get("Authorization", ""))
     
     try:
         print(f"🔧 REPAIR: Starting repair for user {user_id}")
@@ -570,7 +570,7 @@ async def listar_usuarios_pendientes(business_id: str, request: Request) -> Any:
     if not user or not hasattr(user, 'id'):
         raise HTTPException(status_code=401, detail="User not authenticated.")
     
-    supabase = get_supabase_client()
+    supabase = get_supabase_user_client(request.headers.get("Authorization", ""))
     
     try:
         # Verificar que el usuario es admin del negocio O el creador del negocio
@@ -646,7 +646,7 @@ async def aprobar_usuario_negocio(
         
         print(f"Usuario autenticado: {user.id}")
         
-        supabase = get_supabase_client()
+        supabase = get_supabase_user_client(request.headers.get("Authorization", ""))
         
         # Verificar que el usuario es el creador del negocio (solo él puede aprobar)
         print("Verificando permisos del creador del negocio...")
@@ -827,7 +827,7 @@ async def rechazar_usuario_pendiente(business_id: str, usuario_negocio_id: str, 
     user = getattr(request.state, "user", None)
     if not user or not hasattr(user, 'id'):
         raise HTTPException(status_code=401, detail="User not authenticated.")
-    supabase = get_supabase_client()
+    supabase = get_supabase_user_client(request.headers.get("Authorization", ""))
     # Verificar que el usuario es admin del negocio
     admin_check = supabase.table("usuarios_negocios").select("rol").eq("usuario_id", user.id).eq("negocio_id", business_id).execute()
     if not admin_check.data or admin_check.data[0].get("rol") != "admin":
@@ -838,7 +838,7 @@ async def rechazar_usuario_pendiente(business_id: str, usuario_negocio_id: str, 
 
 @router.get("/public/buscar-negocios")
 async def buscar_negocios(nombre: str = "", id: str = "") -> Any:
-    supabase = get_supabase_client()
+    supabase = get_supabase_anon_client()
     query = supabase.table("negocios").select("id, nombre")
     if nombre:
         query = query.ilike("nombre", f"%{nombre}%")
@@ -853,7 +853,7 @@ async def obtener_notificaciones_negocio(business_id: str, request: Request) -> 
     user = getattr(request.state, "user", None)
     if not user or not hasattr(user, 'id'):
         raise HTTPException(status_code=401, detail="User not authenticated.")
-    supabase = get_supabase_client()
+    supabase = get_supabase_user_client(request.headers.get("Authorization", ""))
     
     # Verificar que el usuario tiene acceso al negocio
     access_check = supabase.table("usuarios_negocios").select("rol").eq("usuario_id", user.id).eq("negocio_id", business_id).execute()
@@ -906,7 +906,7 @@ async def listar_usuarios_negocio(business_id: str, request: Request) -> Any:
     if not user or not hasattr(user, 'id'):
         raise HTTPException(status_code=401, detail="User not authenticated.")
     
-    supabase = get_supabase_client()
+    supabase = get_supabase_user_client(request.headers.get("Authorization", ""))
     
     try:
         # Verificar que el usuario tiene acceso al negocio
@@ -983,7 +983,7 @@ async def actualizar_permisos_usuario(
     if not user or not hasattr(user, 'id'):
         raise HTTPException(status_code=401, detail="User not authenticated.")
     
-    supabase = get_supabase_client()
+    supabase = get_supabase_user_client(request.headers.get("Authorization", ""))
     
     # Verificar que el usuario es admin del negocio
     admin_check = supabase.table("usuarios_negocios").select("rol").eq("usuario_id", user.id).eq("negocio_id", business_id).execute()
@@ -1041,7 +1041,7 @@ async def remover_usuario_negocio(business_id: str, usuario_negocio_id: str, req
     if not user or not hasattr(user, 'id'):
         raise HTTPException(status_code=401, detail="User not authenticated.")
     
-    supabase = get_supabase_client()
+    supabase = get_supabase_user_client(request.headers.get("Authorization", ""))
     
     # Verificar que el usuario es admin del negocio
     admin_check = supabase.table("usuarios_negocios").select("rol").eq("usuario_id", user.id).eq("negocio_id", business_id).execute()
@@ -1081,7 +1081,7 @@ async def invitar_usuario_negocio(
     if not user or not hasattr(user, 'id'):
         raise HTTPException(status_code=401, detail="User not authenticated.")
     
-    supabase = get_supabase_client()
+    supabase = get_supabase_user_client(request.headers.get("Authorization", ""))
     
     try:
         # Verificar que el usuario es admin del negocio
@@ -1192,7 +1192,7 @@ async def actualizar_estado_usuario_negocio(
     if not user or not hasattr(user, 'id'):
         raise HTTPException(status_code=401, detail="User not authenticated.")
     
-    supabase = get_supabase_client()
+    supabase = get_supabase_user_client(request.headers.get("Authorization", ""))
     
     try:
         # Obtener información de la relación usuario-negocio

@@ -52,9 +52,9 @@ ALTER TABLE venta_detalle ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Users can view sales from their businesses" ON ventas
     FOR SELECT USING (
         negocio_id IN (
-            SELECT nu.negocio_id 
-            FROM negocio_usuarios nu 
-            WHERE nu.usuario_id = auth.uid()
+            SELECT un.negocio_id
+            FROM usuarios_negocios un
+            WHERE un.usuario_id = auth.uid()
         )
     );
 
@@ -62,9 +62,9 @@ CREATE POLICY "Users can view sales from their businesses" ON ventas
 CREATE POLICY "Users can create sales in their businesses" ON ventas
     FOR INSERT WITH CHECK (
         negocio_id IN (
-            SELECT nu.negocio_id 
-            FROM negocio_usuarios nu 
-            WHERE nu.usuario_id = auth.uid()
+            SELECT un.negocio_id
+            FROM usuarios_negocios un
+            WHERE un.usuario_id = auth.uid()
         )
     );
 
@@ -72,9 +72,9 @@ CREATE POLICY "Users can create sales in their businesses" ON ventas
 CREATE POLICY "Users can update sales from their businesses" ON ventas
     FOR UPDATE USING (
         negocio_id IN (
-            SELECT nu.negocio_id 
-            FROM negocio_usuarios nu 
-            WHERE nu.usuario_id = auth.uid()
+            SELECT un.negocio_id
+            FROM usuarios_negocios un
+            WHERE un.usuario_id = auth.uid()
         )
     );
 
@@ -82,9 +82,9 @@ CREATE POLICY "Users can update sales from their businesses" ON ventas
 CREATE POLICY "Users can delete sales from their businesses" ON ventas
     FOR DELETE USING (
         negocio_id IN (
-            SELECT nu.negocio_id 
-            FROM negocio_usuarios nu 
-            WHERE nu.usuario_id = auth.uid()
+            SELECT un.negocio_id
+            FROM usuarios_negocios un
+            WHERE un.usuario_id = auth.uid()
         )
     );
 
@@ -93,12 +93,12 @@ CREATE POLICY "Users can delete sales from their businesses" ON ventas
 CREATE POLICY "Users can view sale details from their businesses" ON venta_detalle
     FOR SELECT USING (
         venta_id IN (
-            SELECT v.id 
-            FROM ventas v 
+            SELECT v.id
+            FROM ventas v
             WHERE v.negocio_id IN (
-                SELECT nu.negocio_id 
-                FROM negocio_usuarios nu 
-                WHERE nu.usuario_id = auth.uid()
+                SELECT un.negocio_id
+                FROM usuarios_negocios un
+                WHERE un.usuario_id = auth.uid()
             )
         )
     );
@@ -107,12 +107,12 @@ CREATE POLICY "Users can view sale details from their businesses" ON venta_detal
 CREATE POLICY "Users can create sale details in their businesses" ON venta_detalle
     FOR INSERT WITH CHECK (
         venta_id IN (
-            SELECT v.id 
-            FROM ventas v 
+            SELECT v.id
+            FROM ventas v
             WHERE v.negocio_id IN (
-                SELECT nu.negocio_id 
-                FROM negocio_usuarios nu 
-                WHERE nu.usuario_id = auth.uid()
+                SELECT un.negocio_id
+                FROM usuarios_negocios un
+                WHERE un.usuario_id = auth.uid()
             )
         )
     );
@@ -121,12 +121,12 @@ CREATE POLICY "Users can create sale details in their businesses" ON venta_detal
 CREATE POLICY "Users can update sale details from their businesses" ON venta_detalle
     FOR UPDATE USING (
         venta_id IN (
-            SELECT v.id 
-            FROM ventas v 
+            SELECT v.id
+            FROM ventas v
             WHERE v.negocio_id IN (
-                SELECT nu.negocio_id 
-                FROM negocio_usuarios nu 
-                WHERE nu.usuario_id = auth.uid()
+                SELECT un.negocio_id
+                FROM usuarios_negocios un
+                WHERE un.usuario_id = auth.uid()
             )
         )
     );
@@ -135,12 +135,12 @@ CREATE POLICY "Users can update sale details from their businesses" ON venta_det
 CREATE POLICY "Users can delete sale details from their businesses" ON venta_detalle
     FOR DELETE USING (
         venta_id IN (
-            SELECT v.id 
-            FROM ventas v 
+            SELECT v.id
+            FROM ventas v
             WHERE v.negocio_id IN (
-                SELECT nu.negocio_id 
-                FROM negocio_usuarios nu 
-                WHERE nu.usuario_id = auth.uid()
+                SELECT un.negocio_id
+                FROM usuarios_negocios un
+                WHERE un.usuario_id = auth.uid()
             )
         )
     );

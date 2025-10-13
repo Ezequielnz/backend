@@ -13,6 +13,7 @@ from app.db.supabase_client import get_supabase_client, get_supabase_user_client
 from app.dependencies import verify_permission, PermissionDependency
 
 router = APIRouter()
+branch_router = APIRouter()
 
 def get_user_id_from_token(token: str) -> str:
     """
@@ -107,6 +108,192 @@ class DashboardStatsResponse(BaseModel):
     total_products: int
     total_customers: int
     low_stock_products: int
+
+@branch_router.post("/record-sale", response_model=VentaResponseSimple)
+async def record_sale_branch(
+    business_id: str,
+    branch_id: str,
+    venta_data: VentaRequest,
+    authorization: str = Header(..., description="Bearer token")
+):
+    """
+    Registra una nueva venta de forma branch-scoped (requiere business_id y branch_id).
+    Valida pertenencia del usuario al negocio (usuarios_negocios) y a la sucursal (usuarios_sucursales).
+    """
+    try:
+        client = get_supabase_user_client(authorization)
+        user_id = get_user_id_from_token(authorization)
+
+        # Validar pertenencia al negocio
+        usuario_negocio_response = (
+            client.table("usuarios_negocios")
+            .select("id, negocio_id, estado")
+            .eq("usuario_id", user_id)
+            .eq("negocio_id", business_id)
+            .eq("estado", "aceptado")
+            .limit(1)
+            .execute()
+        )
+        if not usuario_negocio_response.data:
+            raise HTTPException(status_code=403, detail="Usuario no pertenece al negocio especificado")
+
+        usuario_negocio_id = usuario_negocio_response.data[0]["id"]
+
+        # Validar asignación a la sucursal (branch)
+        asignacion_sucursal = (
+            client.table("usuarios_sucursales")
+            .select("id")
+            .eq("usuario_id", user_id)
+            .eq("negocio_id", business_id)
+            .eq("sucursal_id", branch_id)
+            .eq("activo", True)
+            .limit(1)
+            .execute()
+        )
+        if not asignacion_sucursal.data:
+            raise HTTPException(status_code=403, detail="Usuario no asignado a la sucursal indicada")
+
+        # Normalizar cliente_id (opcional)
+        cliente_id = venta_data.cliente_id.strip() if isinstance(venta_data.cliente_id, str) else venta_data.cliente_id
+        if cliente_id == "":
+            cliente_id = None
+        if cliente_id:
+            cliente_response = (
+                client.table("clientes")
+                .select("id")
+                .eq("id", cliente_id)
+                .eq("negocio_id", business_id)
+                .execute()
+            )
+            if not cliente_response.data:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Cliente {cliente_id} no encontrado o no pertenece al negocio {business_id}"
+                )
+
+        # Calcular total y validar stock de productos
+        total = 0.0
+        items_validados = []
+
+        for item in venta_data.items:
+            if item.tipo == "producto":
+                producto_response = (
+                    client.table("productos")
+                    .select("id, nombre, precio_venta, stock_actual")
+                    .eq("id", item.id)
+                    .eq("negocio_id", business_id)
+                    .execute()
+                )
+                if not producto_response.data:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Producto {item.id} no encontrado o no pertenece al negocio {business_id}"
+                    )
+
+                producto = producto_response.data[0]
+                if producto["stock_actual"] < item.cantidad:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Stock insuficiente para {producto['nombre']}. Stock disponible: {producto['stock_actual']}"
+                    )
+
+                subtotal = item.cantidad * item.precio
+                total += subtotal
+
+                items_validados.append({
+                    "producto_id": item.id,
+                    "servicio_id": None,
+                    "tipo": "producto",
+                    "cantidad": item.cantidad,
+                    "precio_unitario": item.precio,
+                    "subtotal": subtotal,
+                    "sucursal_id": branch_id
+                })
+
+            elif item.tipo == "servicio":
+                servicio_response = (
+                    client.table("servicios")
+                    .select("id, nombre, precio")
+                    .eq("id", item.id)
+                    .eq("negocio_id", business_id)
+                    .execute()
+                )
+                if not servicio_response.data:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Servicio {item.id} no encontrado o no pertenece al negocio {business_id}"
+                    )
+
+                subtotal = item.cantidad * item.precio
+                total += subtotal
+
+                items_validados.append({
+                    "producto_id": None,
+                    "servicio_id": item.id,
+                    "tipo": "servicio",
+                    "cantidad": item.cantidad,
+                    "precio_unitario": item.precio,
+                    "subtotal": subtotal,
+                    "sucursal_id": branch_id
+                })
+
+        # Insertar venta con negocio y sucursal explícitos
+        venta_id = str(uuid.uuid4())
+        venta_insert_data = {
+            "id": venta_id,
+            "negocio_id": business_id,
+            "sucursal_id": branch_id,
+            "cliente_id": cliente_id,
+            "usuario_negocio_id": usuario_negocio_id,
+            "total": total,
+            "medio_pago": venta_data.metodo_pago,
+            "fecha": datetime.now().isoformat(),
+            "observaciones": venta_data.observaciones
+        }
+
+        venta_response = client.table("ventas").insert(venta_insert_data).execute()
+        if not venta_response.data:
+            raise HTTPException(status_code=500, detail="Error al crear la venta")
+
+        # Insertar detalles de venta
+        for item in items_validados:
+            item["venta_id"] = venta_id
+
+        detalle_response = client.table("venta_detalle").insert(items_validados).execute()
+        if not detalle_response.data:
+            # Rollback: eliminar la venta creada si fallan los detalles
+            client.table("ventas").delete().eq("id", venta_id).execute()
+            raise HTTPException(status_code=500, detail="Error al crear los detalles de venta")
+
+        # Actualizar stock global de productos (modelo actual, inventario por sucursal vendrá luego)
+        for item in venta_data.items:
+            if item.tipo == "producto":
+                producto_response = (
+                    client.table("productos")
+                    .select("stock_actual")
+                    .eq("id", item.id)
+                    .eq("negocio_id", business_id)
+                    .execute()
+                )
+                if producto_response.data:
+                    stock_actual = producto_response.data[0]["stock_actual"]
+                    nuevo_stock = stock_actual - item.cantidad
+                    client.table("productos").update({
+                        "stock_actual": nuevo_stock
+                    }).eq("id", item.id).eq("negocio_id", business_id).execute()
+
+        venta_creada = venta_response.data[0]
+        return VentaResponseSimple(
+            id=venta_creada["id"],
+            total=venta_creada["total"],
+            fecha=venta_creada["fecha"],
+            mensaje="Venta registrada exitosamente (branch-scoped)"
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error interno del servidor: {str(e)}")
 
 @router.post("/record-sale", response_model=VentaResponseSimple)
 async def record_sale(

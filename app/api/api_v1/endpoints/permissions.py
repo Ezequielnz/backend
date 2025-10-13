@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
-from app.db.supabase_client import get_supabase_client
+from app.db.supabase_client import get_supabase_user_client, get_supabase_anon_client
 from app.api.deps import get_current_user_from_request as get_current_user
 from typing import Dict, Any
 from pydantic import BaseModel
@@ -26,7 +26,8 @@ async def get_user_permissions(
     Returns comprehensive permission object for frontend caching.
     """
     try:
-        supabase = get_supabase_client()
+        token = request.headers.get("Authorization", "")
+        supabase = get_supabase_user_client(token) if token else get_supabase_anon_client()
         
         # Verificar acceso al negocio
         user_business_response = supabase.table("usuarios_negocios") \
