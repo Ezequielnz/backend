@@ -9,8 +9,9 @@ import json
 import time
 import asyncio
 
-from app.db.supabase_client import get_supabase_client, get_supabase_user_client
-from app.dependencies import verify_permission, PermissionDependency
+from app.db.supabase_client import get_supabase_user_client
+from app.dependencies import PermissionDependency
+from app.api.context import BusinessBranchContextDep
 
 router = APIRouter()
 branch_router = APIRouter()
@@ -114,6 +115,7 @@ async def record_sale_branch(
     business_id: str,
     branch_id: str,
     venta_data: VentaRequest,
+    request: Request,
     authorization: str = Header(..., description="Bearer token")
 ):
     """
@@ -124,34 +126,9 @@ async def record_sale_branch(
         client = get_supabase_user_client(authorization)
         user_id = get_user_id_from_token(authorization)
 
-        # Validar pertenencia al negocio
-        usuario_negocio_response = (
-            client.table("usuarios_negocios")
-            .select("id, negocio_id, estado")
-            .eq("usuario_id", user_id)
-            .eq("negocio_id", business_id)
-            .eq("estado", "aceptado")
-            .limit(1)
-            .execute()
-        )
-        if not usuario_negocio_response.data:
-            raise HTTPException(status_code=403, detail="Usuario no pertenece al negocio especificado")
-
-        usuario_negocio_id = usuario_negocio_response.data[0]["id"]
-
-        # Validar asignación a la sucursal (branch)
-        asignacion_sucursal = (
-            client.table("usuarios_sucursales")
-            .select("id")
-            .eq("usuario_id", user_id)
-            .eq("negocio_id", business_id)
-            .eq("sucursal_id", branch_id)
-            .eq("activo", True)
-            .limit(1)
-            .execute()
-        )
-        if not asignacion_sucursal.data:
-            raise HTTPException(status_code=403, detail="Usuario no asignado a la sucursal indicada")
+        # Validate business and branch via dependency
+        context = await BusinessBranchContextDep(request, business_id, branch_id)
+        usuario_negocio_id = context.usuario_negocio_id
 
         # Normalizar cliente_id (opcional)
         cliente_id = venta_data.cliente_id.strip() if isinstance(venta_data.cliente_id, str) else venta_data.cliente_id

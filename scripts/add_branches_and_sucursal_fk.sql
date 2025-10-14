@@ -68,16 +68,76 @@ CREATE INDEX IF NOT EXISTS idx_venta_detalle_sucursal_id ON public.venta_detalle
 
 -- compras: composite index by (negocio_id, sucursal_id, fecha) if compras exists
 DO $$
+DECLARE
+    has_table boolean;
+    has_col_fecha boolean;
+    has_col_fecha_compra boolean;
+    has_col_creado_en boolean;
+    has_col_created_at boolean;
 BEGIN
-    IF EXISTS (
+    SELECT EXISTS (
         SELECT 1 FROM information_schema.tables
         WHERE table_schema = 'public' AND table_name = 'compras'
-    ) THEN
-        IF NOT EXISTS (
-            SELECT 1 FROM pg_indexes
-            WHERE schemaname = 'public' AND indexname = 'idx_compras_negocio_sucursal_fecha'
-        ) THEN
-            EXECUTE 'CREATE INDEX idx_compras_negocio_sucursal_fecha ON public.compras(negocio_id, sucursal_id, fecha)';
+    ) INTO has_table;
+
+    IF has_table THEN
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'compras' AND column_name = 'fecha'
+        ) INTO has_col_fecha;
+
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'compras' AND column_name = 'fecha_compra'
+        ) INTO has_col_fecha_compra;
+
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'compras' AND column_name = 'creado_en'
+        ) INTO has_col_creado_en;
+
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'compras' AND column_name = 'created_at'
+        ) INTO has_col_created_at;
+
+        IF has_col_fecha THEN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_indexes
+                WHERE schemaname = 'public' AND indexname = 'idx_compras_negocio_sucursal_fecha'
+            ) THEN
+                EXECUTE 'CREATE INDEX idx_compras_negocio_sucursal_fecha ON public.compras(negocio_id, sucursal_id, fecha)';
+            END IF;
+        ELSIF has_col_fecha_compra THEN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_indexes
+                WHERE schemaname = 'public' AND indexname = 'idx_compras_negocio_sucursal_fecha_compra'
+            ) THEN
+                EXECUTE 'CREATE INDEX idx_compras_negocio_sucursal_fecha_compra ON public.compras(negocio_id, sucursal_id, fecha_compra)';
+            END IF;
+        ELSIF has_col_creado_en THEN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_indexes
+                WHERE schemaname = 'public' AND indexname = 'idx_compras_negocio_sucursal_creado_en'
+            ) THEN
+                EXECUTE 'CREATE INDEX idx_compras_negocio_sucursal_creado_en ON public.compras(negocio_id, sucursal_id, creado_en)';
+            END IF;
+        ELSIF has_col_created_at THEN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_indexes
+                WHERE schemaname = 'public' AND indexname = 'idx_compras_negocio_sucursal_created_at'
+            ) THEN
+                EXECUTE 'CREATE INDEX idx_compras_negocio_sucursal_created_at ON public.compras(negocio_id, sucursal_id, created_at)';
+            END IF;
+        ELSE
+            -- Fallback when no timestamp/date column exists: create index without date
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_indexes
+                WHERE schemaname = 'public' AND indexname = 'idx_compras_negocio_sucursal'
+            ) THEN
+                EXECUTE 'CREATE INDEX idx_compras_negocio_sucursal ON public.compras(negocio_id, sucursal_id)';
+            END IF;
+            RAISE NOTICE 'compras table has no fecha/fecha_compra/creado_en/created_at; created fallback index (negocio_id, sucursal_id)';
         END IF;
     END IF;
 END $$;
