@@ -2,7 +2,8 @@ from typing import Any, List
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Response
 from app.types.auth import User
 from app.api.deps import get_current_user
-from app.db.supabase_client import get_supabase_client, get_supabase_user_client
+from app.db.supabase_client import get_supabase_client
+from app.db.scoped_client import get_scoped_supabase_user_client
 from app.schemas.categoria import CategoriaCreate, CategoriaUpdate, Categoria
 from app.dependencies import verify_permission, PermissionDependency
 
@@ -27,7 +28,7 @@ async def read_categorias(
         )
     
     # Use the authenticated client for RLS to work properly
-    supabase = get_supabase_user_client(token)
+    supabase = get_scoped_supabase_user_client(token, business_id)
 
     try:
         # Fetch categories filtered by business_id
@@ -66,7 +67,7 @@ async def create_categoria(
         )
     
     # Use the authenticated client for RLS to work properly
-    supabase = get_supabase_user_client(token)
+    supabase = get_scoped_supabase_user_client(token, business_id)
     
     try:
         # Ensure the category is created for the correct business

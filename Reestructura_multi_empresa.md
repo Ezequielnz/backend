@@ -62,6 +62,12 @@ Resumen de cambios: Se completó la migración del punto 2; todos los registros 
 8. Crear endpoints para crear, listar y seleccionar sucursales.
 9. Crear un endpoint que genere automaticamente una sucursal principal al crear un negocio (validado por `migration_06`).
 
+**Resumen de cambios:** Se agrego `app/db/scoped_client.py` con `ScopedSupabaseClient`/`get_scoped_supabase_user_client`, que fuerza el agregado de `negocio_id` y `sucursal_id` en cada `table()` antes de ejecutar la consulta. Los routers de `ventas`, `compras`, `productos`, `categorias`, `proveedores`, `permissions` y `tenant_settings` ya usan este cliente al recibir `business_id`/`branch_id`, por lo que las lecturas, actualizaciones y borrados quedan automaticamente confinados al negocio (y sucursal cuando aplica). Adicionalmente, las acciones criticas en `finanzas.py` (update/delete de categorias, movimientos y cuentas) ahora siempre incluyen `eq("negocio_id", business_id)` para evitar accesos cruzados.
+
+**Pendientes / siguientes pasos:** Homogeneizar el uso del cliente con alcance en controladores que aun derivan el `negocio_id` dinamicamente (p.ej. dashboards que listan todos los negocios del usuario) y revisar la capa de servicios para ejercer el mismo control cuando se consuma Supabase fuera de los routers HTTP.
+
+**Nota 22-10-2025:** Se revis� este pendiente antes de iniciar el paso 5 y se confirm� que no bloquea el selector de sucursales; permanece abierto como trabajo de consolidaci�n posterior.
+
 ---
 
 ## 5. Frontend (React)
@@ -75,6 +81,15 @@ Resumen de cambios: Se completó la migración del punto 2; todos los registros 
 7. Validar flujos de creacion/edicion para que asignen automaticamente el `negocio_id` y `sucursal_id`.
 8. Revisar que los formularios y APIs sigan funcionando correctamente con la nueva estructura.
 9. Testear en diferentes roles de usuario (dueno, empleado, administrador).
+
+**Resumen de cambios (paso 5):**
+- Backend: nuevo endpoint `GET /businesses/{business_id}/branches` que devuelve las sucursales activas visibles seg�n el rol del usuario (admin ve todas, el resto solo sus asignaciones, con fallback a la sucursal principal).
+- Frontend: `BusinessContext` ahora expone `currentBranch`, `branches` y `refreshBranches`; el `Layout` consume ese estado, persiste la selecci�n por negocio y muestra un selector de sucursal en el encabezado cuando hay m�ltiples opciones.
+- El `Sidebar` exige una sucursal seleccionada antes de navegar cuando el negocio tiene m�s de una, evitando operaciones sin contexto.
+
+**Pendientes identificados tras el paso 5:**
+- Actualizar gradualmente las vistas (ventas, compras, inventario, reportes) para que utilicen `currentBranch` en sus consultas y claves de cache, cerrando los puntos 3 y 4 de esta fase.
+- Añadir vistas de mantenimiento de sucursales en la secci�n de configuraci�n (punto 6) y validar formularios multi-sucursal (puntos 7 y 8).
 
 ---
 

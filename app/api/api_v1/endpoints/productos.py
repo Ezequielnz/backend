@@ -3,7 +3,8 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request, Response
 from pydantic import BaseModel, ValidationError
 from app.types.auth import User
 from app.api.deps import get_current_user_from_request as get_current_user
-from app.db.supabase_client import get_supabase_user_client, get_supabase_anon_client
+from app.db.supabase_client import get_supabase_anon_client
+from app.db.scoped_client import get_scoped_supabase_user_client
 from app.schemas.producto import ProductoCreate, ProductoUpdate, Producto
 from app.dependencies import PermissionDependency
 import logging
@@ -27,7 +28,11 @@ async def read_products(
     Retrieve products for a specific business, optionally filtered by category (requires puede_ver_productos).
     """
     token = request.headers.get("Authorization", "")
-    supabase = get_supabase_user_client(token) if token else get_supabase_anon_client()
+    supabase = (
+        get_scoped_supabase_user_client(token, business_id)
+        if token
+        else get_supabase_anon_client()
+    )
     
     try:
         query = supabase.table("productos").select("*").eq("negocio_id", business_id)
@@ -112,7 +117,11 @@ async def create_product(
     Create a new product for a specific business, optionally within a category (requires puede_editar_productos).
     """
     token = request.headers.get("Authorization", "")
-    supabase = get_supabase_user_client(token) if token else get_supabase_anon_client()
+    supabase = (
+        get_scoped_supabase_user_client(token, business_id)
+        if token
+        else get_supabase_anon_client()
+    )
 
     try:
         # Verify that the category exists and belongs to the business (only if categoria_id is provided)
@@ -158,7 +167,11 @@ async def read_product(
     Get a specific product by ID for a business (requires puede_ver_productos).
     """
     token = request.headers.get("Authorization", "")
-    supabase = get_supabase_user_client(token) if token else get_supabase_anon_client()
+    supabase = (
+        get_scoped_supabase_user_client(token, business_id)
+        if token
+        else get_supabase_anon_client()
+    )
 
     try:
         response = supabase.table("productos").select("*").eq("id", product_id).eq("negocio_id", business_id).single().execute()
@@ -190,7 +203,11 @@ async def update_product(
     Update a product by ID for a business (requires puede_editar_productos).
     """
     token = request.headers.get("Authorization", "")
-    supabase = get_supabase_user_client(token) if token else get_supabase_anon_client()
+    supabase = (
+        get_scoped_supabase_user_client(token, business_id)
+        if token
+        else get_supabase_anon_client()
+    )
 
     try:
         update_data = product_update.model_dump(exclude_unset=True)
@@ -246,7 +263,11 @@ async def delete_product(
     Delete a product by ID for a business (requires puede_editar_productos).
     """
     token = request.headers.get("Authorization", "")
-    supabase = get_supabase_user_client(token) if token else get_supabase_anon_client()
+    supabase = (
+        get_scoped_supabase_user_client(token, business_id)
+        if token
+        else get_supabase_anon_client()
+    )
 
     try:
         # First, check if the product exists and belongs to the business

@@ -1,9 +1,10 @@
-from typing import Any, List
+from typing import Any, Dict, List
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Body
 from app.types.auth import User
 from app.api.deps import get_current_user
 from app.db.supabase_client import get_supabase_user_client, get_supabase_anon_client
 from app.schemas.business import BusinessCreate, Business
+from app.schemas.branch import Branch
 from app.schemas.invitacion import InvitacionCreate, InvitacionResponse, UsuarioNegocioUpdate
 from supabase.lib.client_options import ClientOptions
 from datetime import datetime, timezone
@@ -340,6 +341,119 @@ async def get_business_by_id(business_id: str, request: Request) -> Any:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error getting business: {str(e)}",
+        )
+
+
+@router.get("/{business_id}/branches", response_model=List[Branch])
+async def get_business_branches(business_id: str, request: Request) -> Any:
+    """
+    Retrieve the branches (sucursales) accessible to the current user for a business.
+    Admins receive every active branch; other roles only receive their assignments.
+    """
+
+    user = getattr(request.state, "user", None)
+    if not user or not hasattr(user, "id"):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not authenticated.",
+        )
+
+    supabase = get_supabase_user_client(request.headers.get("Authorization", ""))
+
+    try:
+        membership = (
+            supabase.table("usuarios_negocios")
+            .select("rol")
+            .eq("usuario_id", user.id)
+            .eq("negocio_id", business_id)
+            .eq("estado", "aceptado")
+            .limit(1)
+            .execute()
+        )
+    except Exception as membership_error:
+        print(f"[branches] Error validating membership: {membership_error}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error validating business membership.",
+        )
+
+    if not membership.data:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No tienes acceso a este negocio.",
+        )
+
+    user_role = (membership.data[0] or {}).get("rol") or "empleado"
+
+    try:
+        branches: List[Dict[str, Any]] = []
+
+        if user_role == "admin":
+            response = (
+                supabase.table("sucursales")
+                .select(
+                    "id, negocio_id, nombre, codigo, direccion, activo, is_main, creado_en, actualizado_en"
+                )
+                .eq("negocio_id", business_id)
+                .eq("activo", True)
+                .execute()
+            )
+            branches = response.data or []
+        else:
+            assignments_response = (
+                supabase.table("usuarios_sucursales")
+                .select(
+                    "sucursales(id, negocio_id, nombre, codigo, direccion, activo, is_main, creado_en, actualizado_en)"
+                )
+                .eq("usuario_id", user.id)
+                .eq("negocio_id", business_id)
+                .eq("activo", True)
+                .execute()
+            )
+
+            for assignment in assignments_response.data or []:
+                branch = assignment.get("sucursales")
+                if branch and branch.get("activo", True):
+                    branches.append(branch)
+
+            # Fallback for legacy data without explicit assignments: main branch
+            if not branches:
+                fallback = (
+                    supabase.table("sucursales")
+                    .select(
+                        "id, negocio_id, nombre, codigo, direccion, activo, is_main, creado_en, actualizado_en"
+                    )
+                    .eq("negocio_id", business_id)
+                    .eq("is_main", True)
+                    .limit(1)
+                    .execute()
+                )
+                if fallback.data:
+                    branches = fallback.data
+
+        dedup: Dict[str, Dict[str, Any]] = {}
+        for branch in branches:
+            branch_id = branch.get("id")
+            if branch_id:
+                dedup[str(branch_id)] = branch
+
+        ordered_branches = sorted(
+            dedup.values(),
+            key=lambda b: (
+                0 if b.get("is_main") else 1,
+                (b.get("nombre") or "").lower(),
+            ),
+        )
+
+        return ordered_branches
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[branches] Unexpected error fetching branches for business {business_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error fetching branches for business.",
         )
 
 @router.delete("/{business_id}")

@@ -10,6 +10,7 @@ import time
 import asyncio
 
 from app.db.supabase_client import get_supabase_user_client
+from app.db.scoped_client import get_scoped_supabase_user_client
 from app.dependencies import PermissionDependency
 from app.api.context import BusinessBranchContextDep
 
@@ -123,7 +124,7 @@ async def record_sale_branch(
     Valida pertenencia del usuario al negocio (usuarios_negocios) y a la sucursal (usuarios_sucursales).
     """
     try:
-        client = get_supabase_user_client(authorization)
+        client = get_scoped_supabase_user_client(authorization, business_id, branch_id)
         user_id = get_user_id_from_token(authorization)
 
         # Validate business and branch via dependency
@@ -445,7 +446,7 @@ async def get_sales(
             detail="Token de autenticación requerido"
         )
     try:
-        client = get_supabase_user_client(token)
+        client = get_scoped_supabase_user_client(token, business_id)
 
         # Construir consulta con filtros opcionales
         query = client.table("ventas").select("""
@@ -481,6 +482,7 @@ async def get_sales(
 
 @router.get("/sales/{venta_id}")
 async def get_sale_detail(
+    business_id: str,
     venta_id: str,
     authorization: str = Header(..., description="Bearer token")
 ):
@@ -488,7 +490,7 @@ async def get_sale_detail(
     Obtiene el detalle de una venta específica.
     """
     try:
-        client = get_supabase_user_client(authorization)
+        client = get_scoped_supabase_user_client(authorization, business_id)
         
         # Obtener venta con detalles
         venta_response = client.table("ventas").select("""
@@ -551,7 +553,7 @@ async def get_estadisticas_ventas(
             detail="Token de autenticación requerido"
         )
     
-    supabase = get_supabase_user_client(token)
+    supabase = get_scoped_supabase_user_client(token, business_id)
     
     try:
         # Ventas totales
@@ -603,7 +605,7 @@ async def get_reporte_ventas(
             detail="Token de autenticación requerido"
         )
     
-    supabase = get_supabase_user_client(token)
+    supabase = get_scoped_supabase_user_client(token, business_id)
     
     try:
         query = supabase.table("ventas").select("*, venta_detalle(*, productos(nombre), servicios(nombre))").eq("negocio_id", business_id)

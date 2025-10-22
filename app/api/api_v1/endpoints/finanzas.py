@@ -149,7 +149,14 @@ async def update_categoria_financiera(
         if not update_data:
             return existing.data[0]
         
-        response = supabase.table("categorias_financieras").update(update_data).eq("id", categoria_id).execute()
+        response = (
+            supabase
+            .table("categorias_financieras")
+            .update(update_data)
+            .eq("id", categoria_id)
+            .eq("negocio_id", business_id)
+            .execute()
+        )
         
         if not response.data:
             raise HTTPException(
@@ -195,7 +202,14 @@ async def delete_categoria_financiera(
                 detail="No se puede eliminar la categoría porque tiene movimientos asociados"
             )
         
-        response = supabase.table("categorias_financieras").delete().eq("id", categoria_id).execute()
+        response = (
+            supabase
+            .table("categorias_financieras")
+            .delete()
+            .eq("id", categoria_id)
+            .eq("negocio_id", business_id)
+            .execute()
+        )
         
         return {"message": "Categoría financiera eliminada exitosamente"}
         
@@ -483,7 +497,14 @@ async def update_movimiento_financiero(
                     detail="Categoría no encontrada o no pertenece a este negocio"
                 )
         
-        response = supabase.table("movimientos_financieros").update(update_data).eq("id", movimiento_id).execute()
+        response = (
+            supabase
+            .table("movimientos_financieros")
+            .update(update_data)
+            .eq("id", movimiento_id)
+            .eq("negocio_id", business_id)
+            .execute()
+        )
         
         if not response.data:
             raise HTTPException(
@@ -521,7 +542,14 @@ async def delete_movimiento_financiero(
                 detail="Movimiento financiero no encontrado"
             )
         
-        response = supabase.table("movimientos_financieros").delete().eq("id", movimiento_id).execute()
+        response = (
+            supabase
+            .table("movimientos_financieros")
+            .delete()
+            .eq("id", movimiento_id)
+            .eq("negocio_id", business_id)
+            .execute()
+        )
         
         return {"message": "Movimiento financiero eliminado exitosamente"}
         
@@ -979,7 +1007,14 @@ async def update_cuenta_pendiente(
                     detail="Cliente no encontrado o no pertenece a este negocio"
                 )
         
-        response = supabase.table("cuentas_pendientes").update(update_data).eq("id", cuenta_id).execute()
+        response = (
+            supabase
+            .table("cuentas_pendientes")
+            .update(update_data)
+            .eq("id", cuenta_id)
+            .eq("negocio_id", business_id)
+            .execute()
+        )
         
         if not response.data:
             raise HTTPException(
@@ -1031,7 +1066,14 @@ async def marcar_cuenta_como_pagada(
             "pagado_por": current_user.id
         }
         
-        response = supabase.table("cuentas_pendientes").update(update_data).eq("id", cuenta_id).execute()
+        response = (
+            supabase
+            .table("cuentas_pendientes")
+            .update(update_data)
+            .eq("id", cuenta_id)
+            .eq("negocio_id", business_id)
+            .execute()
+        )
         
         return {"message": "Cuenta marcada como pagada exitosamente"}
         
@@ -1063,7 +1105,14 @@ async def delete_cuenta_pendiente(
                 detail="Cuenta pendiente no encontrada"
             )
         
-        response = supabase.table("cuentas_pendientes").delete().eq("id", cuenta_id).execute()
+        response = (
+            supabase
+            .table("cuentas_pendientes")
+            .delete()
+            .eq("id", cuenta_id)
+            .eq("negocio_id", business_id)
+            .execute()
+        )
         
         return {"message": "Cuenta pendiente eliminada exitosamente"}
         

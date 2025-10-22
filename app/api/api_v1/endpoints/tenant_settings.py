@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.responses import JSONResponse
 import jwt
 
-from app.db.supabase_client import get_supabase_user_client
+from app.db.scoped_client import get_scoped_supabase_user_client
 from app.dependencies import PermissionDependency
 from app.schemas.tenant_settings import TenantSettingsCreate, TenantSettingsUpdate, TenantSettings
 
@@ -26,7 +26,7 @@ def _get_user_id_from_token(authorization: str) -> str:
 async def _verify_admin_or_owner_access(business_id: str, authorization: str) -> bool:
     """Verify if user is admin or owner of the business"""
     user_id = _get_user_id_from_token(authorization)
-    client = get_supabase_user_client(authorization)
+    client = get_scoped_supabase_user_client(authorization, business_id)
     
     # Check if user is the business creator
     business_resp = client.table("negocios").select("creada_por").eq("id", business_id).execute()
@@ -74,7 +74,7 @@ async def get_tenant_settings(
     except HTTPException:
         raise HTTPException(status_code=403, detail="No tienes permisos para ver la configuración del negocio")
 
-    client = get_supabase_user_client(authorization)
+    client = get_scoped_supabase_user_client(authorization, business_id)
 
     try:
         # Buscar configuración existente para este negocio
@@ -124,7 +124,7 @@ async def create_or_update_tenant_settings(
     except HTTPException:
         raise HTTPException(status_code=403, detail="No tienes permisos para editar la configuración del negocio")
 
-    client = get_supabase_user_client(authorization)
+    client = get_scoped_supabase_user_client(authorization, business_id)
 
     try:
         # Verificar si ya existe configuración para este negocio
@@ -175,7 +175,7 @@ async def update_tenant_settings(
     except HTTPException:
         raise HTTPException(status_code=403, detail="No tienes permisos para editar la configuración del negocio")
 
-    client = get_supabase_user_client(authorization)
+    client = get_scoped_supabase_user_client(authorization, business_id)
 
     try:
         # Preparar datos para actualizar
@@ -217,7 +217,7 @@ async def delete_tenant_settings(
     except HTTPException:
         raise HTTPException(status_code=403, detail="No tienes permisos para eliminar la configuración del negocio")
 
-    client = get_supabase_user_client(authorization)
+    client = get_scoped_supabase_user_client(authorization, business_id)
 
     try:
         response = client.table("tenant_settings").delete().eq("tenant_id", business_id).execute()

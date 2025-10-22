@@ -1,6 +1,6 @@
 from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Query, Response
-from app.db.supabase_client import get_supabase_user_client
+from app.db.scoped_client import get_scoped_supabase_user_client
 from app.schemas.proveedor import Proveedor, ProveedorCreate, ProveedorUpdate
 from app.dependencies import PermissionDependency
 
@@ -31,7 +31,7 @@ async def read_proveedores(
     if not authorization:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token requerido")
 
-    client = get_supabase_user_client(authorization)
+    client = get_scoped_supabase_user_client(authorization, business_id)
 
     try:
         query = client.table("proveedores").select("*").eq("negocio_id", business_id)
@@ -59,7 +59,7 @@ async def read_proveedor(
     if not authorization:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token requerido")
 
-    client = get_supabase_user_client(authorization)
+    client = get_scoped_supabase_user_client(authorization, business_id)
 
     try:
         resp = (
@@ -101,7 +101,7 @@ async def create_proveedor(
     if not authorization:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token requerido")
 
-    client = get_supabase_user_client(authorization)
+    client = get_scoped_supabase_user_client(authorization, business_id)
 
     try:
         data = proveedor_in.model_dump()
@@ -131,7 +131,7 @@ async def update_proveedor(
     if not authorization:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token requerido")
 
-    client = get_supabase_user_client(authorization)
+    client = get_scoped_supabase_user_client(authorization, business_id)
 
     try:
         update_data = proveedor_update.model_dump(exclude_unset=True)
@@ -167,7 +167,7 @@ async def delete_proveedor(
     if not authorization:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token requerido")
 
-    client = get_supabase_user_client(authorization)
+    client = get_scoped_supabase_user_client(authorization, business_id)
 
     try:
         # Optional: deny delete if has compras asociadas

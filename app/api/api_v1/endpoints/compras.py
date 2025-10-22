@@ -4,7 +4,8 @@ from datetime import datetime, date
 import uuid
 import jwt
 
-from app.db.supabase_client import get_supabase_user_client, get_supabase_service_client
+from app.db.supabase_client import get_supabase_service_client
+from app.db.scoped_client import get_scoped_supabase_user_client
 from app.dependencies import PermissionDependency
 from app.schemas.compra import CompraCreate, CompraUpdate
 
@@ -48,7 +49,7 @@ async def read_purchases(
     if not authorization:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token requerido")
 
-    client = get_supabase_user_client(authorization)
+    client = get_scoped_supabase_user_client(authorization, business_id)
 
     try:
         query = client.table("compras").select("*").eq("negocio_id", business_id)
@@ -86,7 +87,7 @@ async def read_purchase(
     if not authorization:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token requerido")
 
-    client = get_supabase_user_client(authorization)
+    client = get_scoped_supabase_user_client(authorization, business_id)
 
     try:
         compra_resp = (
@@ -141,7 +142,7 @@ async def create_purchase(
     if not authorization:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token requerido")
 
-    client = get_supabase_user_client(authorization)
+    client = get_scoped_supabase_user_client(authorization, business_id)
 
     try:
         user_id = _get_user_id_from_token(authorization)
@@ -362,7 +363,7 @@ async def update_purchase(
     if not authorization:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token requerido")
 
-    client = get_supabase_user_client(authorization)
+    client = get_scoped_supabase_user_client(authorization, business_id)
 
     try:
         update_data = compra_update.model_dump(exclude_unset=True)
@@ -496,7 +497,7 @@ async def delete_purchase(
     if not authorization:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token requerido")
 
-    client = get_supabase_user_client(authorization)
+    client = get_scoped_supabase_user_client(authorization, business_id)
 
     try:
         # Obtener cabecera y detalle antes de eliminar
