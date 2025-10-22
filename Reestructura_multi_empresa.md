@@ -1,0 +1,112 @@
+## 1. Analisis previo y planificacion
+
+1. Revisar la estructura actual de las tablas y listar cuales deben depender de negocio y/o sucursal.
+2. Confirmar si ya existen las columnas `negocio_id` y `sucursal_id` en cada tabla operativa.
+3. Identificar que tablas son globales (no dependen de ningun negocio, por ejemplo `planes`, `roles`, `paises`, `provincias`).
+4. Hacer un backup completo de la base de datos actual (dump SQL o export desde Supabase).
+5. Documentar relaciones actuales y dependencias principales (`Informe_tecnico_base_de_datos.md`).
+
+---
+
+## 2. Actualizacion de estructura de base de datos
+
+1. Crear o revisar la tabla `negocios` con sus campos principales (id, nombre, cuit, etc.).
+2. Crear la tabla `sucursales` con FK a `negocios`.
+3. Modificar las tablas principales para incluir los FKs:
+   - `ventas`: agregar `sucursal_id` y verificar `negocio_id`.
+   - `venta_detalle`: agregar `sucursal_id` y `negocio_id`.
+   - `compras`: agregar `sucursal_id` y `negocio_id`.
+   - `inventario` o `inventario_sucursal`: asegurar `sucursal_id` y `negocio_id`.
+   - `usuarios`: agregar `negocio_id` y opcionalmente `sucursal_id` (si se asocian a una sucursal especifica).
+   - `clientes`, `proveedores`, `productos`: asociar a `negocio_id`.
+4. Revisar si hay otras tablas que deban tener `negocio_id` para mantener el aislamiento de datos.
+5. Actualizar las claves foraneas (`FOREIGN KEY`) y constraints correspondientes.
+6. Crear indices en las columnas `negocio_id` y `sucursal_id` para mejorar performance.
+7. Crear triggers o logica automatica para que al crear un nuevo negocio se cree una sucursal principal.
+
+Resumen de cambios: Se completó la migración del punto 2; todos los registros existentes quedaron con `negocio_id` y `sucursal_id` consistentes (o pendientes solo si nunca tuvieron asignación en `usuarios_negocios`), y las tablas auxiliares (`usuarios_sucursales`, índices y triggers) quedaron alineadas con el modelo multi-sucursal.
+
+---
+
+## 3. Revision y actualizacion de politicas RLS
+
+1. Verificar que todas las tablas con datos sensibles tengan RLS activado.
+2. Revisar las politicas existentes y adaptarlas al nuevo esquema de negocio/sucursal.
+3. Asegurar que las politicas filtran correctamente por `negocio_id`.
+4. Si se usa `usuarios_sucursales` o `usuarios_negocios`, ajustar las politicas para permitir acceso solo a los IDs asociados.
+5. Probar las politicas con diferentes usuarios para validar aislamiento de datos.
+6. Revisar las funciones de contexto (por ejemplo `auth.uid()`) y su integracion con el `negocio_id` actual del usuario.
+
+---
+
+**Resumen de cambios:** Se agrego el script idempotente `scripts/migration_07_update_rls_policies.sql`, que crea funciones auxiliares (`jwt_claim_negocio_id`, `user_in_business`, `user_can_access_branch`, etc.) y recrea las politicas RLS de `negocios`, `usuarios_negocios`, `usuarios_sucursales`, `sucursales`, `usuarios`, `productos`, `clientes`, `proveedores`, `servicios`, `suscripciones`, `ventas`, `venta_detalle`, `compras`, `compras_detalle` e `inventario_sucursal`. Las politicas ahora fuerzan el filtrado por `negocio_id`, validan el reclamo JWT activo y, cuando corresponde, verifican la asignacion en `usuarios_sucursales`.
+
+**Pasos de validacion propuestos:**
+- Ejecutar `python scripts/execute_sql_file.py scripts/migration_07_update_rls_policies.sql` en cada entorno y registrar los `NOTICE` para confirmar que todas las tablas-objetivo existen y quedan con RLS habilitado.
+- Con un usuario empleado (no admin), confirmar que solo puede leer/escribir datos del negocio/sucursal asignados (`ventas`, `compras`, `productos`, etc.). Repetir la prueba con un usuario admin para validar acceso transversal.
+- Probar el acceso cruzado de sucursales: asignar al usuario a una sucursal distinta y comprobar que no ve datos de sucursales no autorizadas.
+- Evaluar las nuevas funciones con queries directas (`SELECT public.jwt_claim_negocio_id(), public.user_in_business('<negocio>');`) para verificar que `auth.uid()` y los claims de JWT se esten resolviendo segun el contexto activo.
+- Ejecutar `scripts/qa_verify_branch_columns.sql` luego del deploy para asegurar que no queden filas sin `negocio_id`/`sucursal_id`, ya que las politicas RLS nuevas los requieren.
+
+**Pendientes si surge un nuevo esquema:** cualquier tabla adicional con `negocio_id`/`sucursal_id` debe incorporarse a `migration_07_update_rls_policies.sql` (o a un derivado) para mantener el aislamiento consistente antes de habilitarla en produccion.
+
+## 4. Backend (FastAPI)
+
+1. Revisar todos los modelos Pydantic y agregar `negocio_id` y `sucursal_id` donde corresponda.
+2. Actualizar las rutas (`routers`) y los controladores para que usen el contexto del negocio actual.
+3. Implementar dependencias globales `get_current_negocio()` y `get_current_sucursal()` para inyectar el contexto.
+4. Actualizar las consultas SQL o el cliente Supabase para filtrar siempre por `negocio_id` y/o `sucursal_id`.
+5. Adaptar endpoints de creacion para asignar automaticamente la sucursal y negocio actual del usuario.
+6. Actualizar validaciones de permisos en base al negocio y sucursal del usuario.
+7. Revisar la autenticacion JWT para incluir `negocio_id` y `sucursal_id` en el payload o claims.
+8. Crear endpoints para crear, listar y seleccionar sucursales.
+9. Crear un endpoint que genere automaticamente una sucursal principal al crear un negocio (validado por `migration_06`).
+
+---
+
+## 5. Frontend (React)
+
+1. Agregar el flujo inicial de creacion de negocio + sucursal principal al registrarse.
+2. Actualizar los estados globales (context o store) para manejar `negocioActivo` y `sucursalActiva`.
+3. Asegurar que todas las peticiones incluyan o se basen en esos IDs de contexto.
+4. Adaptar las pantallas principales (ventas, compras, stock, usuarios) para mostrar datos filtrados por sucursal.
+5. Agregar selector de sucursal en la UI si el usuario tiene mas de una.
+6. En configuracion, mostrar los datos del negocio y permitir editar sus sucursales.
+7. Validar flujos de creacion/edicion para que asignen automaticamente el `negocio_id` y `sucursal_id`.
+8. Revisar que los formularios y APIs sigan funcionando correctamente con la nueva estructura.
+9. Testear en diferentes roles de usuario (dueno, empleado, administrador).
+
+---
+
+## 6. Pruebas y migracion de datos
+
+1. Crear entorno de pruebas (staging) para aplicar las migraciones antes de hacerlo en produccion.
+2. Ejecutar los scripts `migration_01` a `migration_06` con `scripts/execute_sql_file.py`.
+3. Ejecutar `scripts/qa_verify_branch_columns.sql` para confirmar que `negocio_id` y `sucursal_id` existen y no hay registros pendientes.
+4. Aplicar los fragmentos de remediacion incluidos en el script de QA si quedan filas con valores nulos.
+5. Ejecutar `scripts/test_main_branch_trigger.py` luego de desplegar para validar el trigger de sucursal principal.
+6. Incorporar casos adicionales en los tests que creen negocios con datos incompletos (sin direccion/contacto) para validar triggers y RLS.
+7. Validar que las RLS no bloqueen consultas legitimas.
+8. Realizar pruebas completas de flujo: login -> seleccionar sucursal -> venta -> stock -> reportes.
+
+---
+
+## 7. Optimizacion y documentacion
+
+1. Crear vistas o funciones SQL que simplifiquen reportes por sucursal o negocio.
+2. Documentar la nueva estructura de tablas y sus relaciones.
+3. Actualizar los esquemas ERD o diagramas de base de datos.
+4. Revisar performance e indices de las tablas mas consultadas.
+5. Preparar documentacion para futuros desarrolladores (como funciona el contexto de negocio/sucursal).
+6. Guardar una copia de la migracion final, del script de QA y del script de rollback.
+
+---
+
+## 8. Checklist de verificacion previa a produccion
+
+1. `migration_05_create_performance_indexes.sql` ejecutada sin errores y revisadas las `NOTICE` para confirmar que solo se crearon indices en tablas existentes.
+2. `scripts/qa_verify_branch_columns.sql` sin registros pendientes de `negocio_id`/`sucursal_id`.
+3. Triggers de sucursal principal (`migration_06`) probados en staging.
+4. Politicas RLS revisadas para que dependan de `usuarios_sucursales` donde aplique.
+5. Casos QA para negocios con datos incompletos ejecutados y aprobados.
+6. Documentacion actualizada en `MIGRATION_README.md` y en este plan.
