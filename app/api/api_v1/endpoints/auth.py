@@ -6,8 +6,8 @@ import traceback
 import sys
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status, Request
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi import APIRouter, HTTPException, status, Request
+from fastapi.security import OAuth2PasswordBearer
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import EmailStr, ValidationError
 import jwt
@@ -39,58 +39,77 @@ def generate_token(user_id: str, email: str) -> str:
 
 
 @router.post("/login", response_model=Token)
-async def login(form_data: OAuth2PasswordRequestForm = Depends()) -> Any:
+async def login(request: Request) -> Any:
     """
-    OAuth2 compatible token login, get an access token for future requests
+    OAuth2 compatible token login, get an access token for future requests.
+    Accepts application/x-www-form-urlencoded or JSON payloads.
     """
     try:
         print("=== Iniciando proceso de login ===")
-        print(f"Email recibido: {form_data.username}")
-        
-        # Iniciar sesión con Supabase
+        username: Optional[str] = None
+        password: Optional[str] = None
+
+        content_type = request.headers.get("content-type", "")
+        if "application/x-www-form-urlencoded" in content_type or "multipart/form-data" in content_type:
+            form = await request.form()
+            username = form.get("username") or form.get("email")
+            password = form.get("password")
+        else:
+            try:
+                payload = await request.json()
+            except Exception:
+                payload = {}
+
+            if isinstance(payload, dict):
+                username = payload.get("username") or payload.get("email")
+                password = payload.get("password")
+
+        if not username or not password:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Se requieren credenciales (username/email y password) para iniciar sesión.",
+            )
+
+        print(f"Email recibido: {username}")
+
         supabase = get_supabase_client()
-        
         print("Intentando iniciar sesión con Supabase...")
         try:
-            # Use Supabase Auth to sign in the user
             response = supabase.auth.sign_in_with_password({
-                "email": form_data.username,
-                "password": form_data.password,
+                "email": username,
+                "password": password,
             })
-            
+
             if not response or not response.session:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Credenciales inválidas",
                     headers={"WWW-Authenticate": "Bearer"},
                 )
-            
-            print("✅ Respuesta de Supabase recibida")
+
+            print("Éxito. Respuesta de Supabase recibida")
             print(f"Usuario ID: {response.user.id if response.user else 'No ID'}")
             print(f"¿Tiene sesión?: {bool(response.session)}")
-            
+
             access_token = response.session.access_token
-            print("✅ Token de acceso obtenido")
-            
-            # Actualizar último acceso del usuario
+            print("Éxito. Token de acceso obtenido")
+
             try:
                 user_id = response.user.id
                 now = datetime.now(timezone.utc).isoformat()
-                
-                # Actualizar campo ultimo_acceso
                 supabase.table("usuarios").update({"ultimo_acceso": now}).eq("id", user_id).execute()
-                print(f"✅ Actualizado último acceso para usuario {user_id}")
+                print(f"Éxito. Actualizado último acceso para usuario {user_id}")
             except Exception as e:
-                print(f"⚠️ Error al actualizar último acceso: {str(e)}")
-            
+                print(f"Advertencia: Error al actualizar último acceso: {str(e)}")
+
             return {
                 "access_token": access_token,
                 "token_type": "bearer"
             }
         except Exception as supabase_error:
-            print(f"❌ Error en Supabase Auth: {str(supabase_error)}")
+            print(f"Error en Supabase Auth: {supabase_error}")
             print(f"Tipo de error: {type(supabase_error)}")
-            
+
             error_message = str(supabase_error)
             if "Email not confirmed" in error_message:
                 raise HTTPException(
@@ -98,7 +117,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()) -> Any:
                     detail={
                         "message": "Email no confirmado. Por favor revisa tu correo electrónico para activar tu cuenta.",
                         "error_type": "email_not_confirmed",
-                        "email": form_data.username
+                        "email": username
                     }
                 )
             elif "Invalid login credentials" in error_message:
@@ -113,17 +132,16 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()) -> Any:
                     detail=f"Error al iniciar sesión: {error_message}",
                     headers={"WWW-Authenticate": "Bearer"},
                 )
-            
+
     except HTTPException:
         raise
     except Exception as e:
-        print(f"❌ Error general en login: {str(e)}")
+        print(f"Error general en login: {e}")
         print(f"Tipo de error: {type(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error interno del servidor",
         )
-
 
 @router.options("/signup")
 async def options_signup():

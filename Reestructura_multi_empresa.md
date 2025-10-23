@@ -104,6 +104,16 @@ Resumen de cambios: Se completó la migración del punto 2; todos los registros 
 7. Validar que las RLS no bloqueen consultas legitimas.
 8. Realizar pruebas completas de flujo: login -> seleccionar sucursal -> venta -> stock -> reportes.
 
+**Resumen de cambios (paso 6):**
+- `scripts/execute_sql_file.py` ahora admite credenciales por DSN/variables de entorno (`DB_*`, `STAGING_DATABASE_URL`), lo que permite correr las migraciones `migration_01`-`migration_06` contra staging sin tocar el script.
+- `scripts/migration_05_create_performance_indexes.sql` y `scripts/qa_verify_branch_columns.sql` se ajustaron para evitar ambiguedades de alias/variables en Supabase; las seis migraciones se ejecutaron consecutivamente sin errores.
+- El QA detecto dos usuarios de pruebas sin `negocio_id`/`sucursal_id`; se eliminaron y la verificacion quedo en cero nulos para todas las tablas monitoreadas.
+- `scripts/test_main_branch_trigger.py` reutiliza la conexion parametrizable y corre dos escenarios (datos completos y negocio sin direccion/contacto), validando creacion de sucursal principal y asignacion automatica en `usuarios`/`usuarios_sucursales`.
+
+**Pendientes tras este paso:**
+- Completar la validacion de RLS con sesiones de usuario reales y revisar que no bloqueen consultas legitimas.
+- Ejecutar pruebas end-to-end en staging (login → seleccionar sucursal → venta → stock → reportes) con usuarios representativos. Listo ✅
+
 ---
 
 ## 7. Optimizacion y documentacion

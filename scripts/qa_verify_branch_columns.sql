@@ -12,7 +12,7 @@ DECLARE
         'proveedores',
         'usuarios_sucursales'
     ];
-    table_name text;
+    table_entry text;
     has_negocio boolean;
     has_sucursal boolean;
     null_negocio bigint;
@@ -37,13 +37,13 @@ BEGIN
         ) ON COMMIT DROP
     ';
 
-    FOREACH table_name IN ARRAY tables
+    FOREACH table_entry IN ARRAY tables
     LOOP
         has_negocio := EXISTS (
             SELECT 1
             FROM information_schema.columns
             WHERE table_schema = 'public'
-              AND table_name = table_name
+              AND table_name = table_entry
               AND column_name = 'negocio_id'
         );
 
@@ -51,7 +51,7 @@ BEGIN
             SELECT 1
             FROM information_schema.columns
             WHERE table_schema = 'public'
-              AND table_name = table_name
+              AND table_name = table_entry
               AND column_name = 'sucursal_id'
         );
 
@@ -59,13 +59,13 @@ BEGIN
             SELECT 1
             FROM information_schema.tables
             WHERE table_schema = 'public'
-              AND table_name = table_name
+              AND table_name = table_entry
         ) THEN
             IF has_negocio THEN
                 EXECUTE format(
                     'SELECT COUNT(*) FROM %I.%I WHERE negocio_id IS NULL',
                     'public',
-                    table_name
+                    table_entry
                 ) INTO null_negocio;
             ELSE
                 null_negocio := NULL;
@@ -75,7 +75,7 @@ BEGIN
                 EXECUTE format(
                     'SELECT COUNT(*) FROM %I.%I WHERE sucursal_id IS NULL',
                     'public',
-                    table_name
+                    table_entry
                 ) INTO null_sucursal;
             ELSE
                 null_sucursal := NULL;
@@ -83,7 +83,7 @@ BEGIN
         ELSE
             null_negocio := NULL;
             null_sucursal := NULL;
-            RAISE NOTICE 'Table %.% not found during QA checks', 'public', table_name;
+            RAISE NOTICE 'Table %.% not found during QA checks', 'public', table_entry;
         END IF;
 
         INSERT INTO qa_branch_results (
@@ -94,7 +94,7 @@ BEGIN
             null_sucursal_id
         )
         VALUES (
-            table_name,
+            table_entry,
             has_negocio,
             has_sucursal,
             null_negocio,

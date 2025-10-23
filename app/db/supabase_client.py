@@ -170,21 +170,27 @@ def get_supabase_user_client(user_token: str) -> Client:
             print(f"[ERROR] No se pudo establecer token en cliente postgrest: {e}")
         
         # Establecer el token también en el cliente auth si está disponible
-        try:
-            auth_obj = cast(object, getattr(client, 'auth', None))
-            if auth_obj is not None:
+        auth_obj = cast(object, getattr(client, 'auth', None))
+        if auth_obj is not None:
+            token_configured = False
+            if hasattr(auth_obj, 'set_auth'):
                 try:
-                    # auth.set_auth(token)
                     _ = cast(HasSetAuth, auth_obj).set_auth(clean_token)
                     print("[OK] Token establecido en cliente auth mediante set_auth")
-                except Exception:
-                    # auth._set_auth_headers({ 'Authorization': 'Bearer <token>' })
+                    token_configured = True
+                except Exception as auth_error:
+                    print(f"[AVISO] No se pudo usar set_auth en cliente auth: {auth_error}")
+            if not token_configured and hasattr(auth_obj, '_set_auth_headers'):
+                try:
                     _ = cast(HasSetAuthHeaders, auth_obj)._set_auth_headers({  # pyright: ignore[reportPrivateUsage]
                         "Authorization": f"Bearer {clean_token}"
                     })
                     print("[OK] Token establecido en cliente auth mediante _set_auth_headers")
-        except Exception as e:
-            print(f"[ERROR] No se pudo establecer token en cliente auth: {e}")
+                    token_configured = True
+                except Exception as auth_error:
+                    print(f"[AVISO] No se pudo usar _set_auth_headers en cliente auth: {auth_error}")
+            if not token_configured:
+                print("[AVISO] Cliente auth no soporta métodos set_auth ni _set_auth_headers; se omite configuración adicional.")
         
         # Enfoque adicional para versiones más recientes de supabase-py
         try:

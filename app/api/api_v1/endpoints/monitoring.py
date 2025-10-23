@@ -281,14 +281,28 @@ async def get_cost_summary(
         if not _verify_tenant_access(current_user, tenant_id):
             raise HTTPException(status_code=403, detail="Access denied to tenant")
         
-        # Use the cost_summary_by_tenant view
-        result = supabase.rpc('get_cost_summary', {
-            'p_tenant_id': tenant_id,
-            'p_months': months
-        }).execute()
+        # Use the cost_summary_by_tenant view when available
+        rpc_data: Optional[List[Dict[str, Any]]] = None
+        try:
+            result = supabase.rpc('get_cost_summary', {
+                'p_tenant_id': tenant_id,
+                'p_months': months
+            }).execute()
+            rpc_data = result.data if result and result.data else None
+        except Exception as rpc_error:
+            error_text = str(rpc_error)
+            if 'PGRST202' in error_text or 'Could not find the function' in error_text:
+                logger.warning(
+                    "get_cost_summary RPC not available, falling back to manual aggregation: %s",
+                    error_text
+                )
+                rpc_data = None
+            else:
+                logger.error(f"Unexpected error calling get_cost_summary RPC: {rpc_error}")
+                raise HTTPException(status_code=500, detail=error_text)
         
-        # Fallback to direct query if RPC not available
-        if not result.data:
+        # Fallback to direct query if RPC not available or returned no data
+        if not rpc_data:
             cutoff_date = (datetime.now() - timedelta(days=months * 30)).date()
             
             result = supabase.table('cost_tracking').select('*').eq(
@@ -326,7 +340,7 @@ async def get_cost_summary(
                 
                 return list(costs_by_period.values())
         
-        return result.data if result.data else []
+        return rpc_data if rpc_data else []
         
     except HTTPException:
         raise
@@ -671,7 +685,7 @@ async def get_improvement_suggestions(
 
 # Helper functions
 
-async def _verify_tenant_access(user: Dict[str, Any], tenant_id: str) -> bool:
+def _verify_tenant_access(user: Dict[str, Any], tenant_id: str) -> bool:
     """Verify user has access to tenant (business)"""
     try:
         # Get Supabase client

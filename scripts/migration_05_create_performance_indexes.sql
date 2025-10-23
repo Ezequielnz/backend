@@ -22,7 +22,7 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     missing_columns text[] := ARRAY[]::text[];
-    col_expr text;
+    col_expr_item text;
     col_name text;
     column_list text;
     formatted_columns text[];
@@ -42,9 +42,9 @@ BEGIN
         RETURN;
     END IF;
 
-    FOR col_expr IN SELECT unnest(p_columns)
+    FOR col_expr_item IN SELECT unnest(p_columns)
     LOOP
-        col_name := trim(both '"' from split_part(col_expr, ' ', 1));
+        col_name := trim(both '"' from split_part(col_expr_item, ' ', 1));
         col_name := regexp_replace(col_name, '[\(\)]', '', 'g');
 
         IF col_name <> '' AND NOT EXISTS (
@@ -66,16 +66,16 @@ BEGIN
     formatted_columns := ARRAY(
         SELECT
             CASE
-                WHEN position(' ' IN col_expr) > 0 THEN
+                WHEN position(' ' IN col_expr_value) > 0 THEN
                     format(
                         '%I %s',
-                        split_part(col_expr, ' ', 1),
-                        trim(substring(col_expr FROM position(' ' IN col_expr) + 1))
+                        split_part(col_expr_value, ' ', 1),
+                        trim(substring(col_expr_value FROM position(' ' IN col_expr_value) + 1))
                     )
                 ELSE
-                    format('%I', col_expr)
+                    format('%I', col_expr_value)
             END
-        FROM unnest(p_columns) AS col_expr
+        FROM unnest(p_columns) AS col_expr_value
     );
 
     column_list := array_to_string(formatted_columns, ', ');
@@ -223,9 +223,9 @@ SELECT public.ensure_index_columns(
 -- =====================================================
 DO $$
 DECLARE
-    table_name text;
+    table_name_item text;
 BEGIN
-    FOR table_name IN
+    FOR table_name_item IN
         SELECT unnest(ARRAY[
             'negocios',
             'sucursales',
@@ -244,12 +244,12 @@ BEGIN
             SELECT 1
             FROM information_schema.tables
             WHERE table_schema = 'public'
-              AND table_name = table_name
+              AND table_name = table_name_item
         ) THEN
-            EXECUTE format('ANALYZE %I.%I', 'public', table_name);
-            RAISE NOTICE 'Analyzed %.%', 'public', table_name;
+            EXECUTE format('ANALYZE %I.%I', 'public', table_name_item);
+            RAISE NOTICE 'Analyzed %.%', 'public', table_name_item;
         ELSE
-            RAISE NOTICE 'Skipping ANALYZE for %.% (table not found)', 'public', table_name;
+            RAISE NOTICE 'Skipping ANALYZE for %.% (table not found)', 'public', table_name_item;
         END IF;
     END LOOP;
 END $$;
