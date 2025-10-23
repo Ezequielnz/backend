@@ -118,12 +118,24 @@ Resumen de cambios: Se completó la migración del punto 2; todos los registros 
 
 ## 7. Optimizacion y documentacion
 
+**Revision previa:** se repaso el estado de los pasos 4, 5 y 6. Permanecen tareas de homogeneizacion de clientes scoped y pruebas end-to-end, pero no bloquean la entrega del paso 7; se mantienen anotadas en las secciones respectivas.
+
 1. Crear vistas o funciones SQL que simplifiquen reportes por sucursal o negocio.
 2. Documentar la nueva estructura de tablas y sus relaciones.
 3. Actualizar los esquemas ERD o diagramas de base de datos.
 4. Revisar performance e indices de las tablas mas consultadas.
 5. Preparar documentacion para futuros desarrolladores (como funciona el contexto de negocio/sucursal).
 6. Guardar una copia de la migracion final, del script de QA y del script de rollback.
+
+**Resumen de cambios (paso 7):**
+- Se agrego `scripts/migration_08_create_reporting_views.sql`, que crea vistas de resumen diario (`vw_resumen_financiero_negocio`, `vw_resumen_financiero_sucursal`), ranking de productos (`vw_top_productos_por_negocio`) y la funcion `fn_resumen_financiero` para reutilizar esas metricas desde Supabase o BI. El script incluye indices opcionales para consultas por fecha.
+- Se consolido la documentacion tecnica en `Informe_tecnico_base_de_datos.md`, ahora unica fuente para describir tablas, relaciones, vistas y el diagrama ERD (incluye un bloque mermaid actualizado con la jerarquia negocio/sucursal).
+- Quedo registrado un snapshot de artefactos finales en `docs/releases/2025-10-branch-rollout/` con copias de la migracion final, el script QA y el rollback plan.
+- Se anadieron instrucciones de uso de las nuevas vistas/funciones en el plan y se dejaron notas de consumo para frontend/backend.
+
+**Pendientes tras este paso:**
+- Integrar las vistas `vw_resumen_financiero_%` en los dashboards actuales (ventas/compras/reportes) y agregar alertas si faltan datos historicos.
+- Medir el impacto de los nuevos indices una vez ejecutados en staging (guardar explain analyze en `docs/`).
 
 ---
 
