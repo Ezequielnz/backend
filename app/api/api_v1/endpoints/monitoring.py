@@ -5,16 +5,23 @@ Provides REST API for drift detection, performance metrics, cost tracking, and c
 import logging
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from app.api.deps import get_current_user, get_supabase_client
+from app.api.deps import get_current_user
+from app.db.scoped_client import ScopedSupabaseClient, get_scoped_supabase_user_client
 from app.services.drift_detector import drift_detector
-from supabase.client import Client
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _tenant_scoped_client(request: Request, tenant_id: str) -> ScopedSupabaseClient:
+    token = request.headers.get("Authorization", "")
+    if not token:
+        raise HTTPException(status_code=401, detail="Authorization header missing")
+    return get_scoped_supabase_user_client(token, tenant_id)
 
 
 # Pydantic models for request/response
@@ -74,7 +81,7 @@ async def get_drift_alerts(
     days: int = Query(default=30, ge=1, le=90),
     severity: Optional[str] = Query(default=None),
     current_user: Dict[str, Any] = Depends(get_current_user),
-    supabase: Client = Depends(get_supabase_client)
+    supabase: ScopedSupabaseClient = Depends(_tenant_scoped_client)
 ):
     """
     Get drift alerts for a tenant.
@@ -89,7 +96,7 @@ async def get_drift_alerts(
     """
     try:
         # Verify user has access to tenant
-        if not _verify_tenant_access(current_user, tenant_id):
+        if not _verify_tenant_access(current_user, tenant_id, supabase):
             raise HTTPException(status_code=403, detail="Access denied to tenant")
         
         # Query drift alerts
@@ -119,7 +126,7 @@ async def trigger_drift_detection(
     model_id: str,
     evaluation_period_days: int = Query(default=7, ge=1, le=30),
     current_user: Dict[str, Any] = Depends(get_current_user),
-    supabase: Client = Depends(get_supabase_client)
+    supabase: ScopedSupabaseClient = Depends(_tenant_scoped_client)
 ):
     """
     Manually trigger drift detection for a specific model.
@@ -134,7 +141,7 @@ async def trigger_drift_detection(
     """
     try:
         # Verify access
-        if not _verify_tenant_access(current_user, tenant_id):
+        if not _verify_tenant_access(current_user, tenant_id, supabase):
             raise HTTPException(status_code=403, detail="Access denied to tenant")
         
         # Verify model exists and belongs to tenant
@@ -177,7 +184,7 @@ async def get_performance_metrics(
     days: int = Query(default=7, ge=1, le=90),
     aggregation_level: str = Query(default='daily'),
     current_user: Dict[str, Any] = Depends(get_current_user),
-    supabase: Client = Depends(get_supabase_client)
+    supabase: ScopedSupabaseClient = Depends(_tenant_scoped_client)
 ):
     """
     Get performance metrics for a tenant.
@@ -191,7 +198,7 @@ async def get_performance_metrics(
         List of performance metrics
     """
     try:
-        if not _verify_tenant_access(current_user, tenant_id):
+        if not _verify_tenant_access(current_user, tenant_id, supabase):
             raise HTTPException(status_code=403, detail="Access denied to tenant")
         
         cutoff_date = (datetime.now() - timedelta(days=days)).date()
@@ -215,7 +222,7 @@ async def get_performance_metrics(
 async def get_performance_summary(
     tenant_id: str,
     current_user: Dict[str, Any] = Depends(get_current_user),
-    supabase: Client = Depends(get_supabase_client)
+    supabase: ScopedSupabaseClient = Depends(_tenant_scoped_client)
 ):
     """
     Get performance summary for dashboard.
@@ -224,7 +231,7 @@ async def get_performance_summary(
         Aggregated performance metrics
     """
     try:
-        if not _verify_tenant_access(current_user, tenant_id):
+        if not _verify_tenant_access(current_user, tenant_id, supabase):
             raise HTTPException(status_code=403, detail="Access denied to tenant")
         
         # Get latest daily metrics
@@ -265,7 +272,7 @@ async def get_cost_summary(
     tenant_id: str,
     months: int = Query(default=3, ge=1, le=12),
     current_user: Dict[str, Any] = Depends(get_current_user),
-    supabase: Client = Depends(get_supabase_client)
+    supabase: ScopedSupabaseClient = Depends(_tenant_scoped_client)
 ):
     """
     Get cost summary by billing period.
@@ -278,7 +285,7 @@ async def get_cost_summary(
         Cost summary by billing period
     """
     try:
-        if not _verify_tenant_access(current_user, tenant_id):
+        if not _verify_tenant_access(current_user, tenant_id, supabase):
             raise HTTPException(status_code=403, detail="Access denied to tenant")
         
         # Use the cost_summary_by_tenant view when available
@@ -354,7 +361,7 @@ async def get_cost_breakdown(
     tenant_id: str,
     billing_period: Optional[str] = Query(default=None),
     current_user: Dict[str, Any] = Depends(get_current_user),
-    supabase: Client = Depends(get_supabase_client)
+    supabase: ScopedSupabaseClient = Depends(_tenant_scoped_client)
 ):
     """
     Get detailed cost breakdown.
@@ -367,7 +374,7 @@ async def get_cost_breakdown(
         Detailed cost breakdown
     """
     try:
-        if not _verify_tenant_access(current_user, tenant_id):
+        if not _verify_tenant_access(current_user, tenant_id, supabase):
             raise HTTPException(status_code=403, detail="Access denied to tenant")
         
         # Determine billing period
@@ -418,7 +425,7 @@ async def get_privacy_audit_log(
     event_type: Optional[str] = Query(default=None),
     risk_level: Optional[str] = Query(default=None),
     current_user: Dict[str, Any] = Depends(get_current_user),
-    supabase: Client = Depends(get_supabase_client)
+    supabase: ScopedSupabaseClient = Depends(_tenant_scoped_client)
 ):
     """
     Get privacy audit log entries.
@@ -433,7 +440,7 @@ async def get_privacy_audit_log(
         Privacy audit log entries
     """
     try:
-        if not _verify_tenant_access(current_user, tenant_id):
+        if not _verify_tenant_access(current_user, tenant_id, supabase):
             raise HTTPException(status_code=403, detail="Access denied to tenant")
         
         cutoff_date = (datetime.now() - timedelta(days=days)).isoformat()
@@ -464,7 +471,7 @@ async def get_compliance_reports(
     report_type: Optional[str] = Query(default=None),
     limit: int = Query(default=10, ge=1, le=100),
     current_user: Dict[str, Any] = Depends(get_current_user),
-    supabase: Client = Depends(get_supabase_client)
+    supabase: ScopedSupabaseClient = Depends(_tenant_scoped_client)
 ):
     """
     Get compliance reports for a tenant.
@@ -478,7 +485,7 @@ async def get_compliance_reports(
         List of compliance reports
     """
     try:
-        if not _verify_tenant_access(current_user, tenant_id):
+        if not _verify_tenant_access(current_user, tenant_id, supabase):
             raise HTTPException(status_code=403, detail="Access denied to tenant")
         
         query = supabase.table('compliance_reports').select('*').eq(
@@ -505,7 +512,7 @@ async def generate_compliance_report(
     report_type: str = Query(default='gdpr'),
     period_days: int = Query(default=30, ge=1, le=365),
     current_user: Dict[str, Any] = Depends(get_current_user),
-    supabase: Client = Depends(get_supabase_client)
+    supabase: ScopedSupabaseClient = Depends(_tenant_scoped_client)
 ):
     """
     Generate a new compliance report.
@@ -519,7 +526,7 @@ async def generate_compliance_report(
         Generated report
     """
     try:
-        if not _verify_tenant_access(current_user, tenant_id):
+        if not _verify_tenant_access(current_user, tenant_id, supabase):
             raise HTTPException(status_code=403, detail="Access denied to tenant")
         
         # Trigger report generation (would call worker task)
@@ -556,7 +563,7 @@ class FeedbackCreate(BaseModel):
 async def create_feedback(
     feedback: FeedbackCreate,
     current_user: Dict[str, Any] = Depends(get_current_user),
-    supabase: Client = Depends(get_supabase_client)
+    supabase: ScopedSupabaseClient = Depends(_tenant_scoped_client)
 ):
     """
     Submit user feedback.
@@ -607,7 +614,7 @@ async def get_feedback(
     days: int = Query(default=30, ge=1, le=90),
     feedback_type: Optional[str] = Query(default=None),
     current_user: Dict[str, Any] = Depends(get_current_user),
-    supabase: Client = Depends(get_supabase_client)
+    supabase: ScopedSupabaseClient = Depends(_tenant_scoped_client)
 ):
     """
     Get feedback for a tenant.
@@ -621,7 +628,7 @@ async def get_feedback(
         List of feedback entries
     """
     try:
-        if not _verify_tenant_access(current_user, tenant_id):
+        if not _verify_tenant_access(current_user, tenant_id, supabase):
             raise HTTPException(status_code=403, detail="Access denied to tenant")
         
         cutoff_date = (datetime.now() - timedelta(days=days)).isoformat()
@@ -649,7 +656,7 @@ async def get_improvement_suggestions(
     tenant_id: str,
     status: Optional[str] = Query(default='pending'),
     current_user: Dict[str, Any] = Depends(get_current_user),
-    supabase: Client = Depends(get_supabase_client)
+    supabase: ScopedSupabaseClient = Depends(_tenant_scoped_client)
 ):
     """
     Get improvement suggestions for a tenant.
@@ -662,7 +669,7 @@ async def get_improvement_suggestions(
         List of improvement suggestions
     """
     try:
-        if not _verify_tenant_access(current_user, tenant_id):
+        if not _verify_tenant_access(current_user, tenant_id, supabase):
             raise HTTPException(status_code=403, detail="Access denied to tenant")
         
         query = supabase.table('improvement_suggestions').select('*').eq(
@@ -685,29 +692,30 @@ async def get_improvement_suggestions(
 
 # Helper functions
 
-def _verify_tenant_access(user: Dict[str, Any], tenant_id: str) -> bool:
-    """Verify user has access to tenant (business)"""
+def _verify_tenant_access(
+    user: Dict[str, Any],
+    tenant_id: str,
+    supabase: ScopedSupabaseClient,
+) -> bool:
+    """Verify user has access to tenant (business)."""
     try:
-        # Get Supabase client
-        supabase = get_supabase_client()
-        
-        # Check if user has access to this business
-        user_id = user.get('id')
+        user_id = user.get("id")
         if not user_id:
             return False
-        
-        # Query usuarios_negocios table for access
-        access_response = supabase.table("usuarios_negocios").select(
-            "id, rol, estado"
-        ).eq("usuario_id", user_id).eq("negocio_id", tenant_id).eq(
-            "estado", "aceptado"
-        ).execute()
-        
-        # User has access if they have an accepted relationship with the business
-        return len(access_response.data) > 0 if access_response.data else False
-        
-    except Exception as e:
-        logger.error(f"Error verifying tenant access: {e}")
-        # For monitoring endpoints, be permissive on errors to avoid blocking
-        # This allows the dashboard to load even if there's a temporary DB issue
+
+        response = (
+            supabase.table("usuarios_negocios")
+            .select("id")
+            .eq("usuario_id", user_id)
+            .eq("negocio_id", tenant_id)
+            .eq("estado", "aceptado")
+            .limit(1)
+            .execute()
+        )
+        return bool(response.data)
+    except Exception as exc:
+        logger.warning("Tenant access verification failed: %s", exc)
         return True
+
+
+

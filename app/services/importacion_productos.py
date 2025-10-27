@@ -1,5 +1,5 @@
 from typing import List, Dict, Any, Optional, Tuple
-from app.db.supabase_client import get_supabase_client
+from app.db.scoped_client import ScopedSupabaseClient
 from app.services.importacion_excel import ExcelProcessor
 from app.schemas.importacion import (
     ProductoImportacionTemporal, 
@@ -15,9 +15,9 @@ import uuid
 class ImportacionProductosService:
     """Servicio para manejar la importación masiva de productos."""
     
-    def __init__(self):
+    def __init__(self, supabase: Optional[ScopedSupabaseClient] = None):
         self.excel_processor = ExcelProcessor()
-        self.supabase = get_supabase_client()
+        self.supabase = supabase
     
     async def procesar_archivo_excel(
         self, 

@@ -1,7 +1,10 @@
-from typing import Optional
-from fastapi import Request, HTTPException, status
-from pydantic import BaseModel
+from typing import NamedTuple, Optional
+
 import jwt
+from fastapi import HTTPException, Request, status
+from pydantic import BaseModel
+
+from app.db.scoped_client import ScopedSupabaseClient, get_scoped_supabase_user_client
 from app.db.supabase_client import get_supabase_user_client
 
 
@@ -31,6 +34,12 @@ async def BusinessBranchContextDep(request: Request, business_id: str, branch_id
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authorization header missing")
     client = get_supabase_user_client(token)
     user_id = get_user_id_from_token(token)
+
+    # Allow branch to be provided via header when not in path/query.
+    if not branch_id:
+        header_branch = request.headers.get("X-Branch-Id") or request.headers.get("X-Sucursal-Id")
+        if header_branch:
+            branch_id = header_branch
 
     # Verify business membership
     user_business = (
@@ -71,3 +80,61 @@ async def BusinessBranchContextDep(request: Request, business_id: str, branch_id
         branch_id=branch_id,
         usuario_negocio_id=usuario_negocio_id,
     )
+
+
+class ScopedClientContext(NamedTuple):
+    client: ScopedSupabaseClient
+    context: BusinessBranchContext
+
+
+def _extract_authorization_token(request: Request) -> str:
+    token = request.headers.get("Authorization", "")
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authorization header missing",
+        )
+    return token
+
+
+async def BusinessScopedClientDep(
+    request: Request,
+    business_id: str,
+) -> ScopedClientContext:
+    """
+    Dependency that returns a scoped Supabase client plus the validated business context.
+    """
+    token = _extract_authorization_token(request)
+    context = await BusinessBranchContextDep(request, business_id)
+    client = get_scoped_supabase_user_client(token, context.business_id)
+    setattr(request.state, "scoped_supabase_client", client)
+    return ScopedClientContext(client=client, context=context)
+
+
+async def BranchScopedClientDep(
+    request: Request,
+    business_id: str,
+    branch_id: str,
+) -> ScopedClientContext:
+    """
+    Dependency that validates business + branch membership and returns a scoped client.
+    """
+    token = _extract_authorization_token(request)
+    context = await BusinessBranchContextDep(request, business_id, branch_id)
+    client = get_scoped_supabase_user_client(token, context.business_id, context.branch_id)
+    setattr(request.state, "scoped_supabase_client", client)
+    return ScopedClientContext(client=client, context=context)
+
+
+def scoped_client_from_request(request: Request) -> ScopedSupabaseClient:
+    """
+    Helper to reuse the scoped client set by BusinessScopedClientDep/BranchScopedClientDep.
+    Raises an HTTP 500 if the dependency was not executed beforehand.
+    """
+    client = getattr(request.state, "scoped_supabase_client", None)
+    if client is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Scoped Supabase client not initialised for this request",
+        )
+    return client

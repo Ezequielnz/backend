@@ -1,216 +1,244 @@
 from typing import Any, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+
+from app.api.context import BusinessScopedClientDep, ScopedClientContext
 from app.api.deps import get_current_user
-from app.db.supabase_client import get_supabase_client
-from app.schemas.cliente import ClienteCreate, ClienteUpdate, Cliente, ClienteSearch
-from app.types.auth import User
 from app.dependencies import PermissionDependency
+from app.schemas.cliente import Cliente, ClienteCreate, ClienteUpdate
+from app.types.auth import User
 
 router = APIRouter()
 
-@router.get("/", response_model=List[Cliente],
-    dependencies=[Depends(PermissionDependency("clientes", "ver"))]
+
+@router.get(
+    "/",
+    response_model=List[Cliente],
+    dependencies=[Depends(PermissionDependency("clientes", "ver"))],
 )
-@router.get("", response_model=List[Cliente],  # Agregar ruta sin barra final
-    dependencies=[Depends(PermissionDependency("clientes", "ver"))]
+@router.get(
+    "",
+    response_model=List[Cliente],  # Ruta sin barra final
+    dependencies=[Depends(PermissionDependency("clientes", "ver"))],
 )
 async def read_clientes(
     business_id: str,
-    q: Optional[str] = Query(None, description="Búsqueda por nombre, apellido, email o documento"),
+    q: Optional[str] = Query(None, description="Busqueda por nombre, apellido, email o documento"),
     documento_tipo: Optional[str] = Query(None, description="Filtrar por tipo de documento"),
-    limit: int = Query(10, ge=1, le=100, description="Número máximo de resultados"),
-    offset: int = Query(0, ge=0, description="Número de resultados a omitir")
+    limit: int = Query(10, ge=1, le=100, description="Numero maximo de resultados"),
+    offset: int = Query(0, ge=0, description="Numero de resultados a omitir"),
+    scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
 ) -> Any:
-    """
-    Retrieve clients for a business with optional filtering and pagination.
-    Permission checking is handled by PermissionDependency.
-    """
-    
-    supabase = get_supabase_client()
+    """List customers for a business with optional filtering and pagination."""
+
+    supabase = scoped.client
 
     try:
-        # Build query
-        query = supabase.table("clientes").select("*").eq("negocio_id", business_id)
-        
-        # Apply filters - versión simplificada para debug
+        query = supabase.table("clientes").select("*")
+        query = query.eq("negocio_id", business_id)
+
         if q:
-            # Búsqueda simple solo por nombre
-            search_term = f"%{q}%"
-            query = query.ilike("nombre", search_term)
-        
+            query = query.ilike("nombre", f"%{q}%")
+
         if documento_tipo:
             query = query.eq("documento_tipo", documento_tipo)
-        
-        # Apply pagination
+
         query = query.range(offset, offset + limit - 1)
-        
-        # Execute query
+
         response = query.execute()
-        
         return response.data
-        
-    except Exception as e:
+
+    except Exception as exc:  # pragma: no cover - propagates as HTTP error
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error fetching clients: {str(e)}"
-        )
+            detail=f"Error fetching clients: {exc}",
+        ) from exc
 
-@router.get("/{cliente_id}", response_model=Cliente,
-    dependencies=[Depends(PermissionDependency("clientes", "ver"))]
+
+@router.get(
+    "/{cliente_id}",
+    response_model=Cliente,
+    dependencies=[Depends(PermissionDependency("clientes", "ver"))],
 )
 async def read_cliente(
     business_id: str,
     cliente_id: str,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
 ) -> Any:
-    """
-    Get a specific client by ID for a business.
-    RLS policies handle permission checking automatically.
-    """
-    supabase = get_supabase_client()
+    """Retrieve a single customer by ID."""
+
+    supabase = scoped.client
 
     try:
-        response = supabase.table("clientes").select("*").eq("id", cliente_id).eq("negocio_id", business_id).execute()
-        
+        response = (
+            supabase.table("clientes")
+            .select("*")
+            .eq("id", cliente_id)
+            .eq("negocio_id", business_id)
+            .execute()
+        )
+
         if not response.data:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Client not found"
+                detail="Client not found",
             )
-        
+
         return response.data[0]
-        
+
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception as exc:  # pragma: no cover - propagates as HTTP error
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error fetching client: {str(e)}"
-        )
+            detail=f"Error fetching client: {exc}",
+        ) from exc
 
-@router.post("/", response_model=Cliente, status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(PermissionDependency("clientes", "editar"))]
+
+@router.post(
+    "/",
+    response_model=Cliente,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(PermissionDependency("clientes", "editar"))],
 )
-@router.post("", response_model=Cliente, status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(PermissionDependency("clientes", "editar"))]
+@router.post(
+    "",
+    response_model=Cliente,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(PermissionDependency("clientes", "editar"))],
 )
 async def create_cliente(
     business_id: str,
     cliente: ClienteCreate,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
 ) -> Any:
-    """
-    Create a new client for a business.
-    RLS policies handle permission checking automatically.
-    """
-    supabase = get_supabase_client()
+    """Create a new customer for the given business."""
+
+    supabase = scoped.client
 
     try:
-        # Prepare client data
-        cliente_data = cliente.dict()
-        cliente_data["negocio_id"] = business_id
-        
-        # Insert client
-        response = supabase.table("clientes").insert(cliente_data).execute()
-        
+        payload = cliente.dict()
+        payload["negocio_id"] = business_id
+
+        response = supabase.table("clientes").insert(payload).execute()
+
         if not response.data:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Failed to create client"
+                detail="Failed to create client",
             )
-        
+
         return response.data[0]
-        
+
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception as exc:  # pragma: no cover - propagates as HTTP error
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error creating client: {str(e)}"
-        )
+            detail=f"Error creating client: {exc}",
+        ) from exc
 
-@router.put("/{cliente_id}", response_model=Cliente,
-    dependencies=[Depends(PermissionDependency("clientes", "editar"))]
+
+@router.put(
+    "/{cliente_id}",
+    response_model=Cliente,
+    dependencies=[Depends(PermissionDependency("clientes", "editar"))],
 )
 async def update_cliente(
     business_id: str,
     cliente_id: str,
     cliente: ClienteUpdate,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
 ) -> Any:
-    """
-    Update a client by ID for a business.
-    RLS policies handle permission checking automatically.
-    """
-    supabase = get_supabase_client()
+    """Update a customer record."""
+
+    supabase = scoped.client
 
     try:
-        # Prepare update data (exclude None values)
-        update_data = {k: v for k, v in cliente.dict().items() if v is not None}
-        
+        update_data = {key: value for key, value in cliente.dict().items() if value is not None}
+
         if not update_data:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No data provided for update"
+                detail="No data provided for update",
             )
-        
-        # Update client
-        response = supabase.table("clientes").update(update_data).eq("id", cliente_id).eq("negocio_id", business_id).execute()
-        
+
+        response = (
+            supabase.table("clientes")
+            .update(update_data)
+            .eq("id", cliente_id)
+            .eq("negocio_id", business_id)
+            .execute()
+        )
+
         if not response.data:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Client not found or no changes made"
+                detail="Client not found or no changes made",
             )
-        
+
         return response.data[0]
-        
+
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception as exc:  # pragma: no cover - propagates as HTTP error
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error updating client: {str(e)}"
-        )
+            detail=f"Error updating client: {exc}",
+        ) from exc
 
-@router.delete("/{cliente_id}",
-    dependencies=[Depends(PermissionDependency("clientes", "eliminar"))]
+
+@router.delete(
+    "/{cliente_id}",
+    dependencies=[Depends(PermissionDependency("clientes", "eliminar"))],
 )
 async def delete_cliente(
     business_id: str,
     cliente_id: str,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
 ) -> Any:
-    """
-    Delete a client by ID for a business.
-    RLS policies handle permission checking automatically.
-    """
-    supabase = get_supabase_client()
+    """Delete a customer if there are no dependent sales."""
+
+    supabase = scoped.client
 
     try:
-        # Check if client has associated sales
-        ventas_response = supabase.table("ventas").select("id").eq("cliente_id", cliente_id).limit(1).execute()
+        ventas_response = (
+            supabase.table("ventas")
+            .select("id")
+            .eq("cliente_id", cliente_id)
+            .limit(1)
+            .execute()
+        )
         if ventas_response.data:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No se puede eliminar el cliente porque tiene ventas asociadas."
+                detail="No se puede eliminar el cliente porque tiene ventas asociadas.",
             )
 
-        # Delete client
-        response = supabase.table("clientes").delete().eq("id", cliente_id).eq("negocio_id", business_id).execute()
-        
+        response = (
+            supabase.table("clientes")
+            .delete()
+            .eq("id", cliente_id)
+            .eq("negocio_id", business_id)
+            .execute()
+        )
+
         if not response.data:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Client not found"
+                detail="Client not found",
             )
-        
+
         return {"message": "Client deleted successfully"}
-        
+
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception as exc:  # pragma: no cover - propagates as HTTP error
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error deleting client: {str(e)}"
-        ) 
+            detail=f"Error deleting client: {exc}",
+        ) from exc

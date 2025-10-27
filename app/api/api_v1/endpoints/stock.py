@@ -1,29 +1,30 @@
-from typing import Any, List, Dict
+from typing import Any, List
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, status, Depends
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
 
-from app.models.supabase_models import Producto as ProductoModel
 from app import types
-from app.db.supabase_client import get_supabase_client
+from app.api.context import BusinessScopedClientDep, ScopedClientContext
 
 router = APIRouter()
 
 
 @router.get("/", response_model=List[types.Producto])
 async def get_productos(
+    business_id: str,
     skip: int = 0,
     limit: int = 100,
     only_active: bool = True,
+    scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
 ) -> Any:
     """
-    Obtener listado de productos en stock
+    Obtener listado de productos en stock para un negocio.
     """
-    supabase = get_supabase_client()
-    query = supabase.table("productos").select("*")
-    
+    supabase = scoped.client
+    query = supabase.table("productos").select("*").eq("negocio_id", business_id)
+
     if only_active:
         query = query.eq("activo", True)
-    
+
     response = query.range(skip, skip + limit - 1).execute()
     return response.data
 
@@ -31,122 +32,170 @@ async def get_productos(
 @router.post("/", response_model=types.Producto)
 async def create_producto(
     *,
+    business_id: str,
     producto_in: types.ProductoCreate,
+    scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
 ) -> Any:
     """
-    Crear un nuevo producto
+    Crear un nuevo producto para un negocio.
     """
-    supabase = get_supabase_client()
-    
-    # Check if product code already exists
+    supabase = scoped.client
+
     if producto_in.codigo:
-        response = supabase.table("productos").select("*").eq("codigo", producto_in.codigo).execute()
-        if response.data and len(response.data) > 0:
+        existing = (
+            supabase.table("productos")
+            .select("id")
+            .eq("negocio_id", business_id)
+            .eq("codigo", producto_in.codigo)
+            .limit(1)
+            .execute()
+        )
+        if existing.data:
             raise HTTPException(
-                status_code=400,
-                detail="Ya existe un producto con este código.",
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Ya existe un producto con este código en el negocio.",
             )
-    
-    # Create product
-    producto_data = producto_in.model_dump()
-    response = supabase.table("productos").insert(producto_data).execute()
-    
-    if not response.data or len(response.data) == 0:
+
+    payload = producto_in.model_dump()
+    payload["negocio_id"] = business_id
+
+    response = supabase.table("productos").insert(payload).execute()
+    if not response.data:
         raise HTTPException(
-            status_code=500,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error al crear el producto",
         )
-    
+
     return response.data[0]
 
 
 @router.get("/{producto_id}", response_model=types.Producto)
 async def get_producto(
     *,
+    business_id: str,
     producto_id: int,
+    scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
 ) -> Any:
     """
-    Obtener un producto por ID
+    Obtener un producto por ID dentro de un negocio.
     """
-    supabase = get_supabase_client()
-    response = supabase.table("productos").select("*").eq("id", producto_id).execute()
-    
-    if not response.data or len(response.data) == 0:
+    supabase = scoped.client
+    response = (
+        supabase.table("productos")
+        .select("*")
+        .eq("negocio_id", business_id)
+        .eq("id", producto_id)
+        .maybe_single()
+        .execute()
+    )
+
+    if not response.data:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Producto no encontrado",
+            detail="Producto no encontrado en este negocio",
         )
-    
-    return response.data[0]
+
+    return response.data
 
 
 @router.put("/{producto_id}", response_model=types.Producto)
 async def update_producto(
     *,
+    business_id: str,
     producto_id: int,
     producto_in: types.ProductoUpdate,
+    scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
 ) -> Any:
     """
-    Actualizar un producto
+    Actualizar un producto de un negocio.
     """
-    supabase = get_supabase_client()
-    
-    # Check if product exists
-    response = supabase.table("productos").select("*").eq("id", producto_id).execute()
-    if not response.data or len(response.data) == 0:
+    supabase = scoped.client
+    exists = (
+        supabase.table("productos")
+        .select("id")
+        .eq("negocio_id", business_id)
+        .eq("id", producto_id)
+        .limit(1)
+        .execute()
+    )
+    if not exists.data:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Producto no encontrado",
+            detail="Producto no encontrado en este negocio",
         )
-    
-    # Update product
-    producto_data = producto_in.model_dump(exclude_unset=True)
-    response = supabase.table("productos").update(producto_data).eq("id", producto_id).execute()
-    
-    if not response.data or len(response.data) == 0:
+
+    update_data = producto_in.model_dump(exclude_unset=True)
+    response = (
+        supabase.table("productos")
+        .update(update_data)
+        .eq("negocio_id", business_id)
+        .eq("id", producto_id)
+        .execute()
+    )
+
+    if not response.data:
         raise HTTPException(
-            status_code=500,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error al actualizar el producto",
         )
-    
+
     return response.data[0]
 
 
 @router.delete("/{producto_id}", response_model=types.Producto)
 async def delete_producto(
     *,
+    business_id: str,
     producto_id: int,
+    scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
 ) -> Any:
     """
-    Eliminar un producto
+    Desactivar un producto dentro de un negocio.
     """
-    supabase = get_supabase_client()
-    
-    # Check if product exists
-    response = supabase.table("productos").select("*").eq("id", producto_id).execute()
-    if not response.data or len(response.data) == 0:
+    supabase = scoped.client
+    exists = (
+        supabase.table("productos")
+        .select("id")
+        .eq("negocio_id", business_id)
+        .eq("id", producto_id)
+        .limit(1)
+        .execute()
+    )
+    if not exists.data:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Producto no encontrado",
+            detail="Producto no encontrado en este negocio",
         )
-    
-    # Delete product (or mark as inactive)
-    # Option 1: Physical deletion
-    # response = supabase.table("productos").delete().eq("id", producto_id).execute()
-    
-    # Option 2: Logical deletion (recommended)
-    response = supabase.table("productos").update({"activo": False}).eq("id", producto_id).execute()
-    
+
+    response = (
+        supabase.table("productos")
+        .update({"activo": False})
+        .eq("negocio_id", business_id)
+        .eq("id", producto_id)
+        .execute()
+    )
+
+    if not response.data:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error al desactivar el producto",
+        )
+
     return response.data[0]
 
 
 @router.post("/importar")
 async def importar_productos(
+    *,
+    business_id: str,
     file: UploadFile = File(...),
+    scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
 ) -> Any:
     """
-    Importar productos desde un archivo Excel
+    Importar productos desde un archivo (placeholder).
     """
-    # Aquí iría la lógica para importar productos desde Excel
-    # Por ahora devolvemos una respuesta básica
-    return {"message": f"Archivo {file.filename} importado correctamente"} 
+    _ = scoped.client  # placeholder for futura integración
+    return {
+        "message": f"Archivo {file.filename} importado correctamente",
+        "negocio_id": business_id,
+    }

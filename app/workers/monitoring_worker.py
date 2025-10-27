@@ -11,12 +11,24 @@ from celery import Task
 from app.celery_app import celery_app
 from app.services.drift_detector import drift_detector
 from app.db.supabase_client import get_supabase_client
+from app.db.scoped_client import ScopedSupabaseClient
 
 logger = logging.getLogger(__name__)
 
 
+def _resolve_supabase_client(
+    supabase_client: Optional[ScopedSupabaseClient] = None,
+) -> ScopedSupabaseClient:
+    """
+    Return the provided client or fall back to the default Supabase client.
+    """
+    if supabase_client is not None:
+        return supabase_client
+    return get_supabase_client()
+
+
 @celery_app.task(bind=True, soft_time_limit=300, time_limit=600)
-def detect_drift_all_models(self: Task) -> Dict[str, Any]:
+def detect_drift_all_models(self: Task, supabase_client: Optional[ScopedSupabaseClient] = None) -> Dict[str, Any]:
     """
     Periodic task to detect drift for all active models.
     Runs daily at 2 AM.
@@ -26,7 +38,7 @@ def detect_drift_all_models(self: Task) -> Dict[str, Any]:
     """
     try:
         logger.info("Starting drift detection for all active models")
-        supabase = get_supabase_client()
+        supabase = _resolve_supabase_client(supabase_client)
         
         # Get all active models
         result = supabase.table('ml_models').select(
@@ -96,7 +108,7 @@ def detect_drift_all_models(self: Task) -> Dict[str, Any]:
 
 
 @celery_app.task(bind=True, soft_time_limit=180, time_limit=300)
-def aggregate_hourly_metrics(self: Task, tenant_id: Optional[str] = None) -> Dict[str, Any]:
+def aggregate_hourly_metrics(self: Task, tenant_id: Optional[str] = None, supabase_client: Optional[ScopedSupabaseClient] = None) -> Dict[str, Any]:
     """
     Aggregate performance metrics for the last hour.
     Runs every hour.
@@ -109,7 +121,7 @@ def aggregate_hourly_metrics(self: Task, tenant_id: Optional[str] = None) -> Dic
     """
     try:
         logger.info(f"Starting hourly metric aggregation for tenant: {tenant_id or 'all'}")
-        supabase = get_supabase_client()
+        supabase = _resolve_supabase_client(supabase_client)
         
         # Calculate time window
         now = datetime.now()
@@ -176,7 +188,7 @@ def aggregate_hourly_metrics(self: Task, tenant_id: Optional[str] = None) -> Dic
 
 
 @celery_app.task(bind=True, soft_time_limit=600, time_limit=900)
-def generate_weekly_compliance_report(self: Task, tenant_id: Optional[str] = None) -> Dict[str, Any]:
+def generate_weekly_compliance_report(self: Task, tenant_id: Optional[str] = None, supabase_client: Optional[ScopedSupabaseClient] = None) -> Dict[str, Any]:
     """
     Generate weekly privacy compliance reports.
     Runs every Monday at 3 AM.
@@ -189,7 +201,7 @@ def generate_weekly_compliance_report(self: Task, tenant_id: Optional[str] = Non
     """
     try:
         logger.info(f"Starting weekly compliance report generation for tenant: {tenant_id or 'all'}")
-        supabase = get_supabase_client()
+        supabase = _resolve_supabase_client(supabase_client)
         
         # Calculate report period (last 7 days)
         end_date = datetime.now().date()
@@ -304,7 +316,7 @@ def generate_weekly_compliance_report(self: Task, tenant_id: Optional[str] = Non
 
 
 @celery_app.task(bind=True, soft_time_limit=300, time_limit=600)
-def process_feedback_batch(self: Task, batch_size: int = 100) -> Dict[str, Any]:
+def process_feedback_batch(self: Task, batch_size: int = 100, supabase_client: Optional[ScopedSupabaseClient] = None) -> Dict[str, Any]:
     """
     Process unprocessed user feedback and generate improvement suggestions.
     Runs every 6 hours.
@@ -317,7 +329,7 @@ def process_feedback_batch(self: Task, batch_size: int = 100) -> Dict[str, Any]:
     """
     try:
         logger.info(f"Starting feedback processing batch (size: {batch_size})")
-        supabase = get_supabase_client()
+        supabase = _resolve_supabase_client(supabase_client)
         
         # Get unprocessed feedback
         result = supabase.table('user_feedback').select('*').eq(
@@ -394,7 +406,7 @@ def process_feedback_batch(self: Task, batch_size: int = 100) -> Dict[str, Any]:
 
 
 @celery_app.task(bind=True, soft_time_limit=180, time_limit=300)
-def check_partitioning_needs(self: Task) -> Dict[str, Any]:
+def check_partitioning_needs(self: Task, supabase_client: Optional[ScopedSupabaseClient] = None) -> Dict[str, Any]:
     """
     Check if tables need partitioning based on size thresholds.
     Runs daily at 4 AM.
@@ -404,7 +416,7 @@ def check_partitioning_needs(self: Task) -> Dict[str, Any]:
     """
     try:
         logger.info("Checking partitioning needs for monitored tables")
-        supabase = get_supabase_client()
+        supabase = _resolve_supabase_client(supabase_client)
         
         # Get partition management configuration
         result = supabase.table('partition_management').select('*').execute()
@@ -480,7 +492,7 @@ def check_partitioning_needs(self: Task) -> Dict[str, Any]:
 
 
 @celery_app.task(bind=True, soft_time_limit=120, time_limit=240)
-def aggregate_daily_metrics(self: Task, date: Optional[str] = None) -> Dict[str, Any]:
+def aggregate_daily_metrics(self: Task, date: Optional[str] = None, supabase_client: Optional[ScopedSupabaseClient] = None) -> Dict[str, Any]:
     """
     Aggregate daily metrics from hourly data.
     Runs daily at 1 AM for previous day.
@@ -499,7 +511,7 @@ def aggregate_daily_metrics(self: Task, date: Optional[str] = None) -> Dict[str,
             target_date = (datetime.now() - timedelta(days=1)).date()
         
         logger.info(f"Starting daily metric aggregation for {target_date}")
-        supabase = get_supabase_client()
+        supabase = _resolve_supabase_client(supabase_client)
         
         # Get all tenants
         result = supabase.table('negocios').select('id').execute()

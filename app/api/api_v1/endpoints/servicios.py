@@ -2,7 +2,7 @@ from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
 from pydantic import ValidationError
 from app.api.deps import get_current_user_from_request as get_current_user
-from app.db.supabase_client import get_supabase_client
+from app.api.context import BusinessScopedClientDep, scoped_client_from_request
 from app.schemas.servicio import ServicioCreate, ServicioUpdate, Servicio
 from app.dependencies import PermissionDependency
 import logging
@@ -14,7 +14,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 @router.get("/", response_model=List[Servicio],
-    dependencies=[Depends(PermissionDependency("puede_ver_productos"))]
+    dependencies=[Depends(PermissionDependency("puede_ver_productos")), Depends(BusinessScopedClientDep)]
 )
 async def read_services(
     business_id: str,
@@ -24,7 +24,7 @@ async def read_services(
     """
     Retrieve services for a specific business, optionally filtered by category (requires puede_ver_productos).
     """
-    supabase = get_supabase_client()
+    supabase = scoped_client_from_request(request)
     
     try:
         query = supabase.table("servicios").select("*").eq("negocio_id", business_id)
@@ -97,7 +97,7 @@ async def read_services(
         )
 
 @router.post("/", response_model=Servicio, status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(PermissionDependency("puede_editar_productos"))]
+    dependencies=[Depends(PermissionDependency("puede_editar_productos")), Depends(BusinessScopedClientDep)]
 )
 async def create_service(
     business_id: str,
@@ -107,7 +107,7 @@ async def create_service(
     """
     Create a new service for a specific business (requires puede_editar_productos).
     """
-    supabase = get_supabase_client()
+    supabase = scoped_client_from_request(request)
 
     try:
         # Verify that the category exists and belongs to the business (only if categoria_id is provided)
@@ -142,7 +142,7 @@ async def create_service(
         )
 
 @router.get("/{service_id}", response_model=Servicio,
-    dependencies=[Depends(PermissionDependency("puede_ver_productos"))]
+    dependencies=[Depends(PermissionDependency("puede_ver_productos")), Depends(BusinessScopedClientDep)]
 )
 async def read_service(
     business_id: str,
@@ -152,7 +152,7 @@ async def read_service(
     """
     Get a specific service by ID for a business (requires puede_ver_productos).
     """
-    supabase = get_supabase_client()
+    supabase = scoped_client_from_request(request)
 
     try:
         response = supabase.table("servicios").select("*").eq("id", service_id).eq("negocio_id", business_id).single().execute()
@@ -172,7 +172,7 @@ async def read_service(
         )
 
 @router.put("/{service_id}", response_model=Servicio,
-    dependencies=[Depends(PermissionDependency("puede_editar_productos"))]
+    dependencies=[Depends(PermissionDependency("puede_editar_productos")), Depends(BusinessScopedClientDep)]
 )
 async def update_service(
     business_id: str,
@@ -183,7 +183,7 @@ async def update_service(
     """
     Update a service by ID for a business (requires puede_editar_productos).
     """
-    supabase = get_supabase_client()
+    supabase = scoped_client_from_request(request)
 
     try:
         update_data = service_update.model_dump(exclude_unset=True)
@@ -228,7 +228,7 @@ async def update_service(
         )
 
 @router.delete("/{service_id}",
-    dependencies=[Depends(PermissionDependency("puede_editar_productos"))]
+    dependencies=[Depends(PermissionDependency("puede_editar_productos")), Depends(BusinessScopedClientDep)]
 )
 async def delete_service(
     business_id: str,
@@ -238,7 +238,7 @@ async def delete_service(
     """
     Delete a service by ID for a business (requires puede_editar_productos).
     """
-    supabase = get_supabase_client()
+    supabase = scoped_client_from_request(request)
 
     try:
         # Check if service exists and belongs to the business

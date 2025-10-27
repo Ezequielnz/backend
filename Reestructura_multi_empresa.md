@@ -62,9 +62,15 @@ Resumen de cambios: Se completó la migración del punto 2; todos los registros 
 8. Crear endpoints para crear, listar y seleccionar sucursales.
 9. Crear un endpoint que genere automaticamente una sucursal principal al crear un negocio (validado por `migration_06`).
 
-**Resumen de cambios:** Se agrego `app/db/scoped_client.py` con `ScopedSupabaseClient`/`get_scoped_supabase_user_client`, que fuerza el agregado de `negocio_id` y `sucursal_id` en cada `table()` antes de ejecutar la consulta. Los routers de `ventas`, `compras`, `productos`, `categorias`, `proveedores`, `permissions` y `tenant_settings` ya usan este cliente al recibir `business_id`/`branch_id`, por lo que las lecturas, actualizaciones y borrados quedan automaticamente confinados al negocio (y sucursal cuando aplica). Adicionalmente, las acciones criticas en `finanzas.py` (update/delete de categorias, movimientos y cuentas) ahora siempre incluyen `eq("negocio_id", business_id)` para evitar accesos cruzados.
+**Resumen de cambios:**
+- Se agrego `app/db/scoped_client.py` con `ScopedSupabaseClient`/`get_scoped_supabase_user_client`, que fuerza el agregado de `negocio_id` y `sucursal_id` en cada `table()` antes de ejecutar la consulta. Los routers de `ventas`, `compras`, `productos`, `categorias`, `proveedores`, `permissions` y `tenant_settings` ya usan este cliente al recibir `business_id`/`branch_id`, por lo que las lecturas, actualizaciones y borrados quedan automaticamente confinados al negocio (y sucursal cuando aplica). Adicionalmente, las acciones criticas en `finanzas.py` (update/delete de categorias, movimientos y cuentas) ahora siempre incluyen `eq("negocio_id", business_id)` para evitar accesos cruzados.
+- Se incorporo `BusinessScopedClientDep`/`BranchScopedClientDep` como dependencia comun en FastAPI; `clientes`, `servicios` y `tareas` migraron a `scoped_client_from_request(request)` y dejaron de usar `get_supabase_client`, evitando bypass de RLS en los flujos de clientes, catalogo y tareas.
+- Las funciones de servicio relacionadas (`BusinessBranchContextDep`, helpers) ahora aceptan `X-Branch-Id` en los headers permitiendo compartir contexto entre backend y frontend sin duplicar parametros.
 
-**Pendientes / siguientes pasos:** Homogeneizar el uso del cliente con alcance en controladores que aun derivan el `negocio_id` dinamicamente (p.ej. dashboards que listan todos los negocios del usuario) y revisar la capa de servicios para ejercer el mismo control cuando se consuma Supabase fuera de los routers HTTP.
+**Pendientes / siguientes pasos (actualizado 25-10-2025):**
+- ✅ `finanzas` ya opera con `BusinessScopedClientDep`/`ScopedClientContext` en todas las rutas (lecturas, altas, actualizaciones y bajas).
+- ⏳ Mantener el seguimiento sobre `suscripciones`, `stock` y las vistas legacy de monitoring para que continúen usando el cliente scoped (hoy alineados tras la auditoría).
+- ⏳ Ajustar los servicios que aún instancian `get_supabase_client()` (importación, monitoreo) para que reciban un cliente scoped desde el request o ejecución programada.
 
 **Nota 22-10-2025:** Se revis� este pendiente antes de iniciar el paso 5 y se confirm� que no bloquea el selector de sucursales; permanece abierto como trabajo de consolidaci�n posterior.
 
@@ -83,13 +89,18 @@ Resumen de cambios: Se completó la migración del punto 2; todos los registros 
 9. Testear en diferentes roles de usuario (dueno, empleado, administrador).
 
 **Resumen de cambios (paso 5):**
-- Backend: nuevo endpoint `GET /businesses/{business_id}/branches` que devuelve las sucursales activas visibles seg�n el rol del usuario (admin ve todas, el resto solo sus asignaciones, con fallback a la sucursal principal).
-- Frontend: `BusinessContext` ahora expone `currentBranch`, `branches` y `refreshBranches`; el `Layout` consume ese estado, persiste la selecci�n por negocio y muestra un selector de sucursal en el encabezado cuando hay m�ltiples opciones.
-- El `Sidebar` exige una sucursal seleccionada antes de navegar cuando el negocio tiene m�s de una, evitando operaciones sin contexto.
+- Backend: nuevo endpoint `GET /businesses/{business_id}/branches` que devuelve las sucursales activas visibles segun el rol del usuario (admin ve todas, el resto solo sus asignaciones, con fallback a la sucursal principal).
+- Frontend: `BusinessContext` ahora expone `currentBranch`, `branches` y `refreshBranches`; el `Layout` consume ese estado, persiste la seleccion por negocio y muestra un selector de sucursal en el encabezado cuando hay multiples opciones.
+- El `Sidebar` exige una sucursal seleccionada antes de navegar cuando el negocio tiene mas de una, evitando operaciones sin contexto.
+- El interceptor principal de `api.js` agrega el header `X-Branch-Id` usando la sucursal activa almacenada en `localStorage`; el backend lo consume en `BusinessBranchContextDep` para derivar `branch_id` cuando no viaja en la ruta o query.
 
 **Pendientes identificados tras el paso 5:**
 - Actualizar gradualmente las vistas (ventas, compras, inventario, reportes) para que utilicen `currentBranch` en sus consultas y claves de cache, cerrando los puntos 3 y 4 de esta fase.
-- Añadir vistas de mantenimiento de sucursales en la secci�n de configuraci�n (punto 6) y validar formularios multi-sucursal (puntos 7 y 8).
+- Anadir vistas de mantenimiento de sucursales en la seccion de configuracion (punto 6) y validar formularios multi-sucursal (puntos 7 y 8).
+
+**Actualización 25-10-2025:** `Finanzas` y `ProductsAndServices` ya consultan la API con `currentBranch`, invalidan caches por sucursal y bloquean la UI hasta que el usuario selecciona una sede; siguen pendientes las vistas de ventas/reportes y los formularios de configuración multi-sucursal.
+
+
 
 ---
 

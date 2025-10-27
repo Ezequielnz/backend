@@ -9,7 +9,7 @@ from dateutil.relativedelta import relativedelta
 
 from app.types.auth import User
 from app.api.deps import get_current_user_from_request as get_current_user
-from app.db.supabase_client import get_supabase_client
+from app.api.context import BusinessScopedClientDep, ScopedClientContext
 from app.schemas.finanzas import (
     CategoriaFinancieraCreate, CategoriaFinancieraUpdate, CategoriaFinanciera,
     MovimientoFinancieroCreate, MovimientoFinancieroUpdate, MovimientoFinanciero, MovimientoFinancieroConCategoria,
@@ -59,10 +59,11 @@ def serialize_for_json(data):
 async def get_categorias_financieras(
     business_id: str,
     tipo: Optional[str] = Query(None, regex="^(ingreso|egreso)$"),
-    activo: Optional[bool] = Query(True)
+    activo: Optional[bool] = Query(True),
+    scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
 ) -> Any:
     """Get financial categories for a business."""
-    supabase = get_supabase_client()
+    supabase = scoped.client
     
     try:
         query = supabase.table("categorias_financieras").select("*").eq("negocio_id", business_id)
@@ -88,10 +89,11 @@ async def get_categorias_financieras(
 async def create_categoria_financiera(
     business_id: str,
     categoria_in: CategoriaFinancieraCreate,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
 ) -> Any:
     """Create a new financial category."""
-    supabase = get_supabase_client()
+    supabase = scoped.client
     
     try:
         # Check if category already exists
@@ -128,13 +130,11 @@ async def create_categoria_financiera(
 @router.put("/categorias/{categoria_id}", response_model=CategoriaFinanciera,
     dependencies=[Depends(PermissionDependency("facturacion", "editar"))]
 )
-async def update_categoria_financiera(
-    business_id: str,
+async def update_categoria_financiera(business_id: str,
     categoria_id: str,
-    categoria_update: CategoriaFinancieraUpdate
-) -> Any:
+    categoria_update: CategoriaFinancieraUpdate, scoped: ScopedClientContext = Depends(BusinessScopedClientDep)) -> Any:
     """Update a financial category."""
-    supabase = get_supabase_client()
+    supabase = scoped.client
     
     try:
         # Verify category exists and belongs to business
@@ -178,12 +178,10 @@ async def update_categoria_financiera(
 @router.delete("/categorias/{categoria_id}",
     dependencies=[Depends(PermissionDependency("facturacion", "editar"))]
 )
-async def delete_categoria_financiera(
-    business_id: str,
-    categoria_id: str
-) -> Any:
+async def delete_categoria_financiera(business_id: str,
+    categoria_id: str, scoped: ScopedClientContext = Depends(BusinessScopedClientDep)) -> Any:
     """Delete a financial category."""
-    supabase = get_supabase_client()
+    supabase = scoped.client
     
     try:
         # Verify category exists and belongs to business
@@ -236,10 +234,11 @@ async def get_movimientos_financieros(
     fecha_desde: Optional[date] = Query(None),
     fecha_hasta: Optional[date] = Query(None),
     limit: int = Query(100, le=500),
-    offset: int = Query(0, ge=0)
+    offset: int = Query(0, ge=0),
+    scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
 ) -> Any:
     """Get financial movements for a business with filters."""
-    supabase = get_supabase_client()
+    supabase = scoped.client
     
     try:
         # Base query for manual financial movements
@@ -392,10 +391,11 @@ async def get_movimientos_financieros(
 async def create_movimiento_financiero(
     business_id: str,
     movimiento_in: MovimientoFinancieroCreate,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
 ) -> Any:
     """Create a new financial movement."""
-    supabase = get_supabase_client()
+    supabase = scoped.client
     
     try:
         # Validate category belongs to business if provided
@@ -467,13 +467,11 @@ async def create_movimiento_financiero(
 @router.put("/movimientos/{movimiento_id}", response_model=MovimientoFinanciero,
     dependencies=[Depends(PermissionDependency("facturacion", "editar"))]
 )
-async def update_movimiento_financiero(
-    business_id: str,
+async def update_movimiento_financiero(business_id: str,
     movimiento_id: str,
-    movimiento_update: MovimientoFinancieroUpdate
-) -> Any:
+    movimiento_update: MovimientoFinancieroUpdate, scoped: ScopedClientContext = Depends(BusinessScopedClientDep)) -> Any:
     """Update a financial movement."""
-    supabase = get_supabase_client()
+    supabase = scoped.client
     
     try:
         # Verify movement exists and belongs to business
@@ -526,12 +524,10 @@ async def update_movimiento_financiero(
 @router.delete("/movimientos/{movimiento_id}",
     dependencies=[Depends(PermissionDependency("facturacion", "editar"))]
 )
-async def delete_movimiento_financiero(
-    business_id: str,
-    movimiento_id: str
-) -> Any:
+async def delete_movimiento_financiero(business_id: str,
+    movimiento_id: str, scoped: ScopedClientContext = Depends(BusinessScopedClientDep)) -> Any:
     """Delete a financial movement."""
-    supabase = get_supabase_client()
+    supabase = scoped.client
     
     try:
         # Verify movement exists and belongs to business
@@ -573,7 +569,8 @@ async def get_resumen_financiero(
     request: Request,
     business_id: str,
     mes: Optional[int] = Query(None, ge=1, le=12),
-    anio: Optional[int] = Query(None, ge=2020)
+    anio: Optional[int] = Query(None, ge=2020),
+    scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
 ) -> Any:
     """Get financial summary for a business."""
     
@@ -581,7 +578,7 @@ async def get_resumen_financiero(
     logger.info(f"🔍 Iniciando get_resumen_financiero para business_id: {business_id}")
     
     try:
-        supabase = get_supabase_client()
+        supabase = scoped.client
         
         
     
@@ -724,10 +721,11 @@ async def get_resumen_financiero(
 async def get_flujo_caja_mensual(
     business_id: str,
     mes: int = Query(..., ge=1, le=12),
-    anio: int = Query(..., ge=2020)
+    anio: int = Query(..., ge=2020),
+    scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
 ) -> Any:
     """Get monthly cash flow for a business."""
-    supabase = get_supabase_client()
+    supabase = scoped.client
     
     try:
         # Calculate date range
@@ -812,10 +810,11 @@ async def get_cuentas_por_cobrar(
     vencimiento_desde: Optional[date] = Query(None),
     vencimiento_hasta: Optional[date] = Query(None),
     limit: int = Query(100, le=500),
-    offset: int = Query(0, ge=0)
+    offset: int = Query(0, ge=0),
+    scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
 ) -> Any:
     """Get accounts receivable for a business."""
-    supabase = get_supabase_client()
+    supabase = scoped.client
     
     try:
         query = supabase.table("cuentas_pendientes").select("""
@@ -872,10 +871,11 @@ async def get_cuentas_por_pagar(
     vencimiento_desde: Optional[date] = Query(None),
     vencimiento_hasta: Optional[date] = Query(None),
     limit: int = Query(100, le=500),
-    offset: int = Query(0, ge=0)
+    offset: int = Query(0, ge=0),
+    scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
 ) -> Any:
     """Get accounts payable for a business."""
-    supabase = get_supabase_client()
+    supabase = scoped.client
     
     try:
         query = supabase.table("cuentas_pendientes").select("""
@@ -929,10 +929,11 @@ async def get_cuentas_por_pagar(
 async def create_cuenta_pendiente(
     business_id: str,
     cuenta_in: CuentaPendienteCreate,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
 ) -> Any:
     """Create a new pending account (receivable or payable)."""
-    supabase = get_supabase_client()
+    supabase = scoped.client
     
     try:
         # Validate client belongs to business if provided
@@ -977,13 +978,11 @@ async def create_cuenta_pendiente(
 @router.put("/cuentas/{cuenta_id}", response_model=CuentaPendiente,
     dependencies=[Depends(PermissionDependency("facturacion", "editar"))]
 )
-async def update_cuenta_pendiente(
-    business_id: str,
+async def update_cuenta_pendiente(business_id: str,
     cuenta_id: str,
-    cuenta_update: CuentaPendienteUpdate
-) -> Any:
+    cuenta_update: CuentaPendienteUpdate, scoped: ScopedClientContext = Depends(BusinessScopedClientDep)) -> Any:
     """Update a pending account."""
-    supabase = get_supabase_client()
+    supabase = scoped.client
     
     try:
         # Verify account exists and belongs to business
@@ -1039,10 +1038,11 @@ async def update_cuenta_pendiente(
 async def marcar_cuenta_como_pagada(
     business_id: str,
     cuenta_id: str,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
 ) -> Any:
     """Mark an account as paid."""
-    supabase = get_supabase_client()
+    supabase = scoped.client
     
     try:
         # Verify account exists and belongs to business
@@ -1089,12 +1089,10 @@ async def marcar_cuenta_como_pagada(
 @router.delete("/cuentas/{cuenta_id}",
     dependencies=[Depends(PermissionDependency("facturacion", "editar"))]
 )
-async def delete_cuenta_pendiente(
-    business_id: str,
-    cuenta_id: str
-) -> Any:
+async def delete_cuenta_pendiente(business_id: str,
+    cuenta_id: str, scoped: ScopedClientContext = Depends(BusinessScopedClientDep)) -> Any:
     """Delete a pending account."""
-    supabase = get_supabase_client()
+    supabase = scoped.client
     
     try:
         # Verify account exists and belongs to business

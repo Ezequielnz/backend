@@ -5,7 +5,7 @@ import math
 
 from app.dependencies import PermissionDependency
 from app.api.deps import verify_basic_business_access
-from app.db.supabase_client import get_supabase_client
+from app.api.context import BusinessScopedClientDep, ScopedClientContext, scoped_client_from_request
 from app.schemas.tarea import (
     TareaCreate, TareaUpdate, TareaResponse, TareaListResponse,
     TareaFiltros, TareaCalendario, TareaEstadisticas,
@@ -29,7 +29,7 @@ async def get_tareas(
     fecha_inicio_desde: Optional[datetime] = Query(None, description="Fecha inicio desde"),
     fecha_inicio_hasta: Optional[datetime] = Query(None, description="Fecha inicio hasta"),
     busqueda: Optional[str] = Query(None, description="Búsqueda en título/descripción")
-) -> Any:
+, _: ScopedClientContext = Depends(BusinessScopedClientDep)) -> Any:
     """
     Obtener listado de tareas con filtros y paginación.
     Todos los usuarios del negocio pueden acceder, pero se filtran las tareas según el rol:
@@ -40,7 +40,7 @@ async def get_tareas(
     if not user:
         raise HTTPException(status_code=401, detail="User not authenticated")
     
-    supabase = get_supabase_client()
+    supabase = scoped_client_from_request(request)
     
     try:
         # Verificar acceso básico al negocio
@@ -170,7 +170,7 @@ async def create_tarea(
     tarea_data: TareaCreate,
     request: Request,
     _: Any = Depends(PermissionDependency("tareas", "asignar"))
-) -> Any:
+, _: ScopedClientContext = Depends(BusinessScopedClientDep)) -> Any:
     """
     Crear una nueva tarea.
     Requiere permiso 'puede_asignar_tareas'.
@@ -184,7 +184,7 @@ async def create_tarea(
     print(f"  user.id: {user.id}")
     print(f"  tarea_data: {tarea_data.model_dump()}")
     
-    supabase = get_supabase_client()
+    supabase = scoped_client_from_request(request)
     
     try:
         # Obtener usuario_negocio_id del creador
@@ -295,7 +295,7 @@ async def get_calendario_tareas(
     fecha_inicio: Optional[datetime] = Query(None, description="Fecha inicio del rango"),
     fecha_fin: Optional[datetime] = Query(None, description="Fecha fin del rango"),
     _: Any = Depends(PermissionDependency("tareas", "ver"))
-) -> Any:
+, _: ScopedClientContext = Depends(BusinessScopedClientDep)) -> Any:
     """
     Obtener tareas para vista de calendario.
     Requiere permiso 'puede_ver_tareas'.
@@ -304,7 +304,7 @@ async def get_calendario_tareas(
     if not user:
         raise HTTPException(status_code=401, detail="User not authenticated")
     
-    supabase = get_supabase_client()
+    supabase = scoped_client_from_request(request)
     
     try:
         query = supabase.table("tareas").select("""
@@ -369,7 +369,7 @@ async def get_empleados_negocio(
     business_id: str,
     request: Request,
     _: Any = Depends(PermissionDependency("tareas", "asignar"))
-) -> Any:
+, _: ScopedClientContext = Depends(BusinessScopedClientDep)) -> Any:
     """
     Obtener lista de empleados del negocio para asignar tareas.
     Requiere permiso 'puede_asignar_tareas'.
@@ -378,7 +378,7 @@ async def get_empleados_negocio(
     if not user:
         raise HTTPException(status_code=401, detail="User not authenticated")
     
-    supabase = get_supabase_client()
+    supabase = scoped_client_from_request(request)
     
     try:
         response = supabase.table("usuarios_negocios").select("""
@@ -409,7 +409,7 @@ async def get_empleados_negocio(
 async def get_estadisticas_tareas(
     business_id: str,
     request: Request
-) -> Any:
+, _: ScopedClientContext = Depends(BusinessScopedClientDep)) -> Any:
     """
     Obtener estadísticas de tareas del negocio.
     Todos los usuarios pueden ver estadísticas, pero filtradas según su rol.
@@ -418,7 +418,7 @@ async def get_estadisticas_tareas(
     if not user:
         raise HTTPException(status_code=401, detail="User not authenticated")
     
-    supabase = get_supabase_client()
+    supabase = scoped_client_from_request(request)
     
     try:
         # Verificar acceso básico al negocio
@@ -556,7 +556,7 @@ async def get_tarea(
     business_id: str,
     tarea_id: str,
     request: Request
-) -> Any:
+, _: ScopedClientContext = Depends(BusinessScopedClientDep)) -> Any:
     """
     Obtener una tarea específica.
     Los usuarios pueden ver una tarea si:
@@ -567,7 +567,7 @@ async def get_tarea(
     if not user:
         raise HTTPException(status_code=401, detail="User not authenticated")
     
-    supabase = get_supabase_client()
+    supabase = scoped_client_from_request(request)
     
     try:
         # Verificar acceso básico al negocio
@@ -637,7 +637,7 @@ async def update_tarea(
     tarea_data: TareaUpdate,
     request: Request,
     _: Any = Depends(PermissionDependency("tareas", "editar"))
-) -> Any:
+, _: ScopedClientContext = Depends(BusinessScopedClientDep)) -> Any:
     """
     Actualizar una tarea existente.
     Requiere permiso 'puede_editar_tareas' o ser el creador de la tarea.
@@ -646,7 +646,7 @@ async def update_tarea(
     if not user:
         raise HTTPException(status_code=401, detail="User not authenticated")
     
-    supabase = get_supabase_client()
+    supabase = scoped_client_from_request(request)
     
     try:
         # Verificar que la tarea existe y pertenece al negocio
@@ -731,7 +731,7 @@ async def delete_tarea(
     tarea_id: str,
     request: Request,
     _: Any = Depends(PermissionDependency("tareas", "editar"))
-) -> Any:
+, _: ScopedClientContext = Depends(BusinessScopedClientDep)) -> Any:
     """
     Eliminar una tarea.
     Requiere permiso 'puede_editar_tareas' o ser el creador de la tarea.
@@ -740,7 +740,7 @@ async def delete_tarea(
     if not user:
         raise HTTPException(status_code=401, detail="User not authenticated")
     
-    supabase = get_supabase_client()
+    supabase = scoped_client_from_request(request)
     
     try:
         # Verificar que la tarea existe
