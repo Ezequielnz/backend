@@ -4,6 +4,7 @@ from app.api.deps import get_current_user_from_request as get_current_user
 from app.api.context import BusinessScopedClientDep, ScopedClientContext
 from app.schemas.suscripcion import SuscripcionCreate, SuscripcionUpdate, Suscripcion, EstadoSuscripcion
 from app.dependencies import PermissionDependency
+from app.types.auth import User
 
 router = APIRouter()
 

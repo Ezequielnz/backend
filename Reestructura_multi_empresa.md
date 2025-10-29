@@ -99,6 +99,8 @@ Resumen de cambios: Se completó la migración del punto 2; todos los registros 
 - Anadir vistas de mantenimiento de sucursales en la seccion de configuracion (punto 6) y validar formularios multi-sucursal (puntos 7 y 8).
 
 **Actualización 25-10-2025:** `Finanzas` y `ProductsAndServices` ya consultan la API con `currentBranch`, invalidan caches por sucursal y bloquean la UI hasta que el usuario selecciona una sede; siguen pendientes las vistas de ventas/reportes y los formularios de configuración multi-sucursal.
+**Actualización 26-10-2025:** Se refactorizaron `ProductsAndServices.jsx` y `Tasks.jsx` para respetar las reglas de hooks (sin retornos tempranos antes de `useQuery` ni imports sin uso) y se estabilizaron los efectos de `Home.tsx`/`EmailConfirmation.jsx` con dependencias explícitas; `Subscriptions.jsx` queda para el próximo barrido junto con los módulos restantes.
+**Actualizacion 27-10-2025:** Se saneo `Subscriptions.jsx` integrando `BusinessContext`/`useUserPermissions`, guardas previas a los fetches y export protegido con `Layout` + `PermissionGuard`. Se limpiaron `badge.tsx` y `button.tsx`, y `TestPage.jsx` ahora memoiza la diagnostica con `useCallback`. El lint finalizo sin advertencias; pytest mantiene fallos previos (ver ejecucion mas reciente).
 
 
 
@@ -158,3 +160,5 @@ Resumen de cambios: Se completó la migración del punto 2; todos los registros 
 4. Politicas RLS revisadas para que dependan de `usuarios_sucursales` donde aplique.
 5. Casos QA para negocios con datos incompletos ejecutados y aprobados.
 6. Documentacion actualizada en `MIGRATION_README.md` y en este plan.
+
+

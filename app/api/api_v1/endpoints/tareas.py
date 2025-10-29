@@ -28,8 +28,9 @@ async def get_tareas(
     creada_por_id: Optional[str] = Query(None, description="Filtrar por creador"),
     fecha_inicio_desde: Optional[datetime] = Query(None, description="Fecha inicio desde"),
     fecha_inicio_hasta: Optional[datetime] = Query(None, description="Fecha inicio hasta"),
-    busqueda: Optional[str] = Query(None, description="Búsqueda en título/descripción")
-, _: ScopedClientContext = Depends(BusinessScopedClientDep)) -> Any:
+    busqueda: Optional[str] = Query(None, description="Bǧsqueda en t��tulo/descripci��n"),
+    _scoped_context: ScopedClientContext = Depends(BusinessScopedClientDep),
+) -> Any:
     """
     Obtener listado de tareas con filtros y paginación.
     Todos los usuarios del negocio pueden acceder, pero se filtran las tareas según el rol:
@@ -169,8 +170,9 @@ async def create_tarea(
     business_id: str,
     tarea_data: TareaCreate,
     request: Request,
-    _: Any = Depends(PermissionDependency("tareas", "asignar"))
-, _: ScopedClientContext = Depends(BusinessScopedClientDep)) -> Any:
+    _permission_check: Any = Depends(PermissionDependency("tareas", "asignar")),
+    _scoped_context: ScopedClientContext = Depends(BusinessScopedClientDep),
+) -> Any:
     """
     Crear una nueva tarea.
     Requiere permiso 'puede_asignar_tareas'.
@@ -294,8 +296,9 @@ async def get_calendario_tareas(
     request: Request,
     fecha_inicio: Optional[datetime] = Query(None, description="Fecha inicio del rango"),
     fecha_fin: Optional[datetime] = Query(None, description="Fecha fin del rango"),
-    _: Any = Depends(PermissionDependency("tareas", "ver"))
-, _: ScopedClientContext = Depends(BusinessScopedClientDep)) -> Any:
+    _permission_check: Any = Depends(PermissionDependency("tareas", "ver")),
+    _scoped_context: ScopedClientContext = Depends(BusinessScopedClientDep),
+) -> Any:
     """
     Obtener tareas para vista de calendario.
     Requiere permiso 'puede_ver_tareas'.
@@ -368,8 +371,9 @@ async def get_calendario_tareas(
 async def get_empleados_negocio(
     business_id: str,
     request: Request,
-    _: Any = Depends(PermissionDependency("tareas", "asignar"))
-, _: ScopedClientContext = Depends(BusinessScopedClientDep)) -> Any:
+    _permission_check: Any = Depends(PermissionDependency("tareas", "asignar")),
+    _scoped_context: ScopedClientContext = Depends(BusinessScopedClientDep),
+) -> Any:
     """
     Obtener lista de empleados del negocio para asignar tareas.
     Requiere permiso 'puede_asignar_tareas'.
@@ -408,8 +412,9 @@ async def get_empleados_negocio(
 @router.get("/estadisticas", response_model=TareaEstadisticas)
 async def get_estadisticas_tareas(
     business_id: str,
-    request: Request
-, _: ScopedClientContext = Depends(BusinessScopedClientDep)) -> Any:
+    request: Request,
+    _scoped_context: ScopedClientContext = Depends(BusinessScopedClientDep),
+) -> Any:
     """
     Obtener estadísticas de tareas del negocio.
     Todos los usuarios pueden ver estadísticas, pero filtradas según su rol.
@@ -555,8 +560,9 @@ async def get_estadisticas_tareas(
 async def get_tarea(
     business_id: str,
     tarea_id: str,
-    request: Request
-, _: ScopedClientContext = Depends(BusinessScopedClientDep)) -> Any:
+    request: Request,
+    _scoped_context: ScopedClientContext = Depends(BusinessScopedClientDep),
+) -> Any:
     """
     Obtener una tarea específica.
     Los usuarios pueden ver una tarea si:
@@ -636,8 +642,9 @@ async def update_tarea(
     tarea_id: str,
     tarea_data: TareaUpdate,
     request: Request,
-    _: Any = Depends(PermissionDependency("tareas", "editar"))
-, _: ScopedClientContext = Depends(BusinessScopedClientDep)) -> Any:
+    _permission_check: Any = Depends(PermissionDependency("tareas", "editar")),
+    _scoped_context: ScopedClientContext = Depends(BusinessScopedClientDep),
+) -> Any:
     """
     Actualizar una tarea existente.
     Requiere permiso 'puede_editar_tareas' o ser el creador de la tarea.
@@ -730,8 +737,9 @@ async def delete_tarea(
     business_id: str,
     tarea_id: str,
     request: Request,
-    _: Any = Depends(PermissionDependency("tareas", "editar"))
-, _: ScopedClientContext = Depends(BusinessScopedClientDep)) -> Any:
+    _permission_check: Any = Depends(PermissionDependency("tareas", "editar")),
+    _scoped_context: ScopedClientContext = Depends(BusinessScopedClientDep),
+) -> Any:
     """
     Eliminar una tarea.
     Requiere permiso 'puede_editar_tareas' o ser el creador de la tarea.
