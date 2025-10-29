@@ -7,13 +7,13 @@ from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 from enum import Enum
-from uuid import uuid4
+
+from uuid import UUID, uuid4
 
 from app.core.config import settings
 from app.services.action_parser import ParsedAction, action_parser_service
 from app.db.supabase_client import get_supabase_client
 from app.core.cache_manager import cache_manager
-from uuid import UUID, uuid4
 
 logger = logging.getLogger(__name__)
 
@@ -62,8 +62,17 @@ class SafeActionEngine:
     """
 
     def __init__(self):
-        self.supabase = get_supabase_client()
-        self.cache_manager = cache_manager
+        self._supabase_client = None
+
+    @property
+    def supabase(self):
+        if self._supabase_client is None:
+            self._supabase_client = get_supabase_client()
+        return self._supabase_client
+
+    @supabase.setter
+    def supabase(self, value):
+        self._supabase_client = value
 
     async def process_actions_from_llm_response(
         self,
@@ -86,7 +95,7 @@ class SafeActionEngine:
         """
         try:
             # Check if automation is enabled for tenant
-            tenant_settings = await self._get_tenant_action_settings(tenant_id)
+            tenant_settings = self._get_tenant_action_settings(tenant_id)
             if not tenant_settings.get('automation_enabled', False):
                 logger.info(f"Automation disabled for tenant {tenant_id}")
                 return []
@@ -101,7 +110,7 @@ class SafeActionEngine:
 
             for action in parsed_actions:
                 # Check canary deployment (gradual rollout)
-                if not await self._should_execute_action(tenant_id, action, tenant_settings):
+                if not self._should_execute_action(tenant_id, action, tenant_settings):
                     logger.info(f"Action {action.action_type} skipped due to canary controls for tenant {tenant_id}")
                     continue
 
@@ -111,10 +120,10 @@ class SafeActionEngine:
                 )
 
                 # Perform impact assessment
-                execution.impact_assessment = await self._assess_impact(execution)
+                execution.impact_assessment = self._assess_impact(execution)
 
                 # Determine approval requirements
-                approval_decision = await self._determine_approval_requirement(execution, tenant_settings)
+                approval_decision = self._determine_approval_requirement(execution, tenant_settings)
 
                 if approval_decision['requires_approval']:
                     # Create approval request
@@ -123,6 +132,7 @@ class SafeActionEngine:
                 else:
                     # Auto-approve and queue for execution
                     execution.approval_status = ApprovalStatus.AUTO_APPROVED
+                    execution.status = ActionStatus.APPROVED
                     await self._queue_for_execution(execution)
 
                 executions.append(execution)
@@ -296,7 +306,7 @@ class SafeActionEngine:
             logger.error(f"Failed to rollback action {execution_id}: {e}")
             return False
 
-    async def _should_execute_action(self, tenant_id: str, action: ParsedAction, tenant_settings: Dict[str, Any]) -> bool:
+    def _should_execute_action(self, tenant_id: str, action: ParsedAction, tenant_settings: Dict[str, Any]) -> bool:
         """Determine if action should be executed based on canary controls"""
         try:
             canary_percentage = tenant_settings.get('canary_percentage', 0.0)
@@ -321,8 +331,8 @@ class SafeActionEngine:
         self, tenant_id: str, action: ParsedAction, prediction_id: Optional[str], llm_response_id: Optional[str]
     ) -> ActionExecution:
         """Create action execution record in database"""
-        # Use a proper UUID to satisfy DB constraint (id UUID PRIMARY KEY)
-        execution_id = str(uuid4())
+        # Prefix execution id with tenant for easier traceability yet keep uniqueness
+        execution_id = f"exec_{tenant_id}_{uuid4().hex[:8]}"
 
         # Normalize prediction_id to UUID or set None if not a valid UUID
         pred_uuid = None
@@ -360,7 +370,7 @@ class SafeActionEngine:
             impact_assessment=action.impact_assessment
         )
 
-    async def _assess_impact(self, execution: ActionExecution) -> Dict[str, Any]:
+    def _assess_impact(self, execution: ActionExecution) -> Dict[str, Any]:
         """Perform impact assessment for the action"""
         # Basic impact assessment - can be extended with more sophisticated logic
         impact = {
@@ -386,7 +396,7 @@ class SafeActionEngine:
 
         return impact
 
-    async def _determine_approval_requirement(self, execution: ActionExecution, tenant_settings: Dict[str, Any]) -> Dict[str, Any]:
+    def _determine_approval_requirement(self, execution: ActionExecution, tenant_settings: Dict[str, Any]) -> Dict[str, Any]:
         """Determine if action requires manual approval"""
         requires_approval = tenant_settings.get('approval_required', True)
         auto_threshold = tenant_settings.get('auto_approval_threshold', 0.9)
@@ -405,9 +415,16 @@ class SafeActionEngine:
                 'reason': f'High-risk action ({execution.impact_assessment["risk_level"]})'
             }
 
+        if requires_approval:
+            return {
+                'requires_approval': True,
+                'reason': 'Tenant policy requires approval'
+            }
+
+        # Auto approval disabled only due to confidence below threshold
         return {
-            'requires_approval': requires_approval,
-            'reason': 'Tenant policy requires approval' if requires_approval else f'Confidence below threshold ({execution.action.confidence} < {auto_threshold})'
+            'requires_approval': True,
+            'reason': f'Confidence below threshold ({execution.action.confidence} < {auto_threshold})'
         }
 
     async def _create_approval_request(self, execution: ActionExecution, approval_decision: Dict[str, Any]):
@@ -492,10 +509,10 @@ class SafeActionEngine:
         return True
 
     # Helper methods for database operations
-    async def _get_tenant_action_settings(self, tenant_id: str) -> Dict[str, Any]:
+    def _get_tenant_action_settings(self, tenant_id: str) -> Dict[str, Any]:
         """Get tenant action settings"""
         cache_key = f"tenant_action_settings:{tenant_id}"
-        cached = self.cache_manager.get('tenant_settings', cache_key)
+        cached = cache_manager.get('tenant_settings', cache_key)
         if cached:
             return cached if isinstance(cached, dict) else {}
 
@@ -503,7 +520,7 @@ class SafeActionEngine:
         result = table.select('*').eq('tenant_id', tenant_id).execute()
 
         settings = result.data[0] if result.data else {}
-        self.cache_manager.set('tenant_settings', cache_key, settings, ttl=300)
+        cache_manager.set('tenant_settings', cache_key, settings, ttl=300)
         return settings
 
     async def _get_action_definition(self, action_type: str) -> Optional[Dict[str, Any]]:
@@ -515,7 +532,9 @@ class SafeActionEngine:
     async def _get_action_definition_id(self, action_type: str) -> Optional[str]:
         """Get action definition ID"""
         action_def = await self._get_action_definition(action_type)
-        return action_def['id'] if action_def else None
+        if not action_def or not isinstance(action_def, dict):
+            return None
+        return action_def.get('id')
 
     async def _get_action_execution(self, execution_id: str) -> Optional[ActionExecution]:
         """Get action execution details"""

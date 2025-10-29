@@ -62,8 +62,8 @@ async def upload_excel(
 @router.get("/sheets/{session_id}")
 async def get_sheets(
     session_id: str,
-    current_user: User = Depends(get_current_user),
     business_id: str,
+    current_user: User = Depends(get_current_user),
     scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
 ):
     """
@@ -82,8 +82,8 @@ async def get_sheets(
 @router.get("/preview/{session_id}", response_model=ResumenImportacion)
 async def get_preview(
     session_id: str,
-    current_user: User = Depends(get_current_user),
     business_id: str,
+    current_user: User = Depends(get_current_user),
     scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
 ):
     """
@@ -103,8 +103,8 @@ async def get_preview(
 async def update_mapping(
     session_id: str,
     mapping: dict,
-    current_user: User = Depends(get_current_user),
     business_id: str,
+    current_user: User = Depends(get_current_user),
     scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
 ):
     """
@@ -128,8 +128,8 @@ async def update_mapping(
 async def update_products(
     session_id: str,
     productos: List[ProductoImportacionUpdate],
-    current_user: User = Depends(get_current_user),
     business_id: str,
+    current_user: User = Depends(get_current_user),
     scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
 ):
     """
@@ -155,8 +155,8 @@ async def update_products(
 async def confirm_import(
     session_id: str,
     confirmacion: ConfirmacionImportacion,
-    current_user: User = Depends(get_current_user),
     business_id: str,
+    current_user: User = Depends(get_current_user),
     scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
 ):
     """
@@ -179,8 +179,8 @@ async def confirm_import(
 @router.delete("/cancel/{session_id}")
 async def cancel_import(
     session_id: str,
-    current_user: User = Depends(get_current_user),
     business_id: str,
+    current_user: User = Depends(get_current_user),
     scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
 ):
     """

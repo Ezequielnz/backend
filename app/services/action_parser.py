@@ -128,9 +128,16 @@ class ActionParserService:
             logger.error(f"Failed to parse actions from LLM response: {e}")
             return []
 
+    def parse_actions_from_llm_response(self, llm_response: str, tenant_id: str) -> List[ParsedAction]:
+        """
+        Backwards compatible wrapper for previous public API name.
+        """
+        return self.parse_actions_from_response(llm_response, tenant_id)
+
     def _parse_json_actions(self, response: str) -> List[ParsedAction]:
         """Parse actions from JSON blocks in the response"""
         actions = []
+        seen_keys: set[str] = set()
 
         # Look for JSON code blocks or action sections
         json_patterns = [
@@ -149,24 +156,39 @@ class ActionParserService:
                         # Array of actions
                         for action_data in data:
                             action = self._parse_single_action_json(action_data)
-                            if action:
+                            if action and self._register_unique_action(action, seen_keys):
                                 actions.append(action)
                     elif isinstance(data, dict):
                         # Single action or actions object
                         if 'actions' in data and isinstance(data['actions'], list):
                             for action_data in data['actions']:
                                 action = self._parse_single_action_json(action_data)
-                                if action:
+                                if action and self._register_unique_action(action, seen_keys):
                                     actions.append(action)
                         else:
                             # Single action
                             action = self._parse_single_action_json(data)
-                            if action:
+                            if action and self._register_unique_action(action, seen_keys):
                                 actions.append(action)
                 except json.JSONDecodeError:
                     continue
 
         return actions
+
+    def _register_unique_action(self, action: ParsedAction, seen_keys: set[str]) -> bool:
+        """
+        Track actions we've already captured based on type+parameters to avoid duplicates
+        from overlapping regex matches.
+        """
+        try:
+            payload = json.dumps(action.parameters, sort_keys=True, default=str)
+        except TypeError:
+            payload = str(action.parameters)
+        key = f"{action.action_type}:{payload}:{action.confidence}"
+        if key in seen_keys:
+            return False
+        seen_keys.add(key)
+        return True
 
     def _parse_single_action_json(self, action_data: Dict[str, Any]) -> Optional[ParsedAction]:
         """Parse a single action from JSON data"""
@@ -194,50 +216,79 @@ class ActionParserService:
 
     def _parse_text_actions(self, response: str) -> List[ParsedAction]:
         """Parse actions from structured text (fallback method)"""
-        actions = []
+        actions: List[ParsedAction] = []
+        lower_response = response.lower()
 
-        # Look for action recommendations in text
-        action_patterns = {
-            'create_task': [
-                r'recommend.*(?:creating?|making)\s+a?\s*task.*?["\']([^"\']+)["\']',
-                r'suggest.*task.*?["\']([^"\']+)["\']',
-                r'should create.*?task.*?["\']([^"\']+)["\']'
-            ],
-            'send_notification': [
-                r'recommend.*(?:sending?|notifying).*?["\']([^"\']+)["\']',
-                r'should send.*?notification.*?["\']([^"\']+)["\']',
-                r'notify.*?["\']([^"\']+)["\']'
-            ],
-            'update_inventory': [
-                r'recommend.*(?:updating?|adjusting).*?inventory',
-                r'should update.*?inventory',
-                r'adjust.*?stock'
-            ],
-            'generate_report': [
-                r'recommend.*(?:generating?|creating).*?report',
-                r'should generate.*?report',
-                r'create.*?report'
-            ]
-        }
+        def add_action(action_type: str, parameters: Dict[str, Any], reasoning: str, confidence: float = 0.6):
+            # Prevent duplicates per action type in text parsing.
+            if any(existing.action_type == action_type for existing in actions):
+                return
+            actions.append(
+                ParsedAction(
+                    action_type=action_type,
+                    parameters=parameters,
+                    confidence=confidence,
+                    reasoning=reasoning,
+                )
+            )
 
-        for action_type, patterns in action_patterns.items():
-            for pattern in patterns:
-                matches = re.findall(pattern, response, re.IGNORECASE)
-                if matches:
-                    # Create basic action from text match
-                    parameters = {}
-                    if action_type == 'create_task' and matches:
-                        parameters['titulo'] = matches[0][:200]  # Limit title length
-                        parameters['descripcion'] = f"Automatically created based on AI analysis: {matches[0]}"
+        # Detect create_task recommendations
+        create_task_match = re.search(
+            r'(recommend|suggest|should)\s+(?:creating|create|making)\s+(?:a\s+)?task', lower_response, re.IGNORECASE
+        )
+        if create_task_match:
+            title_match = re.search(
+                r'task(?:\s+(?:called|named)\s+[\'"]([^\'"]+)[\'"]|\s+to\s+([^.]+))', response, re.IGNORECASE
+            )
+            title = None
+            if title_match:
+                # Use whichever capture group matched and strip to 200 chars
+                title = next((grp for grp in title_match.groups() if grp), None)
+            parameters = {
+                "titulo": (title or "Tarea automática").strip()[:200],
+                "descripcion": "Generada automáticamente a partir del análisis del LLM.",
+            }
+            add_action(
+                "create_task",
+                parameters,
+                reasoning="Detected recommendation to create a task from plain text response.",
+            )
 
-                    action = ParsedAction(
-                        action_type=action_type,
-                        parameters=parameters,
-                        confidence=0.7,  # Lower confidence for text parsing
-                        reasoning=f"Extracted from text analysis: {matches[0] if matches else 'General recommendation'}"
-                    )
-                    actions.append(action)
-                    break  # Only one action per type from text
+        # Detect send_notification recommendations
+        notify_match = re.search(r'(send|sending|notify|notification)', lower_response, re.IGNORECASE)
+        if notify_match and re.search(r'notification|notify|alert', lower_response, re.IGNORECASE):
+            parameters = {
+                "titulo": "Notificación automática",
+                "mensaje": "Generada a partir del análisis del LLM.",
+                "tipo": "info",
+            }
+            add_action(
+                "send_notification",
+                parameters,
+                reasoning="Detected suggestion to notify or send a notification from plain text.",
+            )
+
+        # Detect update_inventory suggestions
+        if re.search(r'(inventory|stock)', lower_response) and re.search(
+            r'(update|adjust|replenish)', lower_response
+        ):
+            parameters = {}
+            add_action(
+                "update_inventory",
+                parameters,
+                reasoning="Detected mention of adjusting or updating inventory from plain text.",
+                confidence=0.5,
+            )
+
+        # Detect generate_report suggestions
+        if re.search(r'(report)', lower_response) and re.search(r'(generate|create|build)', lower_response):
+            parameters = {"tipo_reporte": "ventas"}
+            add_action(
+                "generate_report",
+                parameters,
+                reasoning="Detected suggestion to generate a report from text.",
+                confidence=0.55,
+            )
 
         return actions
 
