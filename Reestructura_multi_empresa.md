@@ -161,4 +161,45 @@ Resumen de cambios: Se completó la migración del punto 2; todos los registros 
 5. Casos QA para negocios con datos incompletos ejecutados y aprobados.
 6. Documentacion actualizada en `MIGRATION_README.md` y en este plan.
 
+---
 
+## Reestructura Sucursales: Usuarios y Permisos
+
+### Objetivos clave
+- Normalizar la informacion de cada sucursal (identificadores, direccion, contacto, horarios, metadatos extensibles) sin duplicidad entre tablas.
+- Garantizar que cualquier operacion (lectura, escritura, reportes) respete el contexto `negocio_id` + `sucursal_id` tanto en Supabase (RLS) como en el backend (`ScopedSupabaseClient`).
+- Permitir que el dueno del negocio gestione usuarios, permisos y acceso por sucursal desde un flujo unico y auditable.
+
+### Cambios propuestos
+- Consolidar el catalogo de sucursales en `sucursales` con campos estandar y un JSONB `metadata` para extensiones; tablas opcionales (`branch_settings`, `branch_documents`) deberian reutilizar las FK actuales.
+- Implementar un `BranchService` en FastAPI que envuelva `ScopedSupabaseClient`, exponga `GET /businesses/{id}/branches`, `POST /branches`, `PATCH /branches/{id}` y maneje cache de lectura (in-memory/Redis) usado por dashboards.
+- Mantener el dueno como superusuario: triggers o scripts deben crear registros en `usuarios_sucursales` para todas las sucursales pertenecientes al negocio justo despues de que nazca la sucursal.
+- Reforzar `migration_07_update_rls_policies.sql` o sucesores para incluir nuevas tablas sensibles y reutilizar helpers (`user_in_business`, `user_can_access_branch`); cualquier tabla nueva debe agregarse antes del despliegue.
+- Migracion sugerida:
+  1. Normalizar datos legados (rellenar `negocio_id`/`sucursal_id`, mover columnas obsoletas a `metadata`).
+  2. Ejecutar `scripts/qa_verify_branch_columns.sql` hasta que no queden filas huerfanas.
+  3. Poblar `usuarios_sucursales` con el dueno y admins usando un script idempotente.
+  4. Activar nuevas politicas/indices y validar con `test_main_branch_trigger.py`.
+
+### Implementaciones recientes
+- `client/src/components/Layout.jsx` actualiza el header para alinear los selectores de negocio y sucursal: en mobile comparten fila con el boton hamburguesa (`flex-1`) y en escritorio permanecen alineados a la derecha con etiquetas descriptivas.
+- Se elimino el selector redundante del sidebar en pantallas pequenas, dejando el cambio de contexto centralizado en el header y persistiendo por negocio en `localStorage`.
+
+### Flujos de acceso y permisos
+- Alta de usuario: el dueno invita (`POST /businesses/{id}/invitaciones`), el invitado registra su cuenta, y al aceptar se crea `usuarios_negocios` (rol: `owner` | `admin` | `staff`) junto con permisos base.
+- `permisos_usuario_negocio` funciona como matriz de toggles por modulo; `acceso_total` libera todos los permisos. Guardar una columna `home_route` (o derivar desde permisos) para la ruta inicial.
+- `usuarios_sucursales` restringe el ambito fisico. El backend debe rechazar peticiones cuando el usuario no tenga una sucursal asignada salvo que posea `acceso_total`.
+- Frontend:
+  - Consumir `GET /businesses/{id}/permissions` en el arranque y cachear los permisos.
+  - Actualizar el Sidebar/Layout para ocultar modulos sin permiso y redirigir al primer modulo habilitado cuando `puede_ver_dashboard` sea falso.
+  - Ajustar la navegacion inicial para leer `home_route` y evitar mostrar paneles sin acceso (por ejemplo, enviar directamente a Ventas).
+
+---
+
+## Next Steps
+
+1. QA responsive: validar en dispositivos <=768px y tablets que el header actualizado no solape el contenido (dashboard, reportes) y ajustar padding/margenes si aparece superposicion.
+2. Extender los tests end-to-end: cubrir alta de negocio + sucursal, invitacion de usuario y acceso limitado a un modulo; incluir verificaciones de RLS con tokens de empleado vs admin.
+3. Documentar en `MIGRATION_README.md` la secuencia para ejecutar scripts de migracion + QA y reflejar los endpoints propuestos en `docs/ROADMAP_BRANCH_AWARE_ROLLOUT.md`.
+4. Planificar refactor backend: centralizar permisos en un servicio (`PermissionService`) que consuma `usuarios_negocios`, `permisos_usuario_negocio`, `usuarios_sucursales` y exponga helpers reutilizables para los endpoints.
+5. Definir la vista inicial condicional: persistir configuracion (`home_route` o similar) y garantizar que el router del frontend haga fallback seguro si no encuentra permisos validos.
