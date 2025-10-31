@@ -225,6 +225,29 @@ def update_action_metrics(self) -> Dict[str, Any]:
         raise
 
 
+@celery_app.task(bind=True, max_retries=2, default_retry_delay=30)
+def notify_stock_transfer_event(self, event_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Celery task to log stock transfer lifecycle events and provide a hook for future automations.
+    """
+    try:
+        transfer_id = payload.get("id") or payload.get("transfer_id")
+        logger.info(
+            "Stock transfer event received: event=%s transfer_id=%s business_id=%s",
+            event_type,
+            transfer_id,
+            payload.get("negocio_id"),
+        )
+        return {
+            "event": event_type,
+            "transfer_id": transfer_id,
+            "processed_at": datetime.now().isoformat(),
+        }
+    except Exception as exc:
+        logger.error("Error processing stock transfer event %s: %s", event_type, exc)
+        raise self.retry(exc=exc, countdown=self.default_retry_delay)
+
+
 # Periodic task configuration
 @celery_app.on_after_configure.connect
 def setup_periodic_tasks(sender, **kwargs):

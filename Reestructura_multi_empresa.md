@@ -6,6 +6,13 @@
 4. Hacer un backup completo de la base de datos actual (dump SQL o export desde Supabase).
 5. Documentar relaciones actuales y dependencias principales (`Informe_tecnico_base_de_datos.md`).
 
+### Diagnóstico actual (multi-sucursal a octubre 2025)
+
+- **Base de datos:** existen `negocios`, `sucursales`, `usuarios_sucursales`, `usuarios_negocios` e `inventario_sucursal`, lo que permite aislar datos por sede. El inventario se modela únicamente a nivel de sucursal y los catálogos (`productos`, `servicios`) están anclados al `negocio_id` sin distinción de sucursal; no hay una tabla de configuración que defina si el stock o los servicios se gestionan de forma centralizada.
+- **Backend:** el `ScopedSupabaseClient` y los endpoints actuales exigen `negocio_id` y `sucursal_id` para ventas, compras e inventario. Existe un `BranchService` básico (ver paso 5) que lista sucursales y asigna contexto, pero no hay endpoints publicados para crear/editar sucursales ni para definir modos de inventario/servicio o transferencias de stock.
+- **Frontend:** `BusinessContext` consume `GET /businesses/{business_id}/branches` y permite seleccionar una sucursal activa, pero la sección de configuración todavía no expone formularios para crear sucursales, tampoco hay toggles para decidir inventario centralizado vs distribuido, ni vistas para transferencias de stock.
+- **Operación actual:** cada movimiento de inventario se descuenta de `inventario_sucursal` de la sucursal activa. Al compartir productos por `negocio_id`, duplicar un producto en dos sucursales requiere workarounds manuales y los ids permanecen globales. No existen flujos formales de transferencia entre sucursales; cuando se necesita mover stock se hace con ajustes manuales en ventas/compras.
+
 ---
 
 ## 2. Actualizacion de estructura de base de datos
@@ -24,7 +31,17 @@
 6. Crear indices en las columnas `negocio_id` y `sucursal_id` para mejorar performance.
 7. Crear triggers o logica automatica para que al crear un nuevo negocio se cree una sucursal principal.
 
-Resumen de cambios: Se completó la migración del punto 2; todos los registros existentes quedaron con `negocio_id` y `sucursal_id` consistentes (o pendientes solo si nunca tuvieron asignación en `usuarios_negocios`), y las tablas auxiliares (`usuarios_sucursales`, índices y triggers) quedaron alineadas con el modelo multi-sucursal.
+### Configuracion multi-sucursal y modos de operacion
+
+- **Tabla `negocio_configuracion`:** nueva tabla 1:1 con `negocios` que persiste las preferencias del dueno. Columnas clave: `inventario_modo` ('centralizado' | 'por_sucursal'), `servicios_modo` ('centralizado' | 'por_sucursal'), `catalogo_producto_modo` ('compartido' | 'por_sucursal'), `permite_transferencias` (`boolean`), `transferencia_auto_confirma`, `default_branch_id` y un `metadata` JSONB para flags futuros. La migracion debe poblarla con valores por defecto ('por_sucursal' + transferencias activas) y crear un trigger para garantizar que cada negocio posea registro.
+- **Catalogo de productos y servicios:** mantener `productos` y `servicios` a nivel de negocio, pero agregar tablas puente `producto_sucursal` y `servicio_sucursal` con columnas por sucursal (`precio`, `estado`, `sku_local`, `stock_minimo`, `visibilidad`). Cuando `catalogo_producto_modo` = 'compartido', las entradas se crean automaticamente con `sku_local` = `sku` y banderas de sincronizacion; cuando es 'por_sucursal', se habilita la creacion de productos exclusivos validando unicidad por (`negocio_id`, `sucursal_id`, `sku_local`).
+- **Inventario centralizado:** agregar `inventario_negocio` (stock agregado por negocio/producto) y una vista `inventario_visible` que, segun `inventario_modo`, devuelva stock por sucursal (`inventario_sucursal`) o stock consolidado replicado en todas las sucursales. Las operaciones de venta/compra deberan apuntar a `inventario_visible` via funciones para respetar la preferencia. Triggers AFTER INSERT/UPDATE sincronizan `inventario_negocio` con `inventario_sucursal` cuando el negocio cambia de modo.
+- **Transferencias de stock:** crear tablas `stock_transferencias` (`id`, `negocio_id`, `origen_sucursal_id`, `destino_sucursal_id`, `estado` ['borrador', 'confirmada', 'cancelada', 'recibida'], `creado_por`, `aprobado_por`, `metadata`) y `stock_transferencias_detalle` (`transferencia_id`, `producto_id`, `cantidad`, `unidad`, `lote`). Incluir columnas `inventario_modo_source`/`inventario_modo_target` para validar que la accion respete la configuracion.
+- **Sincronizacion de sucursales nuevas:** extensiones a los triggers existentes (migration_06) para que, al crear una sucursal, se llenen `producto_sucursal`, `servicio_sucursal` y se repliquen los parametros del catalogo cuando el modo sea `compartido`. Para negocios centralizados, duplicar el stock base desde `inventario_negocio` con stock inicial cero o configurable.
+- **Migraciones de datos:** crear scripts idempotentes (`migration_08a_create_branch_mode_structures.sql` + `migration_08_backfill_branch_catalog.sql`) que primero levanten las nuevas estructuras (`negocio_configuracion`, `producto_sucursal`, `servicio_sucursal`, `inventario_negocio`, `stock_transferencias`) y luego generen los datos derivados (configuración por negocio, backfill de catálogos, consolidación de inventario y recalculo de `usuarios_sucursales`). Incluir tareas de limpieza para SKU duplicados y un paso para recalcular usuarios_sucursales.
+- **Indices y constraints:** indices compuestos en (`negocio_id`, `inventario_modo`) y (`negocio_id`, `sucursal_id`, `producto_id`) para acelerar filtros y RLS; checks que eviten transferencias con sucursales iguales; FOREIGN KEY hacia `negocios` y `sucursales` con ON DELETE CASCADE.
+
+Resumen de cambios: Se complet? la migraci?n del punto 2; todos los registros existentes quedaron con `negocio_id` y `sucursal_id` consistentes (o pendientes solo si nunca tuvieron asignacion en `usuarios_negocios`), y las tablas auxiliares (`usuarios_sucursales`, ?ndices y triggers) quedaron alineadas con el modelo multi-sucursal.
 
 ---
 
@@ -36,6 +53,15 @@ Resumen de cambios: Se completó la migración del punto 2; todos los registros 
 4. Si se usa `usuarios_sucursales` o `usuarios_negocios`, ajustar las politicas para permitir acceso solo a los IDs asociados.
 5. Probar las politicas con diferentes usuarios para validar aislamiento de datos.
 6. Revisar las funciones de contexto (por ejemplo `auth.uid()`) y su integracion con el `negocio_id` actual del usuario.
+### Extensiones para configuraciones multi-sucursal
+
+- Politicas para `negocio_configuracion`: lectura permitida a todo usuario asociado al negocio, pero actualizaciones restringidas a roles 'owner' y 'admin'. Usar un helper `user_can_manage_business_settings()` que combine `user_in_business` con `permiso_configuracion`.
+- Tablas puente `producto_sucursal` y `servicio_sucursal`: RLS debe cruzar `negocio_id` + `sucursal_id` con `user_can_access_branch`. Para el modo 'compartido', permitir inserciones automaticas desde triggers (`auth.uid() = owner`) y forzar `WITH CHECK` que valide `catalogo_producto_modo` en `negocio_configuracion`.
+- Tabla `inventario_negocio`: activar RLS con filtros por `negocio_id`; exponer select a empleados solo si el modo de inventario es 'centralizado'. Crear una funcion `user_can_read_central_inventory(negocio_id)` que combine configuracion + permisos de sucursal.
+- Vista materializada o tabla `inventario_visible`: si se implementa como vista, hereda politicas de las tablas base; si es tabla intermedia, replicar el filtro doble (`negocio_id` + sucursales asignadas) y negar UPDATE/DELETE directos (solo funciones certificadas).
+- `stock_transferencias` y `stock_transferencias_detalle`: dos capas de politicas: (a) usuarios de la sucursal origen con permiso de transferencia pueden crear/borrador; (b) usuarios de la sucursal destino pueden leer y marcar como recibidas. Los administradores del negocio mantienen acceso total. Usar `WITH CHECK` para validar que origen y destino pertenecen al mismo negocio y que `permite_transferencias` esta activo.
+- Agregar funciones auxiliares (`user_can_manage_transfers`, `negocio_usa_catalogo_compartido`) al script `migration_07_update_rls_policies.sql` y re-ejecutarlo para versionar las nuevas politicas.
+
 
 ---
 
@@ -61,6 +87,24 @@ Resumen de cambios: Se completó la migración del punto 2; todos los registros 
 7. Revisar la autenticacion JWT para incluir `negocio_id` y `sucursal_id` en el payload o claims.
 8. Crear endpoints para crear, listar y seleccionar sucursales.
 9. Crear un endpoint que genere automaticamente una sucursal principal al crear un negocio (validado por `migration_06`).
+
+### Servicios y endpoints para modos centralizado/distribuido
+
+- Exponer `GET/PUT /businesses/{business_id}/branch-settings` desde un `BranchSettingsService`. Este servicio lee/escribe en `negocio_configuracion`, propaga cambios al cache (`BusinessContextCache`) y dispara webhooks internos para notificar al frontend de un cambio de modo.
+- Ampliar `POST /businesses/{business_id}/branches`/`PATCH /branches/{branch_id}` para consumo directo del frontend. La creacion debe envolver una transaccion que inserte la sucursal, rellene `producto_sucursal`/`servicio_sucursal` segun el modo activo y genere registros en `usuarios_sucursales` para dueno/admin.
+- Ajustar `ScopedSupabaseClient` para leer `inventario_modo` y `catalogo_producto_modo` desde `BranchSettingsCache`. Si el negocio opera en modo centralizado, las consultas a inventario deben apuntar a funciones `select_central_inventory()` que devuelvan stock consolidado sin exigir `sucursal_id`.
+- Crear un `StockTransferService` con rutas `POST /stock-transfers`, `POST /stock-transfers/{id}/confirm`, `POST /stock-transfers/{id}/receive`, `DELETE /stock-transfers/{id}`. El servicio valida `permite_transferencias`, controla estados y publica eventos a `ActionWorker` para notificar movimientos.
+- Actualizar los casos de uso de productos/servicios (`ProductService`, `ServiceService`) para que, segun `catalogo_producto_modo`, creen registros en `producto_sucursal` o permitan productos exclusivos. Incluir un comando de sincronizacion (`sync_branch_catalog.py`) que clona o agrega registros cuando el negocio cambia de modo.
+- Inyectar la configuracion de sucursal en `Action`/`Task` workers via `BusinessContextDep`, agregando claims `branch_mode` y `shared_catalog` al JWT interno para que los workers respeten la configuracion al crear tareas automatizadas.
+- Extender los esquemas Pydantic (`BranchSettings`, `StockTransferCreate`, `StockTransferUpdate`) y validar campos como `default_branch_id`, `allow_cross_branch_services` o `auto_confirm_transfers`.
+### Feature flag rollout y coordinacion cross-team
+
+- Sync backend/frontend confirmado para 29-10-2025 11:00 (responsables backend @leo, frontend @agus). Secuencia acordada: migration_08_backfill_branch_catalog.sql -> deploy backend -> deploy frontend -> habilitacion del feature flag.
+- El feature flag branch_inventory_modes vivira en app/core/feature_flags.py y protegira los endpoints /branch-settings; el frontend lo consultara con useFeatureFlag('branch_inventory_modes') para ocultar la configuracion cuando este deshabilitado.
+- docs/ROADMAP_BRANCH_AWARE_ROLLOUT.md (seccion FF rollout plan) ya incluye ventana de cambio, responsables, checklist de rollback y orden de validaciones QA.
+- QA fue notificado en #qa-multi-sucursal; usaran scripts/simulate_inventory_mode_switch.py durante la ventana de staging para certificar que el modo centralizado replica el stock antes de solicitar la activacion del flag en produccion.
+
+
 
 **Resumen de cambios:**
 - Se agrego `app/db/scoped_client.py` con `ScopedSupabaseClient`/`get_scoped_supabase_user_client`, que fuerza el agregado de `negocio_id` y `sucursal_id` en cada `table()` antes de ejecutar la consulta. Los routers de `ventas`, `compras`, `productos`, `categorias`, `proveedores`, `permissions` y `tenant_settings` ya usan este cliente al recibir `business_id`/`branch_id`, por lo que las lecturas, actualizaciones y borrados quedan automaticamente confinados al negocio (y sucursal cuando aplica). Adicionalmente, las acciones criticas en `finanzas.py` (update/delete de categorias, movimientos y cuentas) ahora siempre incluyen `eq("negocio_id", business_id)` para evitar accesos cruzados.
@@ -88,6 +132,24 @@ Resumen de cambios: Se completó la migración del punto 2; todos los registros 
 8. Revisar que los formularios y APIs sigan funcionando correctamente con la nueva estructura.
 9. Testear en diferentes roles de usuario (dueno, empleado, administrador).
 
+### UX multi-sucursal y modos de inventario
+
+- Panel Configuracion > Tenant: agregar pestaña `Sucursales` con listado, alta y edicion inline (nombre, direccion, contacto, sucursal principal). Al crear, llamar a `POST /businesses/{business_id}/branches` y refrescar `BusinessContext`.
+- Seccion `Preferencias`: incluir switches para `inventario_modo`, `servicios_modo`, `catalogo_producto_modo`, `permite_transferencias` y `auto_confirm_transfers`. Mostrar tooltips explicando el impacto (por ejemplo, modo centralizado replica stock en todas las sucursales).
+- Cuando el negocio cambie de modo, mostrar un modal de confirmacion con checklist (ejecutar sincronizacion, revisar precios por sucursal) y bloquear la UI hasta que la tarea de backend devuelva estado `completed`.
+- En `ProductsAndServices`, agregar tab `Disponibilidad` que renderice la grilla `producto_sucursal`: para modo compartido se muestran toggles de visibilidad/precio por sucursal; para modo por sucursal habilitar boton `Duplicar en otra sucursal` que dispara el comando de sincronizacion.
+- Incorporar módulo `Transferencias de stock`: tabla con status (`borrador`, `confirmada`, `recibida`), wizard en tres pasos (selección de sucursales, productos, resumen) y acciones `Confirmar`/`Recibir` conectadas a `StockTransferService`. **Pendiente:** exponer filtros por sucursal origen/destino en la vista y mostrar disponibilidad de stock en el selector de productos.
+- 2025-10-31: Backend listo para `StockTransferService` (create/confirm/receive/delete), endpoints REST en `/businesses/{business_id}/stock-transfers` y task `notify_stock_transfer_event` para accionar desde ActionWorker. Falta UI y QA end-to-end.
+- 2025-10-31: UI base en `/stock-transfers` (listado react-query + wizard de alta) consumiendo el nuevo API y alineada al `BusinessContext`; se bloquea creación cuando `permite_transferencias` está en falso y se exponen acciones `Confirmar`/`Recibir`. Filtros por sucursal y validaciones visuales de stock quedan agendados para la siguiente iteración.
+
+#### QA propuesto para transferencias
+- Staging: ejecutar `migration_08a` + backfill, habilitar `branch_inventory_modes` y validar CRUD de transferencias con dos sucursales (borrador → confirmar → recibir).
+- UI: smoke test con usuario admin (cambio de sucursal, creación con auto-confirm desactivado y activado, validación de listado y flujo confirmar/recibir). Las verificaciones de filtros y stock visible quedarán para cuando se libere la iteración siguiente.
+- Workers: verificar en logs de Celery que `notify_stock_transfer_event` recibe eventos `created/confirmed/received` y documentar el payload real en QA notes.
+- Actualizar `BusinessContext` para guardar `branchSettings` (los modos seleccionados) y exponer hooks `useBranchSettings`. Los componentes de ventas/compras deben consultar este estado para mostrar/ocultar campo sucursal o mensajes de stock centralizado.
+- Agregar tests de UI (React Testing Library) para los toggles de configuracion y el wizard de transferencia, incluyendo validaciones de formularios bloqueando sucursales inactivas.
+
+
 **Resumen de cambios (paso 5):**
 - Backend: nuevo endpoint `GET /businesses/{business_id}/branches` que devuelve las sucursales activas visibles segun el rol del usuario (admin ve todas, el resto solo sus asignaciones, con fallback a la sucursal principal).
 - Frontend: `BusinessContext` ahora expone `currentBranch`, `branches` y `refreshBranches`; el `Layout` consume ese estado, persiste la seleccion por negocio y muestra un selector de sucursal en el encabezado cuando hay multiples opciones.
@@ -101,6 +163,9 @@ Resumen de cambios: Se completó la migración del punto 2; todos los registros 
 **Actualización 25-10-2025:** `Finanzas` y `ProductsAndServices` ya consultan la API con `currentBranch`, invalidan caches por sucursal y bloquean la UI hasta que el usuario selecciona una sede; siguen pendientes las vistas de ventas/reportes y los formularios de configuración multi-sucursal.
 **Actualización 26-10-2025:** Se refactorizaron `ProductsAndServices.jsx` y `Tasks.jsx` para respetar las reglas de hooks (sin retornos tempranos antes de `useQuery` ni imports sin uso) y se estabilizaron los efectos de `Home.tsx`/`EmailConfirmation.jsx` con dependencias explícitas; `Subscriptions.jsx` queda para el próximo barrido junto con los módulos restantes.
 **Actualizacion 27-10-2025:** Se saneo `Subscriptions.jsx` integrando `BusinessContext`/`useUserPermissions`, guardas previas a los fetches y export protegido con `Layout` + `PermissionGuard`. Se limpiaron `badge.tsx` y `button.tsx`, y `TestPage.jsx` ahora memoiza la diagnostica con `useCallback`. El lint finalizo sin advertencias; pytest mantiene fallos previos (ver ejecucion mas reciente).
+**Actualizacion 28-10-2025 (11:30):** Se confirmo la sincronizacion backend/frontend del 29-10 y se compartio la hoja de ruta de feature flags en docs/ROADMAP_BRANCH_AWARE_ROLLOUT.md; QA recibio el checklist y agenda de pruebas en el canal #qa-multi-sucursal.
+**Actualizacion 28-10-2025 (18:45):** Se agregaron los scripts scripts/migration_08_backfill_branch_catalog.sql (backfill de catalogo/inventario) y scripts/simulate_inventory_mode_switch.py (QA del cambio de modo). Se verifico la sintaxis (python -m compileall scripts/simulate_inventory_mode_switch.py) y se documentaron prerequisitos; la ventana de staging para ejecutarlos queda agendada para 29-10 19:00 (ver MIGRATION_README.md).
+
 
 
 
@@ -116,6 +181,15 @@ Resumen de cambios: Se completó la migración del punto 2; todos los registros 
 6. Incorporar casos adicionales en los tests que creen negocios con datos incompletos (sin direccion/contacto) para validar triggers y RLS.
 7. Validar que las RLS no bloqueen consultas legitimas.
 8. Realizar pruebas completas de flujo: login -> seleccionar sucursal -> venta -> stock -> reportes.
+
+### Validaciones especificas para modos centralizados
+
+- Ejecutar python scripts/simulate_inventory_mode_switch.py --negocio-id <uuid> con el DSN de staging: compara inventario_sucursal vs inventario_negocio y falla si detecta diferencias despues del backfill.
+- QA de `negocio_configuracion`: cambiar a modo centralizado y confirmar que las vistas de inventario retornan stock replicado sin duplicar movimientos. Repetir con modo por sucursal.
+- Crear escenarios de transferencia en staging (`POST /stock-transfers`) y verificar estados `borrador` -> `confirmada` -> `recibida`, asegurando que los movimientos ajustan `inventario_sucursal` o `inventario_negocio` segun el modo.
+- Incorporar pruebas automatizadas (`pytest tests/test_stock_transfers.py`) que mockean `BranchSettingsService` y verifican las reglas de `permite_transferencias` y `auto_confirm_transfers`.
+- Agregar casos E2E (Playwright/Cypress) que creen sucursales desde frontend, activen modo centralizado y ejecuten una transferencia end-to-end.
+
 
 **Resumen de cambios (paso 6):**
 - `scripts/execute_sql_file.py` ahora admite credenciales por DSN/variables de entorno (`DB_*`, `STAGING_DATABASE_URL`), lo que permite correr las migraciones `migration_01`-`migration_06` contra staging sin tocar el script.
@@ -141,6 +215,9 @@ Resumen de cambios: Se completó la migración del punto 2; todos los registros 
 6. Guardar una copia de la migracion final, del script de QA y del script de rollback.
 
 **Resumen de cambios (paso 7):**
+- Se agrego `scripts/migration_08a_create_branch_mode_structures.sql`, que crea las tablas `negocio_configuracion`, `producto_sucursal`, `servicio_sucursal`, `inventario_negocio` y los registros de `stock_transferencias` junto con las vistas auxiliares para `inventario_visible`.
+- Se agrego `scripts/migration_08_backfill_branch_catalog.sql`, encargado de poblar negocio_configuracion, producto_sucursal, servicio_sucursal e inventario_negocio; tambien normaliza SKUs duplicados y alinea usuarios_sucursales.
+- Se creo `scripts/simulate_inventory_mode_switch.py` para QA: compara inventario_sucursal vs inventario_negocio despues del cambio de modo y falla en caso de desbalances.
 - Se agrego `scripts/migration_08_create_reporting_views.sql`, que crea vistas de resumen diario (`vw_resumen_financiero_negocio`, `vw_resumen_financiero_sucursal`), ranking de productos (`vw_top_productos_por_negocio`) y la funcion `fn_resumen_financiero` para reutilizar esas metricas desde Supabase o BI. El script incluye indices opcionales para consultas por fecha.
 - Se consolido la documentacion tecnica en `Informe_tecnico_base_de_datos.md`, ahora unica fuente para describir tablas, relaciones, vistas y el diagrama ERD (incluye un bloque mermaid actualizado con la jerarquia negocio/sucursal).
 - Quedo registrado un snapshot de artefactos finales en `docs/releases/2025-10-branch-rollout/` con copias de la migracion final, el script QA y el rollback plan.
@@ -203,3 +280,5 @@ Resumen de cambios: Se completó la migración del punto 2; todos los registros 
 3. Documentar en `MIGRATION_README.md` la secuencia para ejecutar scripts de migracion + QA y reflejar los endpoints propuestos en `docs/ROADMAP_BRANCH_AWARE_ROLLOUT.md`.
 4. Planificar refactor backend: centralizar permisos en un servicio (`PermissionService`) que consuma `usuarios_negocios`, `permisos_usuario_negocio`, `usuarios_sucursales` y exponga helpers reutilizables para los endpoints.
 5. Definir la vista inicial condicional: persistir configuracion (`home_route` o similar) y garantizar que el router del frontend haga fallback seguro si no encuentra permisos validos.
+6. Ejecutar la ventana de staging del 29-10 19:00 (backfill + simulate_inventory_mode_switch) y subir el resultado a MIGRATION_README.md.
+7. Monitorear la activacion del feature flag branch_inventory_modes en produccion y documentar metricas/rollback en docs/ROADMAP_BRANCH_AWARE_ROLLOUT.md.

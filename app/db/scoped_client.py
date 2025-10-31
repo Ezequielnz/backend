@@ -30,6 +30,12 @@ TABLE_SCOPE_MAP: dict[str, tuple[str, ...]] = {
     "usuarios_negocios": ("negocio_id",),
     "usuarios_sucursales": ("negocio_id", "sucursal_id"),
     "sucursales": ("negocio_id",),
+    "negocio_configuracion": ("negocio_id",),
+    "producto_sucursal": ("negocio_id", "sucursal_id"),
+    "servicio_sucursal": ("negocio_id", "sucursal_id"),
+    "inventario_negocio": ("negocio_id",),
+    "stock_transferencias": ("negocio_id",),
+    "stock_transferencias_detalle": ("negocio_id",),
 }
 
 

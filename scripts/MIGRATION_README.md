@@ -144,6 +144,50 @@ These migrations implement the following changes:
 
 ---
 
+### Migration 08a: Create Branch Mode Structures
+**File:** [`migration_08a_create_branch_mode_structures.sql`](migration_08a_create_branch_mode_structures.sql)
+
+**Purpose:** Introduces the structural objects required to support branch-aware catalog preferences and inventory modes.
+
+**Key Features:**
+- Creates `negocio_configuracion`, `producto_sucursal`, `servicio_sucursal`, `inventario_negocio`, `stock_transferencias` y `stock_transferencias_detalle` with guarded constraints and indexes.
+- Defines triggers to auto-provision configuration rows when a negocio is created and to replicate catalog entries on new sucursales (respecting shared catalog mode).
+- Adds the consolidated view `vw_inventario_visible` and helper function `fn_get_branch_settings` for backend consumers.
+- Hooks all new tables into the generic `update_updated_at_column()` trigger.
+
+**Safe to run:** Yes (idempotent; guarded by `IF NOT EXISTS` and conflict-resistant inserts).
+
+---
+
+### Migration 08b: Backfill Branch Catalog
+**File:** [`migration_08_backfill_branch_catalog.sql`](migration_08_backfill_branch_catalog.sql)
+
+**Purpose:** Populates the structures created in Migration 08a with data from the existing catalog and inventory tables.
+
+**Key Features:**
+- Generates default rows in `negocio_configuracion` with valores por defecto.
+- Replica productos y servicios existentes a `producto_sucursal` y `servicio_sucursal`.
+- Consolida inventario por negocio en `inventario_negocio` y alinea `usuarios_sucursales`.
+- Incluye validaciones previas y estadísticas `ANALYZE` al finalizar.
+
+**Safe to run:** Yes (idempotent; uses `ON CONFLICT DO NOTHING` defensively).
+
+---
+
+### Migration 08c: Create Reporting Views
+**File:** [`migration_08_create_reporting_views.sql`](migration_08_create_reporting_views.sql)
+
+**Purpose:** Exposes reporting views (`vw_resumen_financiero_negocio`, `vw_resumen_financiero_sucursal`, etc.) and helper functions that depend on the new branch-aware schema.
+
+**Key Features:**
+- Crea vistas resumidas para indicadores financieros por negocio y sucursal.
+- Ofrece función reutilizable `fn_resumen_financiero`.
+- Incluye índices opcionales para acelerar consultas por rango de fechas.
+
+**Safe to run:** Yes (idempotent; recreates views and drops them beforehand when necessary).
+
+---
+
 ## Execution Order
 
 **IMPORTANT:** Execute the scripts in the following order:
@@ -156,6 +200,9 @@ python scripts/execute_sql_file.py scripts/migration_04_add_foreign_key_constrai
 python scripts/execute_sql_file.py scripts/migration_05_create_performance_indexes.sql
 python scripts/execute_sql_file.py scripts/migration_06_create_auto_main_branch_trigger.sql
 python scripts/execute_sql_file.py scripts/migration_07_update_rls_policies.sql
+python scripts/execute_sql_file.py scripts/migration_08a_create_branch_mode_structures.sql
+python scripts/execute_sql_file.py scripts/migration_08_backfill_branch_catalog.sql
+python scripts/execute_sql_file.py scripts/migration_08_create_reporting_views.sql
 ```
 
 ---

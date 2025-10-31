@@ -27,28 +27,28 @@ SET timezone = 'UTC';
 
 \echo ''
 \echo '======================================================'
-\echo 'STEP 1/6: Verifying NEGOCIOS table structure'
+\echo 'STEP 1/10: Verifying NEGOCIOS table structure'
 \echo '======================================================'
 \echo ''
 \i migration_01_verify_negocios_table.sql
 
 \echo ''
 \echo '======================================================'
-\echo 'STEP 2/6: Verifying SUCURSALES table structure'
+\echo 'STEP 2/10: Verifying SUCURSALES table structure'
 \echo '======================================================'
 \echo ''
 \i migration_02_verify_sucursales_table.sql
 
 \echo ''
 \echo '======================================================'
-\echo 'STEP 3/6: Adding missing negocio_id and sucursal_id columns'
+\echo 'STEP 3/10: Adding missing negocio_id and sucursal_id columns'
 \echo '======================================================'
 \echo ''
 \i migration_03_add_missing_foreign_keys.sql
 
 \echo ''
 \echo '======================================================'
-\echo 'STEP 4/6: Adding foreign key constraints'
+\echo 'STEP 4/10: Adding foreign key constraints'
 \echo 'WARNING: This will fail if there are invalid references!'
 \echo '======================================================'
 \echo ''
@@ -56,7 +56,7 @@ SET timezone = 'UTC';
 
 \echo ''
 \echo '======================================================'
-\echo 'STEP 5/6: Creating performance indexes'
+\echo 'STEP 5/10: Creating performance indexes'
 \echo 'NOTE: This may take time on large tables'
 \echo '======================================================'
 \echo ''
@@ -64,10 +64,38 @@ SET timezone = 'UTC';
 
 \echo ''
 \echo '======================================================'
-\echo 'STEP 6/6: Creating automatic main branch triggers'
+\echo 'STEP 6/10: Creating automatic main branch triggers'
 \echo '======================================================'
 \echo ''
 \i migration_06_create_auto_main_branch_trigger.sql
+
+\echo ''
+\echo '======================================================'
+\echo 'STEP 7/10: Updating RLS policies'
+\echo '======================================================'
+\echo ''
+\i migration_07_update_rls_policies.sql
+
+\echo ''
+\echo '======================================================'
+\echo 'STEP 8/10: Creating branch mode structures'
+\echo '======================================================'
+\echo ''
+\i migration_08a_create_branch_mode_structures.sql
+
+\echo ''
+\echo '======================================================'
+\echo 'STEP 9/10: Backfilling branch catalog'
+\echo '======================================================'
+\echo ''
+\i migration_08_backfill_branch_catalog.sql
+
+\echo ''
+\echo '======================================================'
+\echo 'STEP 10/10: Creating reporting views'
+\echo '======================================================'
+\echo ''
+\i migration_08_create_reporting_views.sql
 
 \echo ''
 \echo '======================================================'
@@ -77,9 +105,9 @@ SET timezone = 'UTC';
 \echo 'Next steps:'
 \echo '1. Verify all negocios have at least one sucursal'
 \echo '2. Populate NULL negocio_id and sucursal_id values'
-\echo '3. Update RLS policies (see Task 3 in Reestructura_multi_empresa.md)'
-\echo '4. Update backend API endpoints'
-\echo '5. Update frontend to use negocio/sucursal context'
+\echo '3. Ejecutar scripts de QA (qa_verify_branch_columns + simulate_inventory_mode_switch)'
+\echo '4. Validar endpoints backend y workers con los nuevos modos de inventario'
+\echo '5. Actualizar frontend para reflejar configuraciones y transferencias'
 \echo ''
 \echo 'Run validation queries from MIGRATION_README.md to verify'
 \echo '======================================================'

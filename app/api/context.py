@@ -1,4 +1,4 @@
-from typing import NamedTuple, Optional
+from typing import Any, NamedTuple, Optional
 
 import jwt
 from fastapi import HTTPException, Request, status
@@ -13,6 +13,8 @@ class BusinessBranchContext(BaseModel):
     business_id: str
     branch_id: Optional[str] = None
     usuario_negocio_id: str
+    user_role: str
+    branch_settings: Optional[dict[str, Any]] = None
 
 
 def get_user_id_from_token(token: str) -> str:
@@ -53,7 +55,9 @@ async def BusinessBranchContextDep(request: Request, business_id: str, branch_id
     )
     if not user_business.data:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User not a member of this business")
-    usuario_negocio_id = user_business.data[0]["id"]
+    business_record = user_business.data[0]
+    usuario_negocio_id = business_record["id"]
+    user_role = business_record.get("rol") or "empleado"
 
     # If branch specified, verify assignment
     if branch_id:
@@ -70,15 +74,31 @@ async def BusinessBranchContextDep(request: Request, business_id: str, branch_id
         if not user_branch.data:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User not assigned to this branch")
 
+    # Retrieve branch settings (negocio_configuracion)
+    settings_response = (
+        client.table("negocio_configuracion")
+        .select(
+            "negocio_id, inventario_modo, servicios_modo, catalogo_producto_modo, permite_transferencias, transferencia_auto_confirma, default_branch_id, metadata, created_at, updated_at"
+        )
+        .eq("negocio_id", business_id)
+        .limit(1)
+        .execute()
+    )
+    branch_settings = settings_response.data[0] if settings_response.data else None
+
     # Set context into request.state for downstream usage
     setattr(request.state, "company_id", business_id)
     setattr(request.state, "branch_id", branch_id)
+    setattr(request.state, "user_role", user_role)
+    setattr(request.state, "branch_settings", branch_settings)
 
     return BusinessBranchContext(
         user_id=user_id,
         business_id=business_id,
         branch_id=branch_id,
         usuario_negocio_id=usuario_negocio_id,
+        user_role=user_role,
+        branch_settings=branch_settings,
     )
 
 

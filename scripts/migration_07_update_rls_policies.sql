@@ -367,7 +367,9 @@ BEGIN
         'clientes',
         'proveedores',
         'servicios',
-        'suscripciones'
+        'suscripciones',
+        'negocio_configuracion',
+        'inventario_negocio'
     ])
     LOOP
         IF EXISTS (
@@ -489,7 +491,9 @@ BEGIN
         'venta_detalle',
         'compras',
         'compras_detalle',
-        'inventario_sucursal'
+        'inventario_sucursal',
+        'producto_sucursal',
+        'servicio_sucursal'
     ])
     LOOP
         IF EXISTS (
@@ -568,6 +572,155 @@ BEGIN
             RAISE NOTICE 'Tabla % sin columnas negocio_id+sucursal_id o inexistente; se omite.', tbl;
         END IF;
     END LOOP;
+END $$;
+
+-- =====================================================
+-- Seccion 5: Politicas para transferencias de stock
+-- =====================================================
+
+DO $$
+DECLARE
+    policy text;
+    select_condition text;
+    manage_condition text;
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = 'stock_transferencias'
+    ) THEN
+        EXECUTE 'ALTER TABLE public.stock_transferencias ENABLE ROW LEVEL SECURITY';
+
+        FOR policy IN SELECT unnest(ARRAY[
+            'rls_stock_transferencias_select',
+            'rls_stock_transferencias_insert',
+            'rls_stock_transferencias_update',
+            'rls_stock_transferencias_delete'
+        ])
+        LOOP
+            EXECUTE format('DROP POLICY IF EXISTS %I ON public.stock_transferencias', policy);
+        END LOOP;
+
+        select_condition := $$
+            public.user_in_business(negocio_id)
+            AND public.jwt_negocio_matches(negocio_id)
+            AND (
+                public.user_can_access_branch(negocio_id, origen_sucursal_id)
+                OR public.user_can_access_branch(negocio_id, destino_sucursal_id)
+            )
+        $$;
+
+        manage_condition := $$
+            public.user_in_business(negocio_id)
+            AND public.jwt_negocio_matches(negocio_id)
+            AND public.user_can_access_branch(negocio_id, origen_sucursal_id)
+        $$;
+
+        EXECUTE format(
+            'CREATE POLICY %I ON public.stock_transferencias FOR SELECT USING (%s);',
+            'rls_stock_transferencias_select',
+            select_condition
+        );
+
+        EXECUTE format(
+            'CREATE POLICY %I ON public.stock_transferencias FOR INSERT WITH CHECK (%s);',
+            'rls_stock_transferencias_insert',
+            manage_condition
+        );
+
+        EXECUTE format(
+            'CREATE POLICY %I ON public.stock_transferencias FOR UPDATE USING (%s) WITH CHECK (%s);',
+            'rls_stock_transferencias_update',
+            select_condition,
+            manage_condition
+        );
+
+        EXECUTE format(
+            'CREATE POLICY %I ON public.stock_transferencias FOR DELETE USING (%s);',
+            'rls_stock_transferencias_delete',
+            manage_condition
+        );
+    ELSE
+        RAISE NOTICE 'Tabla stock_transferencias no encontrada; se omite.';
+    END IF;
+END $$;
+
+
+DO $$
+DECLARE
+    policy text;
+    select_condition text;
+    insert_condition text;
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = 'stock_transferencias_detalle'
+    ) THEN
+        EXECUTE 'ALTER TABLE public.stock_transferencias_detalle ENABLE ROW LEVEL SECURITY';
+
+        FOR policy IN SELECT unnest(ARRAY[
+            'rls_stock_transferencias_detalle_select',
+            'rls_stock_transferencias_detalle_insert',
+            'rls_stock_transferencias_detalle_update',
+            'rls_stock_transferencias_detalle_delete'
+        ])
+        LOOP
+            EXECUTE format('DROP POLICY IF EXISTS %I ON public.stock_transferencias_detalle', policy);
+        END LOOP;
+
+        select_condition := $$
+            EXISTS (
+                SELECT 1
+                FROM public.stock_transferencias st
+                WHERE st.id = transferencia_id
+                  AND st.negocio_id = negocio_id
+                  AND public.user_in_business(st.negocio_id)
+                  AND public.jwt_negocio_matches(st.negocio_id)
+                  AND (
+                      public.user_can_access_branch(st.negocio_id, st.origen_sucursal_id)
+                      OR public.user_can_access_branch(st.negocio_id, st.destino_sucursal_id)
+                  )
+            )
+        $$;
+
+        insert_condition := $$
+            EXISTS (
+                SELECT 1
+                FROM public.stock_transferencias st
+                WHERE st.id = transferencia_id
+                  AND st.negocio_id = negocio_id
+                  AND public.user_in_business(st.negocio_id)
+                  AND public.jwt_negocio_matches(st.negocio_id)
+                  AND public.user_can_access_branch(st.negocio_id, st.origen_sucursal_id)
+            )
+        $$;
+
+        EXECUTE format(
+            'CREATE POLICY %I ON public.stock_transferencias_detalle FOR SELECT USING (%s);',
+            'rls_stock_transferencias_detalle_select',
+            select_condition
+        );
+
+        EXECUTE format(
+            'CREATE POLICY %I ON public.stock_transferencias_detalle FOR INSERT WITH CHECK (%s);',
+            'rls_stock_transferencias_detalle_insert',
+            insert_condition
+        );
+
+        EXECUTE format(
+            'CREATE POLICY %I ON public.stock_transferencias_detalle FOR UPDATE USING (%s) WITH CHECK (%s);',
+            'rls_stock_transferencias_detalle_update',
+            select_condition,
+            insert_condition
+        );
+
+        EXECUTE format(
+            'CREATE POLICY %I ON public.stock_transferencias_detalle FOR DELETE USING (%s);',
+            'rls_stock_transferencias_detalle_delete',
+            insert_condition
+        );
+    ELSE
+        RAISE NOTICE 'Tabla stock_transferencias_detalle no encontrada; se omite.';
+    END IF;
 END $$;
 
 -- =====================================================
