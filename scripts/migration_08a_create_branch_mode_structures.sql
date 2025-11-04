@@ -380,4 +380,8 @@ AS $$
     WHERE nc.negocio_id = p_negocio_id;
 $$;
 
-RAISE NOTICE 'migration_08a_create_branch_mode_structures executed.';
+DO $$
+BEGIN
+    RAISE NOTICE 'migration_08a_create_branch_mode_structures executed.';
+END;
+$$;

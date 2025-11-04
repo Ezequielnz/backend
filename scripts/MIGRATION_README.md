@@ -157,6 +157,8 @@ These migrations implement the following changes:
 
 **Safe to run:** Yes (idempotent; guarded by `IF NOT EXISTS` and conflict-resistant inserts).
 
+**Update 2025-11-03:** El `RAISE NOTICE` final se envolvió en un bloque `DO $$` para permitir ejecuciones vía `psycopg2`. Si el script falla indicando que faltan tablas como `inventario_sucursal` o `inventario_negocio`, aplique primero las migraciones 01–07 para crear la base estructural antes de relanzar `migration_08a`.
+
 ---
 
 ### Migration 08b: Backfill Branch Catalog
@@ -172,6 +174,8 @@ These migrations implement the following changes:
 
 **Safe to run:** Yes (idempotent; uses `ON CONFLICT DO NOTHING` defensively).
 
+**Update 2025-11-03:** También se encapsuló el `RAISE NOTICE` final en un bloque `DO $$`. Si aparecen errores por objetos inexistentes al ejecutar esta migración, confirme que `migration_08a` terminó sin fallos y que las tablas fuente (`inventario_sucursal`, `servicio_sucursal`, `usuarios_sucursales`) estén presentes.
+
 ---
 
 ### Migration 08c: Create Reporting Views
@@ -185,6 +189,21 @@ These migrations implement the following changes:
 - Incluye índices opcionales para acelerar consultas por rango de fechas.
 
 **Safe to run:** Yes (idempotent; recreates views and drops them beforehand when necessary).
+
+---
+
+### Migration 09: Enforce Catalog Uniqueness
+**File:** [`migration_09_enforce_catalog_uniqueness.sql`](migration_09_enforce_catalog_uniqueness.sql)
+
+**Purpose:** Asegura que los catálogos principales (`productos`, `servicios`) permanezcan únicos por negocio mientras `producto_sucursal` sigue manejando personalizaciones por sucursal.
+
+**Key Features:**
+- Crea un índice único parcial sobre `(negocio_id, lower(btrim(sku)))` en `productos` (cuando `sku` existe y no está vacío).
+- Añade un índice único alternativo por `(negocio_id, lower(btrim(nombre)))` como respaldo cuando el SKU no está presente.
+- En `servicios`, refuerza la unicidad por `(negocio_id, lower(btrim(nombre)))`.
+- Todos los índices están protegidos con comprobaciones en `information_schema` para evitar fallos en entornos que aún no poseen las columnas.
+
+**Safe to run:** Yes (idempotent; utiliza bloques `DO $$` con `CREATE INDEX IF NOT EXISTS`).
 
 ---
 
@@ -203,6 +222,7 @@ python scripts/execute_sql_file.py scripts/migration_07_update_rls_policies.sql
 python scripts/execute_sql_file.py scripts/migration_08a_create_branch_mode_structures.sql
 python scripts/execute_sql_file.py scripts/migration_08_backfill_branch_catalog.sql
 python scripts/execute_sql_file.py scripts/migration_08_create_reporting_views.sql
+python scripts/execute_sql_file.py scripts/migration_09_enforce_catalog_uniqueness.sql
 ```
 
 ---
@@ -212,6 +232,7 @@ python scripts/execute_sql_file.py scripts/migration_08_create_reporting_views.s
 - `scripts/execute_sql_file.py`: Helper to run SQL files against Supabase, with environment selection (`.env`, `.env.qa`, etc.).
 - `scripts/qa_verify_branch_columns.sql`: QA script that checks column presence/null counts across the main branch-aware tables and includes remediation snippets for backfilling.
 - `scripts/test_main_branch_trigger.py`: Regression test for the automatic main-branch trigger; run it against staging after deploying migrations.
+- `scripts/simulate_inventory_mode_switch.py`: Ejecuta un diff controlado al cambiar `inventario_modo` (centralizado ↔ por_sucursal). Debe correrse cada vez que `negocio_configuracion.inventory_mode_sync_required` aparezca en `true` tras actualizar las preferencias; valida inventario y marca el flag como resuelto.
 
 Run the QA script after migrations:
 

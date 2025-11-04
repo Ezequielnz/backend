@@ -1,13 +1,22 @@
+import logging
 from typing import Any, Dict, List
+from uuid import UUID, uuid4
+
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Body
 from app.types.auth import User
 from app.api.deps import get_current_user
-from app.db.supabase_client import get_supabase_user_client, get_supabase_anon_client
+from app.db.supabase_client import (
+    get_supabase_user_client,
+    get_supabase_anon_client,
+    get_supabase_service_client,
+)
 from app.schemas.business import BusinessCreate, Business
-from app.schemas.branch import Branch
+from app.schemas.branch import Branch, BranchCreate, BranchUpdate
 from app.schemas.invitacion import InvitacionCreate, InvitacionResponse, UsuarioNegocioUpdate
 from supabase.lib.client_options import ClientOptions
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -455,6 +464,192 @@ async def get_business_branches(business_id: str, request: Request) -> Any:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error fetching branches for business.",
         )
+
+
+@router.post("/{business_id}/branches", response_model=Branch, status_code=status.HTTP_201_CREATED)
+async def create_business_branch(business_id: str, payload: BranchCreate, request: Request) -> Branch:
+    """
+    Create a new branch for the given business and sync catalog entries via DB triggers.
+    Only owners/admins are allowed to perform this action.
+    """
+    user = getattr(request.state, "user", None)
+    if not user or not hasattr(user, "id"):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not authenticated.",
+        )
+
+    user_supabase = get_supabase_user_client(request.headers.get("Authorization", ""))
+
+    user_id_str = str(user.id)
+    membership = (
+        user_supabase.table("usuarios_negocios")
+        .select("rol")
+        .eq("usuario_id", user_id_str)
+        .eq("negocio_id", business_id)
+        .eq("estado", "aceptado")
+        .limit(1)
+        .execute()
+    )
+    if not membership.data:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No tienes acceso a este negocio.",
+        )
+
+    user_role = (membership.data[0] or {}).get("rol") or "empleado"
+    if user_role not in {"owner", "admin"}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo los dueños o administradores pueden crear sucursales.",
+        )
+
+    branch_id = str(uuid4())
+    insert_data = {
+        "id": branch_id,
+        "negocio_id": business_id,
+        "nombre": payload.nombre,
+        "codigo": payload.codigo,
+        "direccion": payload.direccion,
+        "activo": payload.activo,
+        "is_main": payload.is_main,
+    }
+
+    service_supabase = get_supabase_service_client()
+
+    try:
+        response = (
+            service_supabase.table("sucursales")
+            .insert(insert_data)
+            .execute()
+        )
+    except Exception as exc:
+        logger.exception("Failed to create branch for business %s", business_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="No se pudo crear la sucursal; intente nuevamente.",
+        ) from exc
+
+    if not response.data:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Supabase no devolvió la sucursal creada.",
+        )
+
+    branch_record = response.data[0]
+
+    # Ensure the creator (owner/admin) has access to the new branch.
+    try:
+        assignment = (
+            service_supabase.table("usuarios_sucursales")
+            .select("id")
+            .eq("usuario_id", user_id_str)
+            .eq("negocio_id", business_id)
+            .eq("sucursal_id", branch_record["id"])
+            .limit(1)
+            .execute()
+        )
+        if not assignment.data:
+            service_supabase.table("usuarios_sucursales").insert(
+                {
+                    "usuario_id": str(user.id),
+                    "negocio_id": business_id,
+                    "sucursal_id": branch_record["id"],
+                    "activo": True,
+                }
+            ).execute()
+    except Exception as exc:
+        logger.warning(
+            "Unable to auto-assign branch %s to user %s: %s",
+            branch_record.get("id"),
+            user.id,
+            exc,
+        )
+
+    return Branch(**branch_record)
+
+
+@router.patch("/{business_id}/branches/{branch_id}", response_model=Branch)
+async def update_business_branch(
+    business_id: str,
+    branch_id: UUID,
+    payload: BranchUpdate,
+    request: Request,
+) -> Branch:
+    """
+    Update mutable fields for an existing branch (nombre, código, dirección, flags).
+    """
+    user = getattr(request.state, "user", None)
+    if not user or not hasattr(user, "id"):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not authenticated.",
+        )
+
+    user_supabase = get_supabase_user_client(request.headers.get("Authorization", ""))
+    user_id_str = str(user.id)
+    membership = (
+        user_supabase.table("usuarios_negocios")
+        .select("rol")
+        .eq("usuario_id", user_id_str)
+        .eq("negocio_id", business_id)
+        .eq("estado", "aceptado")
+        .limit(1)
+        .execute()
+    )
+    if not membership.data:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No tienes acceso a este negocio.",
+        )
+
+    user_role = (membership.data[0] or {}).get("rol") or "empleado"
+    if user_role not in {"owner", "admin"}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo los dueños o administradores pueden modificar sucursales.",
+        )
+
+    branch_id_str = str(branch_id)
+    update_data = payload.model_dump(exclude_unset=True)
+    service_supabase = get_supabase_service_client()
+
+    try:
+        if update_data:
+            update_response = (
+                service_supabase.table("sucursales")
+                .update(update_data)
+                .eq("negocio_id", business_id)
+                .eq("id", branch_id_str)
+                .execute()
+            )
+            if update_response.data:
+                return Branch(**update_response.data[0])
+        # Either no updates provided or Supabase did not return the updated row.
+        refreshed = (
+            service_supabase.table("sucursales")
+            .select(
+                "id, negocio_id, nombre, codigo, direccion, activo, is_main, creado_en, actualizado_en"
+            )
+            .eq("negocio_id", business_id)
+            .eq("id", branch_id_str)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        logger.exception("Failed to update branch %s for business %s", branch_id_str, business_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="No se pudo actualizar la sucursal.",
+        ) from exc
+
+    if not refreshed.data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Sucursal no encontrada.",
+        )
+
+    return Branch(**refreshed.data[0])
 
 @router.delete("/{business_id}")
 async def delete_business(business_id: str, request: Request) -> Any:

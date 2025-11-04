@@ -113,15 +113,6 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS configuration with specific origins
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-    allow_headers=["*"],
-)
-
 # Agregar middleware para errores JSON en rutas API
 app.add_middleware(JSONErrorMiddleware)
 
@@ -312,6 +303,15 @@ async def timeout_middleware(request: Request, call_next):
         return Response("Internal server error", status_code=500)
 
 app.middleware("http")(timeout_middleware)
+
+# CORS configuration with specific origins (envolver la pila para propagar headers)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allow_headers=["*"],
+)
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
 

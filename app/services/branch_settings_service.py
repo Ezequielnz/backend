@@ -86,16 +86,34 @@ class BranchSettingsService:
         return self._hydrate(data)
 
     def update(self, payload: BranchSettingsUpdate) -> BranchSettings:
+        current = self.fetch(ensure_exists=True)
+        if current is None:
+            raise RuntimeError("Unable to retrieve branch settings before applying updates.")
+
         if not payload.has_updates():
-            current = self.fetch(ensure_exists=True)
-            if current is None:
-                raise RuntimeError("Unable to retrieve branch settings after ensuring defaults.")
             return current
 
         update_data: Dict[str, Any] = payload.model_dump(exclude_unset=True)
 
+        metadata_payload = update_data.get("metadata")
+        if metadata_payload is None:
+            metadata_payload = dict(current.metadata or {})
+        elif metadata_payload is None:
+            metadata_payload = {}
+
         if "metadata" in update_data and update_data["metadata"] is None:
-            update_data["metadata"] = {}
+            metadata_payload = {}
+
+        if (
+            "inventario_modo" in update_data
+            and update_data["inventario_modo"] != current.inventario_modo
+        ):
+            metadata_payload = dict(metadata_payload)
+            metadata_payload["inventory_mode_previous"] = current.inventario_modo
+            metadata_payload["inventory_mode_changed_at"] = datetime.now(timezone.utc).isoformat()
+            metadata_payload["inventory_mode_sync_required"] = True
+
+        update_data["metadata"] = metadata_payload
 
         # Normalize empty strings for default_branch_id to NULL so Supabase accepts it.
         default_branch = update_data.get("default_branch_id")

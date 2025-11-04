@@ -321,4 +321,8 @@ ANALYZE public.servicio_sucursal;
 ANALYZE public.inventario_negocio;
 ANALYZE public.usuarios_sucursales;
 
-RAISE NOTICE 'migration_08_backfill_branch_catalog finalizada correctamente.';
+DO $$
+BEGIN
+    RAISE NOTICE 'migration_08_backfill_branch_catalog finalizada correctamente.';
+END;
+$$;
