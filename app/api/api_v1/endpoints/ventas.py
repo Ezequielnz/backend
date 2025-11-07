@@ -1,5 +1,6 @@
+import logging
 from typing import Any, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Request, Header
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Header, Query
 from datetime import datetime, date, timedelta
 import calendar
 from pydantic import BaseModel, Field
@@ -13,6 +14,8 @@ from app.db.supabase_client import get_supabase_user_client
 from app.db.scoped_client import get_scoped_supabase_user_client
 from app.dependencies import PermissionDependency
 from app.api.context import BusinessBranchContextDep
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 branch_router = APIRouter()
@@ -110,6 +113,22 @@ class DashboardStatsResponse(BaseModel):
     total_products: int
     total_customers: int
     low_stock_products: int
+
+
+class DashboardSalesWindowRow(BaseModel):
+    date: date
+    total: float
+    cost: float
+    profit: float
+    customers: int
+    orders: int
+
+
+class DashboardSalesWindowResponse(BaseModel):
+    rows: List[DashboardSalesWindowRow]
+    next_cursor: Optional[str]
+    page: int
+    page_size: int
 
 @branch_router.post("/record-sale", response_model=VentaResponseSimple)
 async def record_sale_branch(
@@ -1266,6 +1285,88 @@ async def get_dashboard_stats_v2(
         import traceback
         print(f"[DASHBOARD] Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail="Error interno del servidor")
+
+
+@router.get("/dashboard-stats/window", response_model=DashboardSalesWindowResponse)
+async def get_dashboard_sales_window(
+    authorization: str = Header(..., description="Bearer token"),
+    negocio_id: str = Query(..., description="Identificador del negocio"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(30, ge=1, le=180),
+    since: Optional[date] = Query(None),
+    until: Optional[date] = Query(None),
+):
+    """
+    Devuelve las filas agregadas del dashboard desde la vista/materialized view `mv_dashboard_sales_daily`
+    con paginación basada en limit/offset. Usar este endpoint para dashboards que requieren streaming
+    de datos por bloques sin recalcular métricas en cada request.
+    """
+    client = get_supabase_user_client(authorization)
+
+    today = datetime.utcnow().date()
+    default_since = today - timedelta(days=90)
+    since = since or default_since
+    until = until or today
+
+    safe_page = max(page, 1)
+    safe_page_size = max(1, min(page_size, 180))
+    offset = (safe_page - 1) * safe_page_size
+
+    params = {
+        "p_negocio_id": negocio_id,
+        "p_since": since.isoformat(),
+        "p_until": until.isoformat(),
+        "p_limit": safe_page_size,
+        "p_offset": offset,
+    }
+
+    try:
+        rpc_response = client.rpc("dashboard_sales_window", params).execute()
+        window_rows = rpc_response.data or []
+    except Exception as exc:
+        logger.warning("dashboard_sales_window RPC fallo para negocio %s: %s", negocio_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="No se pudo obtener la agregación de ventas",
+        ) from exc
+
+    def _parse_date(value: Any) -> date:
+        if isinstance(value, date):
+            return value
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value).date()
+            except ValueError:
+                try:
+                    return datetime.strptime(value.split("T")[0], "%Y-%m-%d").date()
+                except ValueError:
+                    return today
+        return today
+
+    rows = [
+        DashboardSalesWindowRow(
+            date=_parse_date(item.get("dia")),
+            total=float(item.get("total", item.get("total_bruto", 0)) or 0),
+            cost=float(item.get("costo", item.get("costo_total", 0)) or 0),
+            profit=float(item.get("ganancia", 0) or 0),
+            customers=int(item.get("clientes", item.get("clientes_unicos", 0)) or 0),
+            orders=int(item.get("total_ventas", item.get("orders", 0)) or 0),
+        )
+        for item in window_rows
+    ]
+
+    next_cursor = None
+    if len(rows) == safe_page_size:
+        next_cursor = str(safe_page + 1)
+
+    return DashboardSalesWindowResponse(
+        rows=rows,
+        next_cursor=next_cursor,
+        page=safe_page,
+        page_size=safe_page_size,
+    )
 
 @router.get("/sales", response_model=List[dict])
 async def get_recent_sales(

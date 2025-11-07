@@ -11,6 +11,7 @@ import logging
 
 from app.api.api_v1.api import api_router
 from app.core.config import settings
+from app.core.logging_config import configure_logging
 from app.db.supabase_client import get_supabase_client, check_supabase_connection
 from app.middleware.error_handlers import JSONErrorMiddleware
 
@@ -22,6 +23,9 @@ ALLOWED_ORIGINS: List[str] = os.getenv(
 
 MAX_RETRIES = 3
 RETRY_DELAY = 2  # seconds
+
+configure_logging()
+logger = logging.getLogger(__name__)
 
 class SafeProtocolMiddleware:
     """ASGI middleware to gracefully handle h11 LocalProtocolError and client disconnections"""
@@ -83,12 +87,16 @@ async def connect_to_supabase() -> bool:
         try:
             client = get_supabase_client()
             if check_supabase_connection():
-                print(f"[OK] Conexion con Supabase establecida correctamente (intento {attempt + 1})")
+                logger.info(
+                    "[supabase] Connection established on attempt %s", attempt + 1
+                )
                 return True
         except Exception as e:
-            print(f"[WARNING] Intento {attempt + 1} fallido: {str(e)}")
+            logger.warning("[supabase] Attempt %s failed: %s", attempt + 1, e)
             if attempt < MAX_RETRIES - 1:
-                print(f"Reintentando en {RETRY_DELAY} segundos...")
+                logger.info(
+                    "[supabase] Retrying connection in %s seconds", RETRY_DELAY
+                )
                 await asyncio.sleep(RETRY_DELAY)
     
     return False
@@ -96,16 +104,18 @@ async def connect_to_supabase() -> bool:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    print("Verificando conexion con Supabase...")
+    logger.info("Checking Supabase connectivity on startup")
     if not await connect_to_supabase():
-        print("[ERROR] No se pudo establecer conexion con Supabase despues de varios intentos")
-        print("[ERROR] La aplicacion requiere Supabase para funcionar")
+        logger.error(
+            "Unable to establish Supabase connection after %s attempts", MAX_RETRIES
+        )
+        logger.error("The application cannot start without Supabase connectivity")
         sys.exit(1)
     
     yield
     
     # Shutdown
-    print("Cerrando aplicación...")
+    logger.info("Shutting down MicroPymes API")
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -147,16 +157,19 @@ async def auth_middleware(request: Request, call_next):
             "/businesses/" in request.url.path and 
             ("/products" in request.url.path or "/services" in request.url.path)):
             is_public_route = True
-            print(f"DEBUG: Making business route public: {request.url.path}")
+            logger.debug("Making business route public: %s", request.url.path)
         
-        print(f"DEBUG: Path: {request.url.path}, is_public_route: {is_public_route}")
+        logger.debug("Path %s, is_public_route=%s", request.url.path, is_public_route)
 
         token = request.headers.get("Authorization", "").replace("Bearer ", "")
 
         if not is_public_route:
             # Si la ruta no es pública, se requiere un token
             if not token:
-                print("Authentication Middleware: Non-public route, no token provided, returning 401")
+                logger.warning(
+                    "Authentication Middleware: Non-public route without token for %s",
+                    request.url.path,
+                )
                 # Usar JSONResponse para rutas de API
                 if "/api/" in request.url.path:
                     return JSONResponse(
@@ -175,7 +188,11 @@ async def auth_middleware(request: Request, call_next):
 
             try:
                 supabase = get_supabase_client()
-                print(f"Authentication Middleware: Non-public route, attempting to get user with token: {token[:10]}...")
+                logger.debug(
+                    "Authentication Middleware: Validating token for %s (prefix=%s...)",
+                    request.url.path,
+                    token[:10],
+                )
                 auth_response = supabase.auth.get_user(token)
                 
                 user_from_auth = None
@@ -184,16 +201,22 @@ async def auth_middleware(request: Request, call_next):
                      # Older client version
                      user_from_auth, error = auth_response
                      if error:
-                         print(f"Authentication Middleware: Supabase error in tuple response: {error}")
+                         logger.error("Authentication Middleware: Supabase error: %s", error)
                 elif auth_response is not None and hasattr(auth_response, 'user') and auth_response.user:
                      # Newer client version
                      user_from_auth = auth_response.user
 
                 if user_from_auth:
                     request.state.user = user_from_auth
-                    print(f"Authentication Middleware: User {user_from_auth.id} attached to request.state")
+                    logger.debug(
+                        "Authentication Middleware: User %s attached to request.state",
+                        user_from_auth.id,
+                    )
                 else:
-                    print("Authentication Middleware: Non-public route, get_user did not return a valid user object, returning 401")
+                    logger.warning(
+                        "Authentication Middleware: Invalid user/token combination for %s",
+                        request.url.path,
+                    )
                     # Usar JSONResponse para rutas de API
                     if "/api/" in request.url.path:
                         return JSONResponse(
@@ -212,7 +235,12 @@ async def auth_middleware(request: Request, call_next):
 
             except Exception as e:
                 # Log the exception for debugging
-                print(f"Authentication Middleware: Exception during get_user call on non-public route: {type(e).__name__} - {e}")
+                logger.error(
+                    "Authentication Middleware: Exception validating token for %s: %s - %s",
+                    request.url.path,
+                    type(e).__name__,
+                    e,
+                )
                 # Usar JSONResponse para rutas de API
                 if "/api/" in request.url.path:
                     return JSONResponse(
@@ -234,7 +262,11 @@ async def auth_middleware(request: Request, call_next):
             # If it's a public route but a token is provided, still try to attach the user for convenience
             try:
                 supabase = get_supabase_client()
-                print(f"Authentication Middleware: Public route with token, attempting to get user: {token[:10]}...")
+                logger.debug(
+                    "Authentication Middleware: Public route token detected for %s (prefix=%s...)",
+                    request.url.path,
+                    token[:10],
+                )
                 auth_response = supabase.auth.get_user(token)
 
                 user_from_auth = None
@@ -245,21 +277,37 @@ async def auth_middleware(request: Request, call_next):
                      
                 if user_from_auth:
                      request.state.user = user_from_auth
-                     print(f"Authentication Middleware: User {user_from_auth.id} attached to request.state on public route")
+                     logger.debug(
+                         "Authentication Middleware: User %s attached on public route",
+                         user_from_auth.id,
+                     )
                 # else: no error needed, public route
 
             except Exception as e:
-                print(f"Authentication Middleware: Exception during get_user call on public route: {type(e).__name__} - {e}")
+                logger.error(
+                    "Authentication Middleware: Public route token exception for %s: %s - %s",
+                    request.url.path,
+                    type(e).__name__,
+                    e,
+                )
                 # No need to return 401, it's a public route
 
         # If it's a public route without a token, or if the token validation passed/failed gracefully,
         # continue to the next middleware/endpoint.
-        print(f"Authentication Middleware: Proceeding to next middleware/endpoint for {request.url.path}")
+        logger.debug(
+            "Authentication Middleware: Proceeding to next handler for %s",
+            request.url.path,
+        )
         response = await call_next(request)
         return response
         
     except Exception as e:
-        print(f"Authentication Middleware: Critical error: {type(e).__name__} - {e}")
+        logger.error(
+            "Authentication Middleware: Critical error on %s: %s - %s",
+            request.url.path,
+            type(e).__name__,
+            e,
+        )
         # Usar JSONResponse para rutas de API
         if "/api/" in request.url.path:
             return JSONResponse(
@@ -289,17 +337,17 @@ async def timeout_middleware(request: Request, call_next):
         response = await asyncio.wait_for(call_next(request), timeout=30.0)
         return response
     except asyncio.TimeoutError:
-        print(f"Request timeout for {request.url.path}")
+        logger.warning("Request timeout for %s", request.url.path)
         return Response("Request timeout", status_code=408)
     except asyncio.CancelledError:
         # Client disconnected; avoid sending a response body
-        print(f"Request cancelled (client disconnected) for {request.url.path}")
+        logger.info("Request cancelled (client disconnected) for %s", request.url.path)
         return Response(status_code=204)
     except ConnectionError as e:
-        print(f"Connection error for {request.url.path}: {e}")
+        logger.warning("Connection error for %s: %s", request.url.path, e)
         return Response("Connection error", status_code=503)
     except Exception as e:
-        print(f"Timeout middleware error for {request.url.path}: {e}")
+        logger.error("Timeout middleware error for %s: %s", request.url.path, e)
         return Response("Internal server error", status_code=500)
 
 app.middleware("http")(timeout_middleware)

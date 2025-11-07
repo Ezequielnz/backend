@@ -1,8 +1,11 @@
+import hashlib
+import json
 import logging
-from typing import Any, Dict, List
+from email.utils import format_datetime, parsedate_to_datetime
+from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status, Request, Body
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Body, Response
 from app.types.auth import User
 from app.api.deps import get_current_user
 from app.db.supabase_client import (
@@ -17,6 +20,70 @@ from supabase.lib.client_options import ClientOptions
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
+
+
+def _build_etag(payload: Any) -> str:
+    """Create a stable hash for the outgoing payload."""
+    serialized = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(serialized).hexdigest()
+
+
+def _parse_iso_timestamp(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        normalized = value.replace("Z", "+00:00")
+        return datetime.fromisoformat(normalized)
+    except ValueError:
+        logger.debug("Unable to parse timestamp %s for cache headers", value)
+        return None
+
+
+def _select_last_modified(candidates: List[Optional[str]]) -> Optional[datetime]:
+    parsed = [dt for dt in (_parse_iso_timestamp(value) for value in candidates) if dt]
+    if not parsed:
+        return None
+    return max(parsed)
+
+
+def _format_http_datetime(value: datetime) -> str:
+    return format_datetime(value.astimezone(timezone.utc))
+
+
+def _should_return_not_modified(
+    request: Request, etag: str, last_modified: Optional[datetime]
+) -> bool:
+    inm = request.headers.get("if-none-match")
+    if inm and inm.strip(' "W/') == etag:
+        return True
+
+    if last_modified:
+        ims = request.headers.get("if-modified-since")
+        if ims:
+            try:
+                ims_dt = parsedate_to_datetime(ims)
+                if ims_dt.tzinfo is None:
+                    ims_dt = ims_dt.replace(tzinfo=timezone.utc)
+                if last_modified <= ims_dt:
+                    return True
+            except (TypeError, ValueError):
+                logger.debug("Could not parse If-Modified-Since header %s", ims)
+    return False
+
+
+def _not_modified_response(etag: str, last_modified: Optional[datetime]) -> Response:
+    headers = {"ETag": etag}
+    if last_modified:
+        headers["Last-Modified"] = _format_http_datetime(last_modified)
+    return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=headers)
+
+
+def _set_cache_headers(response: Response, etag: str, last_modified: Optional[datetime]) -> None:
+    response.headers["ETag"] = etag
+    if last_modified:
+        response.headers["Last-Modified"] = _format_http_datetime(last_modified)
+    # Avoid aggressive caching on shared proxies but allow browser reuse per user
+    response.headers.setdefault("Cache-Control", "private, must-revalidate")
 
 router = APIRouter()
 
@@ -36,26 +103,26 @@ async def create_business(business_data: BusinessCreate, request: Request) -> An
 
     try:
         # 1. Create the new business in the 'negocios' table
-        print(f"Attempting to create business: {business_data.nombre} for user {user.id}")
+        logger.info(f"Attempting to create business: {business_data.nombre} for user {user.id}")
         # Incluir explícitamente el usuario_id como creada_por
         # Con RLS ENABLE INSERT WITH CHECK (true) + autenticación por token, esto debería pasar
         insert_data = {
             "nombre": business_data.nombre,
             "creada_por": str(user.id) # Asegurar que es string, Supabase espera UUID string
         }
-        print(f"Insert data: {insert_data}")
+        logger.info(f"Insert data: {insert_data}")
 
         try:
             business_response = supabase.table("negocios").insert([insert_data]).execute()
             
             if not business_response.data or len(business_response.data) == 0:
-                print("❌ Supabase INSERT returned no data")
+                logger.error("❌ Supabase INSERT returned no data")
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Supabase did not return created business data."
                 )
         except Exception as e:
-            print(f"❌ Supabase INSERT error: {str(e)}")
+            logger.error(f"❌ Supabase INSERT error: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Supabase error creating business: {str(e)}"
@@ -64,20 +131,20 @@ async def create_business(business_data: BusinessCreate, request: Request) -> An
 
         new_business = business_response.data[0]
         business_id = new_business.get("id")
-        print(f"✅ Business created with ID: {business_id}")
+        logger.info(f"✅ Business created with ID: {business_id}")
 
         # 2. Link the creating user to the business in 'usuarios_negocios' as admin
-        print(f"Linking user {user.id} to business {business_id} as admin.")
+        logger.info(f"Linking user {user.id} to business {business_id} as admin.")
         
         # Verificar si hay registros huérfanos para este usuario
-        print(f"Checking for orphaned user-business relationships for user {user.id}")
+        logger.info(f"Checking for orphaned user-business relationships for user {user.id}")
         orphaned_check = supabase.table("usuarios_negocios") \
             .select("id, negocio_id") \
             .eq("usuario_id", user.id) \
             .execute()
         
         if orphaned_check.data:
-            print(f"Found {len(orphaned_check.data)} existing relationships for user {user.id}")
+            logger.info(f"Found {len(orphaned_check.data)} existing relationships for user {user.id}")
             for relationship in orphaned_check.data:
                 # Verificar si el negocio asociado existe
                 business_check = supabase.table("negocios") \
@@ -87,15 +154,15 @@ async def create_business(business_data: BusinessCreate, request: Request) -> An
                 
                 if not business_check.data:
                     # El negocio no existe, eliminar la relación huérfana
-                    print(f"Removing orphaned relationship {relationship['id']} for non-existent business {relationship['negocio_id']}")
+                    logger.info(f"Removing orphaned relationship {relationship['id']} for non-existent business {relationship['negocio_id']}")
                     supabase.table("usuarios_negocios") \
                         .delete() \
                         .eq("id", relationship["id"]) \
                         .execute()
                 else:
-                    print(f"Valid relationship found: user {user.id} -> business {relationship['negocio_id']}")
+                    logger.info(f"Valid relationship found: user {user.id} -> business {relationship['negocio_id']}")
         else:
-            print(f"No existing relationships found for user {user.id}")
+            logger.info(f"No existing relationships found for user {user.id}")
         
         try:
             try:
@@ -108,18 +175,18 @@ async def create_business(business_data: BusinessCreate, request: Request) -> An
                 }).execute()
                 
                 if not user_business_link_response.data or len(user_business_link_response.data) == 0:
-                    print("❌ Supabase INSERT usuarios_negocios returned no data")
+                    logger.error("❌ Supabase INSERT usuarios_negocios returned no data")
                     # Rollback: eliminar el negocio creado
-                    print(f"Rolling back business creation for business_id: {business_id}")
+                    logger.info(f"Rolling back business creation for business_id: {business_id}")
                     supabase.table("negocios").delete().eq("id", business_id).execute()
                     raise HTTPException(
                         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                         detail="Error linking user to business - no data returned."
                     )
             except Exception as e:
-                print(f"❌ Supabase INSERT usuarios_negocios error: {str(e)}")
+                logger.error(f"❌ Supabase INSERT usuarios_negocios error: {str(e)}")
                 # Rollback: eliminar el negocio creado
-                print(f"Rolling back business creation for business_id: {business_id}")
+                logger.info(f"Rolling back business creation for business_id: {business_id}")
                 supabase.table("negocios").delete().eq("id", business_id).execute()
                 
                 # Verificar si es un error de constraint único
@@ -137,9 +204,9 @@ async def create_business(business_data: BusinessCreate, request: Request) -> An
         except HTTPException:
             raise  # Re-raise HTTPExceptions
         except Exception as e:
-            print(f"❌ Unexpected error linking user to business: {e}")
+            logger.error(f"❌ Unexpected error linking user to business: {e}")
             # Rollback: eliminar el negocio creado
-            print(f"Rolling back business creation for business_id: {business_id}")
+            logger.info(f"Rolling back business creation for business_id: {business_id}")
             supabase.table("negocios").delete().eq("id", business_id).execute()
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -147,7 +214,7 @@ async def create_business(business_data: BusinessCreate, request: Request) -> An
             )
 
         usuario_negocio_id = user_business_link_response.data[0].get("id")
-        print(f"✅ User {user.id} linked to business {business_id} with usuario_negocio_id: {usuario_negocio_id}")
+        logger.info(f"✅ User {user.id} linked to business {business_id} with usuario_negocio_id: {usuario_negocio_id}")
 
         # 3. Optionally, set initial admin permissions in 'permisos_usuario_negocio'
         # Make this non-critical - if it fails, the business creation should still succeed
@@ -161,20 +228,20 @@ async def create_business(business_data: BusinessCreate, request: Request) -> An
                 "recurso": "general",
                 "accion": "manage",
             }
-            print(f"Setting initial permissions for usuario_negocio_id: {usuario_negocio_id}")
+            logger.info(f"Setting initial permissions for usuario_negocio_id: {usuario_negocio_id}")
             
             try:
                 permissions_response = supabase.table("permisos_usuario_negocio").insert([initial_permissions]).execute()
                 
                 if permissions_response.data:
-                    print(f"✅ Initial permissions set successfully")
+                    logger.info(f"✅ Initial permissions set successfully")
                 else:
-                    print("⚠️ Warning: Could not set initial permissions - No data returned")
+                    logger.warning("⚠️ Warning: Could not set initial permissions - No data returned")
             except Exception as e:
-                print(f"⚠️ Warning: Could not set initial permissions: {str(e)}")
+                logger.warning(f"⚠️ Warning: Could not set initial permissions: {str(e)}")
                 
         except Exception as permissions_error:
-            print(f"⚠️ Warning: Error setting initial permissions (non-critical): {permissions_error}")
+            logger.error(f"⚠️ Warning: Error setting initial permissions (non-critical): {permissions_error}")
             # Continue with business creation even if permissions fail
 
         # 4. Create default tenant settings for the new business
@@ -187,20 +254,20 @@ async def create_business(business_data: BusinessCreate, request: Request) -> An
                 "sales_drop_threshold": 15,  # 15% threshold (Media sensitivity)
                 "min_days_for_model": 30     # 30 days minimum for predictions
             }
-            print(f"Creating default tenant settings for business: {business_id}")
+            logger.info(f"Creating default tenant settings for business: {business_id}")
             
             try:
                 tenant_settings_response = supabase.table("tenant_settings").insert([default_tenant_settings]).execute()
                 
                 if tenant_settings_response.data:
-                    print(f"✅ Default tenant settings created successfully")
+                    logger.info(f"✅ Default tenant settings created successfully")
                 else:
-                    print("⚠️ Warning: Could not create default tenant settings - No data returned")
+                    logger.warning("⚠️ Warning: Could not create default tenant settings - No data returned")
             except Exception as e:
-                print(f"⚠️ Warning: Could not create default tenant settings: {str(e)}")
+                logger.warning(f"⚠️ Warning: Could not create default tenant settings: {str(e)}")
                 
         except Exception as tenant_settings_error:
-            print(f"⚠️ Warning: Error creating default tenant settings (non-critical): {tenant_settings_error}")
+            logger.error(f"⚠️ Warning: Error creating default tenant settings (non-critical): {tenant_settings_error}")
             # Continue with business creation even if tenant settings fail
 
         return {"message": "Business created successfully", "business_id": business_id}
@@ -208,17 +275,17 @@ async def create_business(business_data: BusinessCreate, request: Request) -> An
     except HTTPException:
         raise # Re-lanzar HTTPExceptions que ya creamos
     except Exception as e:
-        print(f"❌ Error general creating business: {type(e).__name__} - {e}")
+        logger.error(f"❌ Error general creating business: {type(e).__name__} - {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error creating business: {str(e)}",
         )
 
 @router.get("/", response_model=List[Business])
-async def get_businesses(request: Request) -> Any:
-    """Get all businesses for the current user."""
+async def get_businesses(request: Request, response: Response) -> Any:
+    """Return all businesses for the current user with cache-aware headers."""
     user = getattr(request.state, "user", None)
-    if not user or not hasattr(user, 'id'):
+    if not user or not hasattr(user, "id"):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not authenticated.",
@@ -227,72 +294,58 @@ async def get_businesses(request: Request) -> Any:
     supabase = get_supabase_user_client(request.headers.get("Authorization", ""))
 
     try:
-        print(f"🔍 Getting businesses for user: {user.id}")
-        
-        # ✅ OPTIMIZED: Get all business relationships for the user
-        response = supabase.table("usuarios_negocios") \
-            .select("rol, negocio_id") \
-            .eq("usuario_id", user.id) \
-            .eq("estado", "aceptado") \
+        logger.debug("Fetching businesses for user %s", user.id)
+        membership_response = (
+            supabase.table("usuarios_negocios")
+            .select("rol, negocios(id, nombre, creada_por, creada_en, actualizada_en)")
+            .eq("usuario_id", user.id)
+            .eq("estado", "aceptado")
             .execute()
-
-        print(f"🔍 Raw response from usuarios_negocios: {response.data}")
-
-        if not response.data:
-            print("🔍 No business relationships found for user")
-            return []
-
-        # ✅ OPTIMIZED: Get all business IDs and fetch them in a single batch query
-        business_ids = [item.get("negocio_id") for item in response.data]
-        
-        # Batch query for all businesses at once
-        businesses_response = supabase.table("negocios") \
-            .select("id, nombre, creada_por, creada_en") \
-            .in_("id", business_ids) \
-            .execute()
-        
-        # Create a mapping of business_id -> business_data for fast lookup
-        businesses_data = {}
-        for business in businesses_response.data or []:
-            businesses_data[business["id"]] = business
-        
-        print(f"🔍 Found {len(businesses_data)} businesses in batch query")
-
-        # ✅ OPTIMIZED: Process data using the batch results
-        businesses = []
-        for item in response.data:
-            print(f"🔍 Processing relationship: {item}")
-            negocio_id = item.get("negocio_id")
-            rol = item.get("rol")
-            
-            negocio_data = businesses_data.get(negocio_id)
-            
-            if negocio_data:
-                print(f"🔍 Found business data: {negocio_data}")
-                
-                # Construct the Business object
-                business_obj = {
-                    "id": negocio_data.get("id"),
-                    "nombre": negocio_data.get("nombre"),
-                    "creada_por": negocio_data.get("creada_por"),
-                    "creada_en": negocio_data.get("creada_en"),
-                    "rol": rol,
-                }
-                businesses.append(business_obj)
-                print(f"🔍 Added business to list: {business_obj}")
-            else:
-                print(f"🔍 No business data found for negocio_id: {negocio_id}")
-
-        print(f"🔍 Final businesses list: {businesses}")
-        print(f"🔍 Total businesses found: {len(businesses)}")
-        return businesses
-
-    except Exception as e:
-        print(f"Error getting businesses: {e}")
+        )
+    except Exception as exc:
+        logger.error("Error getting businesses for user %s: %s", user.id, exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error getting businesses: {str(e)}",
+            detail="Error getting businesses",
+        ) from exc
+
+    if not membership_response.data:
+        logger.info("No business relationships found for user %s", user.id)
+        return []
+
+    businesses: List[Dict[str, Any]] = []
+    last_modified_candidates: List[Optional[str]] = []
+
+    for item in membership_response.data:
+        negocio_data = (item or {}).get("negocios") or {}
+        if not negocio_data:
+            logger.debug("Membership without negocio data for user %s: %s", user.id, item)
+            continue
+
+        last_modified_candidates.append(
+            negocio_data.get("actualizada_en") or negocio_data.get("creada_en")
         )
+        businesses.append(
+            {
+                "id": negocio_data.get("id"),
+                "nombre": negocio_data.get("nombre"),
+                "creada_por": negocio_data.get("creada_por"),
+                "creada_en": negocio_data.get("creada_en"),
+                "rol": item.get("rol"),
+            }
+        )
+
+    etag_payload = {"user_id": str(user.id), "businesses": businesses}
+    etag = _build_etag(etag_payload)
+    last_modified = _select_last_modified(last_modified_candidates)
+
+    if _should_return_not_modified(request, etag, last_modified):
+        logger.debug("Returning 304 for get_businesses user %s", user.id)
+        return _not_modified_response(etag, last_modified)
+
+    _set_cache_headers(response, etag, last_modified)
+    logger.debug("Returning %d businesses for user %s", len(businesses), user.id)
+    return businesses
 
 @router.get("/{business_id}", response_model=Business)
 async def get_business_by_id(business_id: str, request: Request) -> Any:
@@ -346,7 +399,7 @@ async def get_business_by_id(business_id: str, request: Request) -> Any:
     except HTTPException:
         raise  # Re-raise HTTPExceptions
     except Exception as e:
-        print(f"Error getting business by ID: {e}")
+        logger.error(f"Error getting business by ID: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error getting business: {str(e)}",
@@ -354,7 +407,7 @@ async def get_business_by_id(business_id: str, request: Request) -> Any:
 
 
 @router.get("/{business_id}/branches", response_model=List[Branch])
-async def get_business_branches(business_id: str, request: Request) -> Any:
+async def get_business_branches(business_id: str, request: Request, response: Response) -> Any:
     """
     Retrieve the branches (sucursales) accessible to the current user for a business.
     Admins receive every active branch; other roles only receive their assignments.
@@ -380,7 +433,7 @@ async def get_business_branches(business_id: str, request: Request) -> Any:
             .execute()
         )
     except Exception as membership_error:
-        print(f"[branches] Error validating membership: {membership_error}")
+        logger.error(f"[branches] Error validating membership: {membership_error}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error validating business membership.",
@@ -396,6 +449,7 @@ async def get_business_branches(business_id: str, request: Request) -> Any:
 
     try:
         branches: List[Dict[str, Any]] = []
+        branch_last_modified: List[Optional[str]] = []
 
         if user_role == "admin":
             response = (
@@ -445,6 +499,9 @@ async def get_business_branches(business_id: str, request: Request) -> Any:
             branch_id = branch.get("id")
             if branch_id:
                 dedup[str(branch_id)] = branch
+            branch_last_modified.append(
+                branch.get("actualizado_en") or branch.get("creado_en")
+            )
 
         ordered_branches = sorted(
             dedup.values(),
@@ -454,12 +511,37 @@ async def get_business_branches(business_id: str, request: Request) -> Any:
             ),
         )
 
+        etag_payload = {
+            "business_id": business_id,
+            "user_id": str(user.id),
+            "branches": [
+                {
+                    "id": b.get("id"),
+                    "codigo": b.get("codigo"),
+                    "nombre": b.get("nombre"),
+                    "updated": b.get("actualizado_en") or b.get("creado_en"),
+                }
+                for b in ordered_branches
+            ],
+        }
+        etag = _build_etag(etag_payload)
+        last_modified = _select_last_modified(branch_last_modified)
+
+        if _should_return_not_modified(request, etag, last_modified):
+            logger.debug(
+                "Returning 304 for get_business_branches business=%s user=%s",
+                business_id,
+                user.id,
+            )
+            return _not_modified_response(etag, last_modified)
+
+        _set_cache_headers(response, etag, last_modified)
         return ordered_branches
 
     except HTTPException:
         raise
     except Exception as e:
-        print(f"[branches] Unexpected error fetching branches for business {business_id}: {e}")
+        logger.error(f"[branches] Unexpected error fetching branches for business {business_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error fetching branches for business.",
@@ -686,7 +768,7 @@ async def delete_business(business_id: str, request: Request) -> Any:
 
         # Delete in the correct order to respect foreign key constraints
         # 1. First, get all usuario_negocio_ids for this business
-        print(f"Getting usuario_negocio relationships for business {business_id}")
+        logger.info(f"Getting usuario_negocio relationships for business {business_id}")
         user_business_ids_response = supabase.table("usuarios_negocios") \
             .select("id") \
             .eq("negocio_id", business_id) \
@@ -695,59 +777,59 @@ async def delete_business(business_id: str, request: Request) -> Any:
         if user_business_ids_response.data:
             # Extract just the IDs
             usuario_negocio_ids = [item["id"] for item in user_business_ids_response.data]
-            print(f"Found usuario_negocio_ids: {usuario_negocio_ids}")
+            logger.info(f"Found usuario_negocio_ids: {usuario_negocio_ids}")
             
             # Delete permissions for these usuario_negocio relationships
             if usuario_negocio_ids:
-                print(f"Deleting permissions for usuario_negocio_ids: {usuario_negocio_ids}")
+                logger.info(f"Deleting permissions for usuario_negocio_ids: {usuario_negocio_ids}")
                 permissions_response = supabase.table("permisos_usuario_negocio") \
                     .delete() \
                     .in_("usuario_negocio_id", usuario_negocio_ids) \
                     .execute()
-                print(f"Permissions deletion response: {permissions_response}")
+                logger.info(f"Permissions deletion response: {permissions_response}")
 
         # 2. Delete user-business relationships
-        print(f"Deleting user-business relationships for business {business_id}")
+        logger.info(f"Deleting user-business relationships for business {business_id}")
         user_business_response = supabase.table("usuarios_negocios") \
             .delete() \
             .eq("negocio_id", business_id) \
             .execute()
 
         # 3. Delete products (if any)
-        print(f"Deleting products for business {business_id}")
+        logger.info(f"Deleting products for business {business_id}")
         products_response = supabase.table("productos") \
             .delete() \
             .eq("negocio_id", business_id) \
             .execute()
 
         # 4. Delete categories (if any)
-        print(f"Deleting categories for business {business_id}")
+        logger.info(f"Deleting categories for business {business_id}")
         categories_response = supabase.table("categorias") \
             .delete() \
             .eq("negocio_id", business_id) \
             .execute()
 
         # 5. Finally, delete the business itself
-        print(f"Deleting business {business_id}")
+        logger.info(f"Deleting business {business_id}")
         try:
             business_response = supabase.table("negocios") \
                 .delete() \
                 .eq("id", business_id) \
                 .execute()
         except Exception as e:
-            print(f"❌ Supabase DELETE error: {str(e)}")
+            logger.error(f"❌ Supabase DELETE error: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Error deleting business: {str(e)}"
             )
 
-        print(f"✅ Business {business_id} deleted successfully")
+        logger.info(f"✅ Business {business_id} deleted successfully")
         return {"message": "Business deleted successfully", "business_id": business_id}
 
     except HTTPException:
         raise  # Re-raise HTTPExceptions
     except Exception as e:
-        print(f"❌ Error deleting business: {type(e).__name__} - {e}")
+        logger.error(f"❌ Error deleting business: {type(e).__name__} - {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error deleting business: {str(e)}",
@@ -759,7 +841,7 @@ async def debug_user_businesses(user_id: str, request: Request) -> Any:
     supabase = get_supabase_user_client(request.headers.get("Authorization", ""))
     
     try:
-        print(f"🐛 DEBUG: Checking data for user {user_id}")
+        logger.info(f"🐛 DEBUG: Checking data for user {user_id}")
         
         # 1. Check usuarios_negocios table
         user_business_response = supabase.table("usuarios_negocios") \
@@ -767,7 +849,7 @@ async def debug_user_businesses(user_id: str, request: Request) -> Any:
             .eq("usuario_id", user_id) \
             .execute()
         
-        print(f"🐛 usuarios_negocios records: {user_business_response.data}")
+        logger.info(f"🐛 usuarios_negocios records: {user_business_response.data}")
         
         # 2. Check negocios table
         all_businesses_response = supabase.table("negocios") \
@@ -775,21 +857,21 @@ async def debug_user_businesses(user_id: str, request: Request) -> Any:
             .eq("creada_por", user_id) \
             .execute()
         
-        print(f"🐛 negocios records: {all_businesses_response.data}")
+        logger.info(f"🐛 negocios records: {all_businesses_response.data}")
         
         # 3. Check for orphaned records
         if user_business_response.data:
             business_ids = [item["negocio_id"] for item in user_business_response.data]
-            print(f"🐛 Business IDs from relationships: {business_ids}")
+            logger.info(f"🐛 Business IDs from relationships: {business_ids}")
             
             for business_id in business_ids:
                 business_check = supabase.table("negocios") \
                     .select("*") \
                     .eq("id", business_id) \
                     .execute()
-                print(f"🐛 Business {business_id} exists: {bool(business_check.data)}")
+                logger.info(f"🐛 Business {business_id} exists: {bool(business_check.data)}")
                 if business_check.data:
-                    print(f"🐛 Business {business_id} data: {business_check.data[0]}")
+                    logger.info(f"🐛 Business {business_id} data: {business_check.data[0]}")
         
         return {
             "user_id": user_id,
@@ -800,7 +882,7 @@ async def debug_user_businesses(user_id: str, request: Request) -> Any:
         }
         
     except Exception as e:
-        print(f"🐛 DEBUG ERROR: {e}")
+        logger.error(f"🐛 DEBUG ERROR: {e}")
         return {"error": str(e)}
 
 @router.post("/repair/{user_id}")
@@ -809,7 +891,7 @@ async def repair_user_businesses(user_id: str, request: Request) -> Any:
     supabase = get_supabase_user_client(request.headers.get("Authorization", ""))
     
     try:
-        print(f"🔧 REPAIR: Starting repair for user {user_id}")
+        logger.info(f"🔧 REPAIR: Starting repair for user {user_id}")
         
         # 1. Get all businesses created by this user
         all_businesses_response = supabase.table("negocios") \
@@ -827,7 +909,7 @@ async def repair_user_businesses(user_id: str, request: Request) -> Any:
             .execute()
         
         existing_business_ids = [item["negocio_id"] for item in existing_relationships_response.data or []]
-        print(f"🔧 Existing relationships for businesses: {existing_business_ids}")
+        logger.info(f"🔧 Existing relationships for businesses: {existing_business_ids}")
         
         # 3. Find orphaned businesses (businesses without relationships)
         orphaned_businesses = []
@@ -835,12 +917,12 @@ async def repair_user_businesses(user_id: str, request: Request) -> Any:
             if business["id"] not in existing_business_ids:
                 orphaned_businesses.append(business)
         
-        print(f"🔧 Found {len(orphaned_businesses)} orphaned businesses")
+        logger.info(f"🔧 Found {len(orphaned_businesses)} orphaned businesses")
         
         # 4. Create missing relationships
         repaired_count = 0
         for business in orphaned_businesses:
-            print(f"🔧 Creating relationship for business {business['id']} ({business['nombre']})")
+            logger.info(f"🔧 Creating relationship for business {business['id']} ({business['nombre']})")
             
             try:
                 relationship_response = supabase.table("usuarios_negocios").insert({
@@ -852,13 +934,13 @@ async def repair_user_businesses(user_id: str, request: Request) -> Any:
                 }).execute()
                 
                 if relationship_response.data:
-                    print(f"✅ Created relationship for business {business['id']}")
+                    logger.info(f"✅ Created relationship for business {business['id']}")
                     repaired_count += 1
                 else:
-                    print(f"❌ Failed to create relationship for business {business['id']}")
+                    logger.error(f"❌ Failed to create relationship for business {business['id']}")
                     
             except Exception as e:
-                print(f"❌ Error creating relationship for business {business['id']}: {e}")
+                logger.error(f"❌ Error creating relationship for business {business['id']}: {e}")
         
         return {
             "message": f"Repair completed. {repaired_count} relationships created.",
@@ -869,7 +951,7 @@ async def repair_user_businesses(user_id: str, request: Request) -> Any:
         }
         
     except Exception as e:
-        print(f"🔧 REPAIR ERROR: {e}")
+        logger.error(f"🔧 REPAIR ERROR: {e}")
         return {"error": str(e)}
 
 @router.get("/{business_id}/usuarios-pendientes")
@@ -932,7 +1014,7 @@ async def listar_usuarios_pendientes(business_id: str, request: Request) -> Any:
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error en listar_usuarios_pendientes: {str(e)}")
+        logger.error(f"Error en listar_usuarios_pendientes: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error interno del servidor: {str(e)}")
 
 @router.post("/{business_id}/usuarios-pendientes/{usuario_negocio_id}/aprobar")
@@ -944,35 +1026,35 @@ async def aprobar_usuario_negocio(
 ) -> Any:
     """Aprobar usuario pendiente y configurar sus permisos por módulos."""
     try:
-        print(f"=== Iniciando aprobación de usuario ===")
-        print(f"Business ID: {business_id}")
-        print(f"Usuario Negocio ID: {usuario_negocio_id}")
-        print(f"Permisos data: {permisos_data}")
+        logger.info(f"=== Iniciando aprobación de usuario ===")
+        logger.info(f"Business ID: {business_id}")
+        logger.info(f"Usuario Negocio ID: {usuario_negocio_id}")
+        logger.info(f"Permisos data: {permisos_data}")
         
         user = getattr(request.state, "user", None)
         if not user or not hasattr(user, 'id'):
             raise HTTPException(status_code=401, detail="User not authenticated.")
         
-        print(f"Usuario autenticado: {user.id}")
+        logger.info(f"Usuario autenticado: {user.id}")
         
         supabase = get_supabase_user_client(request.headers.get("Authorization", ""))
         
         # Verificar que el usuario es el creador del negocio (solo él puede aprobar)
-        print("Verificando permisos del creador del negocio...")
+        logger.info("Verificando permisos del creador del negocio...")
         negocio_check = supabase.table("negocios").select("creada_por").eq("id", business_id).execute()
         
         if not negocio_check.data:
-            print(f"❌ Negocio no encontrado: {business_id}")
+            logger.error(f"❌ Negocio no encontrado: {business_id}")
             raise HTTPException(status_code=404, detail="Negocio no encontrado.")
             
         if negocio_check.data[0].get("creada_por") != user.id:
-            print(f"❌ Usuario {user.id} no es el creador del negocio. Creador: {negocio_check.data[0].get('creada_por')}")
+            logger.error(f"❌ Usuario {user.id} no es el creador del negocio. Creador: {negocio_check.data[0].get('creada_por')}")
             raise HTTPException(status_code=403, detail="Solo el creador del negocio puede aprobar usuarios.")
         
-        print("✅ Usuario autorizado para aprobar")
+        logger.info("✅ Usuario autorizado para aprobar")
         
         # Verificar que el usuario está pendiente
-        print("Verificando usuario pendiente...")
+        logger.info("Verificando usuario pendiente...")
         usuario_check = supabase.table("usuarios_negocios") \
             .select("id, usuario_id, estado") \
             .eq("id", usuario_negocio_id) \
@@ -981,7 +1063,7 @@ async def aprobar_usuario_negocio(
             .execute()
         
         if not usuario_check.data:
-            print(f"❌ Usuario pendiente no encontrado: {usuario_negocio_id}")
+            logger.error(f"❌ Usuario pendiente no encontrado: {usuario_negocio_id}")
             # Verificar si el usuario ya está aprobado
             already_approved = supabase.table("usuarios_negocios") \
                 .select("id, usuario_id, estado") \
@@ -990,7 +1072,7 @@ async def aprobar_usuario_negocio(
                 .execute()
             
             if already_approved.data and already_approved.data[0].get("estado") == "aceptado":
-                print(f"⚠️ Usuario ya está aprobado, verificando permisos...")
+                logger.warning(f"⚠️ Usuario ya está aprobado, verificando permisos...")
                 # Verificar si ya tiene permisos
                 existing_permisos = supabase.table("permisos_usuario_negocio") \
                     .select("id") \
@@ -998,7 +1080,7 @@ async def aprobar_usuario_negocio(
                     .execute()
                 
                 if existing_permisos.data:
-                    print(f"✅ Usuario ya tiene permisos configurados")
+                    logger.info(f"✅ Usuario ya tiene permisos configurados")
                     # Obtener datos del usuario para la respuesta
                     usuario_data = supabase.table("usuarios") \
                         .select("nombre, apellido, email") \
@@ -1011,16 +1093,16 @@ async def aprobar_usuario_negocio(
                         "permisos": existing_permisos.data[0] if existing_permisos.data else {}
                     }
                 else:
-                    print(f"⚠️ Usuario aprobado pero sin permisos, creando permisos...")
+                    logger.warning(f"⚠️ Usuario aprobado pero sin permisos, creando permisos...")
                     # Continuar con la creación de permisos para usuario ya aprobado
                     usuario_check = already_approved
             else:
                 raise HTTPException(status_code=404, detail="Usuario pendiente no encontrado.")
         
-        print(f"✅ Usuario encontrado: {usuario_check.data[0]}")
+        logger.info(f"✅ Usuario encontrado: {usuario_check.data[0]}")
         
         # Configurar permisos por módulos ANTES de aprobar
-        print("Configurando permisos...")
+        logger.info("Configurando permisos...")
         permisos_config = {
             "usuario_negocio_id": usuario_negocio_id,
             "recurso": "general",
@@ -1062,7 +1144,7 @@ async def aprobar_usuario_negocio(
             "creado_en": datetime.now(timezone.utc).isoformat()
         }
         
-        print(f"Configuración de permisos: {permisos_config}")
+        logger.info(f"Configuración de permisos: {permisos_config}")
         
         # Verificar si ya existen permisos para evitar duplicados
         existing_permisos = supabase.table("permisos_usuario_negocio") \
@@ -1071,14 +1153,14 @@ async def aprobar_usuario_negocio(
             .execute()
         
         if existing_permisos.data:
-            print("⚠️ Ya existen permisos, actualizando...")
+            logger.warning("⚠️ Ya existen permisos, actualizando...")
             # Actualizar permisos existentes
             permisos_response = supabase.table("permisos_usuario_negocio") \
                 .update(permisos_config) \
                 .eq("usuario_negocio_id", usuario_negocio_id) \
                 .execute()
         else:
-            print("Creando nuevos permisos...")
+            logger.info("Creando nuevos permisos...")
             # Crear permisos nuevos
             permisos_response = supabase.table("permisos_usuario_negocio") \
                 .insert(permisos_config) \
@@ -1086,11 +1168,11 @@ async def aprobar_usuario_negocio(
         
         # No need to check for .error - Supabase raises exceptions on errors
         
-        print("✅ Permisos configurados exitosamente")
+        logger.info("✅ Permisos configurados exitosamente")
         
         # Aprobar usuario DESPUÉS de configurar permisos (solo si está pendiente)
         if usuario_check.data[0].get("estado") == "pendiente":
-            print("Aprobando usuario...")
+            logger.info("Aprobando usuario...")
             approval_response = supabase.table("usuarios_negocios") \
                 .update({"estado": "aceptado"}) \
                 .eq("id", usuario_negocio_id) \
@@ -1098,12 +1180,12 @@ async def aprobar_usuario_negocio(
             
             # No need to check for .error - Supabase raises exceptions on errors
             
-            print("✅ Usuario aprobado exitosamente")
+            logger.info("✅ Usuario aprobado exitosamente")
         else:
-            print("✅ Usuario ya estaba aprobado")
+            logger.info("✅ Usuario ya estaba aprobado")
         
         # Obtener datos del usuario aprobado para la respuesta
-        print("Obteniendo datos del usuario...")
+        logger.info("Obteniendo datos del usuario...")
         usuario_data = supabase.table("usuarios") \
             .select("nombre, apellido, email") \
             .eq("id", usuario_check.data[0]["usuario_id"]) \
@@ -1111,7 +1193,7 @@ async def aprobar_usuario_negocio(
         
         # No need to check for .error - Supabase raises exceptions on errors
         
-        print("✅ Aprobación completada exitosamente")
+        logger.info("✅ Aprobación completada exitosamente")
         
         return {
             "message": "Usuario aprobado correctamente",
@@ -1122,9 +1204,9 @@ async def aprobar_usuario_negocio(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"❌ Error inesperado en aprobación: {type(e).__name__} - {str(e)}")
+        logger.error(f"❌ Error inesperado en aprobación: {type(e).__name__} - {str(e)}")
         import traceback
-        print(f"Traceback: {traceback.format_exc()}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(
             status_code=500, 
             detail=f"Error interno del servidor: {str(e)}"
@@ -1277,7 +1359,7 @@ async def listar_usuarios_negocio(business_id: str, request: Request) -> Any:
         return result
         
     except Exception as e:
-        print(f"Error en listar_usuarios_negocio: {str(e)}")
+        logger.error(f"Error en listar_usuarios_negocio: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error interno del servidor: {str(e)}")
 
 @router.put("/{business_id}/usuarios/{usuario_negocio_id}/permisos")
@@ -1340,7 +1422,7 @@ async def actualizar_permisos_usuario(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"❌ Error inesperado actualizando permisos: {str(e)}")
+        logger.error(f"❌ Error inesperado actualizando permisos: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error interno del servidor: {str(e)}")
 
 @router.delete("/{business_id}/usuarios/{usuario_negocio_id}")
@@ -1482,7 +1564,7 @@ async def invitar_usuario_negocio(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"❌ Error invitando usuario: {str(e)}")
+        logger.error(f"❌ Error invitando usuario: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error interno del servidor: {str(e)}")
 
 
@@ -1571,7 +1653,7 @@ async def actualizar_estado_usuario_negocio(
                     .execute()
                     
             except Exception as permisos_error:
-                print(f"⚠️ Warning: Error creando permisos básicos: {permisos_error}")
+                logger.error(f"⚠️ Warning: Error creando permisos básicos: {permisos_error}")
         
         return {
             "message": f"Estado actualizado a '{estado_data.estado}' correctamente",
@@ -1582,5 +1664,5 @@ async def actualizar_estado_usuario_negocio(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"❌ Error actualizando estado: {str(e)}")
+        logger.error(f"❌ Error actualizando estado: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error interno del servidor: {str(e)}")
