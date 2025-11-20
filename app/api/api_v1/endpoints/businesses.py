@@ -294,32 +294,64 @@ async def get_businesses(request: Request, response: Response) -> Any:
     supabase = get_supabase_user_client(request.headers.get("Authorization", ""))
 
     try:
-        logger.debug("Fetching businesses for user %s", user.id)
+        logger.debug("Fetching business memberships for user %s", user.id)
         membership_response = (
             supabase.table("usuarios_negocios")
-            .select("rol, negocios(id, nombre, creada_por, creada_en, actualizado_en)")
+            .select("rol, negocio_id, estado")
             .eq("usuario_id", user.id)
             .eq("estado", "aceptado")
             .execute()
         )
     except Exception as exc:
-        logger.error("Error getting businesses for user %s: %s", user.id, exc)
+        logger.error("Error getting business memberships for user %s: %s", user.id, exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error getting businesses",
         ) from exc
 
-    if not membership_response.data:
+    membership_data = membership_response.data or []
+    if not membership_data:
         logger.info("No business relationships found for user %s", user.id)
         return []
+
+    business_ids = [
+        item.get("negocio_id")
+        for item in membership_data
+        if item and item.get("negocio_id")
+    ]
+
+    if not business_ids:
+        logger.info("Memberships without negocio_id for user %s", user.id)
+        return []
+
+    try:
+        business_response = (
+            supabase.table("negocios")
+            .select("id, nombre, creada_por, creada_en, actualizado_en")
+            .in_("id", business_ids)
+            .execute()
+        )
+    except Exception as exc:
+        logger.error("Error fetching business info for user %s: %s", user.id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error getting businesses",
+        ) from exc
+
+    business_map: Dict[str, Dict[str, Any]] = {}
+    for negocio in business_response.data or []:
+        negocio_id = negocio.get("id")
+        if negocio_id:
+            business_map[str(negocio_id)] = negocio
 
     businesses: List[Dict[str, Any]] = []
     last_modified_candidates: List[Optional[str]] = []
 
-    for item in membership_response.data:
-        negocio_data = (item or {}).get("negocios") or {}
+    for membership in membership_data:
+        negocio_id = membership.get("negocio_id")
+        negocio_data = business_map.get(str(negocio_id))
         if not negocio_data:
-            logger.debug("Membership without negocio data for user %s: %s", user.id, item)
+            logger.debug("Missing negocio data for membership %s", membership)
             continue
 
         last_modified_candidates.append(
@@ -331,7 +363,7 @@ async def get_businesses(request: Request, response: Response) -> Any:
                 "nombre": negocio_data.get("nombre"),
                 "creada_por": negocio_data.get("creada_por"),
                 "creada_en": negocio_data.get("creada_en"),
-                "rol": item.get("rol"),
+                "rol": membership.get("rol"),
             }
         )
 
