@@ -67,7 +67,7 @@
 - `app/api/api_v1/endpoints/businesses.py` deja de usar `print` durante la creaci�n de negocios, invitaciones y flujos de sucursales; cada evento ahora usa niveles apropiados (`debug` para trazas, `warning` para fallos no cr�ticos y `error` para excepciones).
 
 #### Optimizaci�n de `get_businesses` y `get_business_branches`
-- `get_businesses` ahora realiza un �nico `select` anidado (`rol, negocios(id, nombre, creada_por, creada_en, actualizada_en)`), construye la lista en memoria sin consultas adicionales y s�lo retorna las columnas necesarias.
+- `get_businesses` ahora realiza un �nico `select` anidado (`rol, negocios(id, nombre, creada_por, creada_en, actualizado_en)`), construye la lista en memoria sin consultas adicionales y s�lo retorna las columnas necesarias.
 - Ambos endpoints calculan `ETag` y `Last-Modified` en base al usuario/sucursal, comparan los encabezados `If-None-Match`/`If-Modified-Since` y responden `304` cuando el cliente ya posee una vista vigente.
 - Los encabezados se a�aden mediante el objeto `Response`, permitiendo cache privado por token sin exponer datos entre tenants y reduciendo round-trips desde React Query.
 - `get_business_branches` deduplica asignaciones, conserva el fallback a la sucursal principal y reaprovecha los timestamps (`actualizado_en`/`creado_en`) para evitar recomputar listas que no cambiaron.

@@ -297,7 +297,7 @@ async def get_businesses(request: Request, response: Response) -> Any:
         logger.debug("Fetching businesses for user %s", user.id)
         membership_response = (
             supabase.table("usuarios_negocios")
-            .select("rol, negocios(id, nombre, creada_por, creada_en, actualizada_en)")
+            .select("rol, negocios(id, nombre, creada_por, creada_en, actualizado_en)")
             .eq("usuario_id", user.id)
             .eq("estado", "aceptado")
             .execute()
@@ -323,7 +323,7 @@ async def get_businesses(request: Request, response: Response) -> Any:
             continue
 
         last_modified_candidates.append(
-            negocio_data.get("actualizada_en") or negocio_data.get("creada_en")
+            negocio_data.get("actualizado_en") or negocio_data.get("creada_en")
         )
         businesses.append(
             {

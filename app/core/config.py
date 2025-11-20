@@ -21,6 +21,8 @@ class Settings(BaseSettings):
         "http://localhost:3000",  # Frontend alternativo (por si se usa otro puerto)
         "http://localhost:8080",  # Frontend alternativo (por si se usa otro puerto)
     ]
+    FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:5173")
+    FRONTEND_CONFIRMATION_PATH: str = os.getenv("FRONTEND_CONFIRMATION_PATH", "/confirm-email")
 
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")
     @classmethod
@@ -123,6 +125,15 @@ class Settings(BaseSettings):
         extra="ignore",
         case_sensitive=True,
     )
+
+    @property
+    def FRONTEND_CONFIRMATION_URL(self) -> str:
+        """Return absolute URL for Supabase email confirmation redirect."""
+        base = self.FRONTEND_URL.rstrip("/") or "http://localhost:5173"
+        path = self.FRONTEND_CONFIRMATION_PATH or "/confirm-email"
+        if not path.startswith("/"):
+            path = f"/{path}"
+        return f"{base}{path}"
 
 
 # Instancia singleton de configuración

@@ -496,7 +496,7 @@ async def confirm_redirect():
     a nuestra aplicación frontend en el puerto correcto.
     """
     # Redirigir al endpoint de confirmación en el frontend
-    return RedirectResponse(url="http://localhost:5173/confirm-email")
+    return RedirectResponse(url=settings.FRONTEND_CONFIRMATION_URL)
 
 
 @router.get("/check-confirmation/{email}")
