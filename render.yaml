@@ -15,7 +15,7 @@ services:
       - key: ENVIRONMENT
         value: production
       - key: ALLOWED_ORIGINS
-        value: https://app.operixml.com,https://operixml.com,https://micropymes-frontend.onrender.com,http://localhost:5173,http://localhost:3000
+        value: https://app.operixml.com,https://operixml.com,https://www.operixml.com,https://micropymes-frontend.onrender.com,http://localhost:5173,http://localhost:3000
       - key: FRONTEND_URL
         value: https://operixml.com
       - key: SUPABASE_URL

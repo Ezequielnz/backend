@@ -18,7 +18,7 @@ from app.middleware.error_handlers import JSONErrorMiddleware
 # Get allowed origins from environment or use default
 ALLOWED_ORIGINS: List[str] = os.getenv(
     "ALLOWED_ORIGINS",
-    "http://localhost:5173,http://localhost:3000,https://client-micropymes.onrender.com,https://operixml.com,https://app.operixml.com,operixml.com"  # Include production/app subdomain
+    "http://localhost:5173,http://localhost:3000,https://client-micropymes.onrender.com,https://operixml.com,https://www.operixml.com,https://app.operixml.com,operixml.com,www.operixml.com"  # Include production/app subdomain
 ).split(",")
 
 MAX_RETRIES = 3
