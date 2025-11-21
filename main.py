@@ -15,11 +15,9 @@ from app.core.logging_config import configure_logging
 from app.db.supabase_client import get_supabase_client, check_supabase_connection
 from app.middleware.error_handlers import JSONErrorMiddleware
 
-# Get allowed origins from environment or use default
-ALLOWED_ORIGINS: List[str] = os.getenv(
-    "ALLOWED_ORIGINS",
-    "http://localhost:5173,http://localhost:3000,https://client-micropymes.onrender.com,https://operixml.com,https://www.operixml.com,https://app.operixml.com,operixml.com,www.operixml.com"  # Include production/app subdomain
-).split(",")
+# CORRECCIÓN: Eliminamos la lectura manual de ALLOWED_ORIGINS.
+# Usaremos settings.BACKEND_CORS_ORIGINS que ya procesa correctamente 
+# la variable de entorno (JSON, espacios, comas, etc.) gracias a Pydantic.
 
 MAX_RETRIES = 3
 RETRY_DELAY = 2  # seconds
@@ -352,10 +350,11 @@ async def timeout_middleware(request: Request, call_next):
 
 app.middleware("http")(timeout_middleware)
 
-# CORS configuration with specific origins (envolver la pila para propagar headers)
+# CORS configuration using settings to ensure proper parsing
+# CORRECCIÓN: Usar settings.BACKEND_CORS_ORIGINS en lugar de parseo manual
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+    allow_origins=settings.BACKEND_CORS_ORIGINS, 
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
@@ -395,7 +394,8 @@ async def health_check() -> dict:
             },
             "version": settings.VERSION,
             "environment": settings.ENVIRONMENT,
-            "allowed_origins": ALLOWED_ORIGINS
+            # Usar la configuración unificada también en la respuesta de salud
+            "allowed_origins": settings.BACKEND_CORS_ORIGINS
         }
     except Exception as e:
         return {
