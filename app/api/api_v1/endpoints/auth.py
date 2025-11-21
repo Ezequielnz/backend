@@ -7,6 +7,7 @@ import sys
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, status, Request, Body, Depends, UploadFile
+from app.db.supabase_client import get_supabase_client, get_supabase_anon_client, get_supabase_user_client
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import EmailStr, ValidationError
@@ -253,25 +254,54 @@ async def read_users_me(request: Request) -> Any:
     Get current user
     """
     try:
-        if not hasattr(request.state, 'user') or not request.state.user:
-            raise HTTPException(status_code=401, detail="Usuario no autenticado")
+        # Extraer token del header Authorization
+        authorization = request.headers.get("Authorization", "")
+        if not authorization or not authorization.startswith("Bearer "):
+            raise HTTPException(
+                status_code=401, 
+                detail="Token de autenticación requerido"
+            )
         
-        user = request.state.user
-        user_id = user.id
+        token = authorization.replace("Bearer ", "")
         
-        supabase = get_supabase_client()
+        # Obtener cliente Supabase con el token del usuario
+        supabase = get_supabase_user_client(token)
         
+        # Obtener usuario actual de Supabase Auth
+        try:
+            auth_user = supabase.auth.get_user(token)
+            if not auth_user or not auth_user.user:
+                raise HTTPException(
+                    status_code=401, 
+                    detail="Token inválido o expirado"
+                )
+            
+            user_id = auth_user.user.id
+            user_email = auth_user.user.email
+            
+        except Exception as auth_error:
+            print(f"Error verificando token: {str(auth_error)}")
+            raise HTTPException(
+                status_code=401, 
+                detail="Token inválido o expirado"
+            )
+        
+        # Obtener datos adicionales de la tabla usuarios
         response = supabase.table("usuarios").select("*").eq("id", user_id).execute()
         
         if not response.data:
-            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+            raise HTTPException(
+                status_code=404, 
+                detail="Usuario no encontrado"
+            )
         
         user_data = response.data[0]
         
+        # Agregar datos de auth
         user_data.update({
-            "email": user.email,
-            "email_confirmed_at": user.email_confirmed_at,
-            "last_sign_in_at": user.last_sign_in_at,
+            "email": user_email,
+            "email_confirmed_at": getattr(auth_user.user, "email_confirmed_at", None),
+            "last_sign_in_at": getattr(auth_user.user, "last_sign_in_at", None),
         })
         
         return user_data
@@ -279,8 +309,13 @@ async def read_users_me(request: Request) -> Any:
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error me: {str(e)}")
-        raise HTTPException(status_code=500, detail="Error interno del servidor")
+        print(f"Error en /auth/me: {str(e)}")
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=500, 
+            detail="Error interno del servidor"
+        )
 
 
 @router.put("/profile", response_model=dict)
