@@ -325,9 +325,10 @@ async def get_businesses(request: Request, response: Response) -> Any:
         return []
 
     try:
+        # CORRECCIÓN: Usar updated_at en lugar de actualizado_en
         business_response = (
             supabase.table("negocios")
-            .select("id, nombre, creada_por, creada_en, actualizado_en")
+            .select("id, nombre, creada_por, creada_en, updated_at") 
             .in_("id", business_ids)
             .execute()
         )
@@ -354,8 +355,9 @@ async def get_businesses(request: Request, response: Response) -> Any:
             logger.debug("Missing negocio data for membership %s", membership)
             continue
 
+        # CORRECCIÓN: Usar updated_at aquí también
         last_modified_candidates.append(
-            negocio_data.get("actualizado_en") or negocio_data.get("creada_en")
+            negocio_data.get("updated_at") or negocio_data.get("creada_en")
         )
         businesses.append(
             {
@@ -438,6 +440,8 @@ async def get_business_by_id(business_id: str, request: Request) -> Any:
         )
 
 
+# ... (imports anteriores se mantienen igual)
+
 @router.get("/{business_id}/branches", response_model=List[Branch])
 async def get_business_branches(business_id: str, request: Request, response: Response) -> Any:
     """
@@ -484,21 +488,23 @@ async def get_business_branches(business_id: str, request: Request, response: Re
         branch_last_modified: List[Optional[str]] = []
 
         if user_role == "admin":
-            response = (
+            # CORRECCIÓN: Renombrado 'response' a 'branches_response' para evitar conflicto de tipos
+            # También cambiamos 'actualizado_en' a 'updated_at' preventivamente si tu tabla sucursales sigue el mismo patrón
+            branches_response = (
                 supabase.table("sucursales")
                 .select(
-                    "id, negocio_id, nombre, codigo, direccion, activo, is_main, creado_en, actualizado_en"
+                    "id, negocio_id, nombre, codigo, direccion, activo, is_main, creado_en, updated_at"
                 )
                 .eq("negocio_id", business_id)
                 .eq("activo", True)
                 .execute()
             )
-            branches = response.data or []
+            branches = branches_response.data or []
         else:
             assignments_response = (
                 supabase.table("usuarios_sucursales")
                 .select(
-                    "sucursales(id, negocio_id, nombre, codigo, direccion, activo, is_main, creado_en, actualizado_en)"
+                    "sucursales(id, negocio_id, nombre, codigo, direccion, activo, is_main, creado_en, updated_at)"
                 )
                 .eq("usuario_id", user.id)
                 .eq("negocio_id", business_id)
@@ -516,7 +522,7 @@ async def get_business_branches(business_id: str, request: Request, response: Re
                 fallback = (
                     supabase.table("sucursales")
                     .select(
-                        "id, negocio_id, nombre, codigo, direccion, activo, is_main, creado_en, actualizado_en"
+                        "id, negocio_id, nombre, codigo, direccion, activo, is_main, creado_en, updated_at"
                     )
                     .eq("negocio_id", business_id)
                     .eq("is_main", True)
@@ -532,7 +538,7 @@ async def get_business_branches(business_id: str, request: Request, response: Re
             if branch_id:
                 dedup[str(branch_id)] = branch
             branch_last_modified.append(
-                branch.get("actualizado_en") or branch.get("creado_en")
+                branch.get("updated_at") or branch.get("creado_en")
             )
 
         ordered_branches = sorted(
@@ -551,7 +557,7 @@ async def get_business_branches(business_id: str, request: Request, response: Re
                     "id": b.get("id"),
                     "codigo": b.get("codigo"),
                     "nombre": b.get("nombre"),
-                    "updated": b.get("actualizado_en") or b.get("creado_en"),
+                    "updated": b.get("updated_at") or b.get("creado_en"),
                 }
                 for b in ordered_branches
             ],
@@ -567,6 +573,7 @@ async def get_business_branches(business_id: str, request: Request, response: Re
             )
             return _not_modified_response(etag, last_modified)
 
+        # Ahora 'response' se refiere correctamente al objeto Response de FastAPI inyectado en la función
         _set_cache_headers(response, etag, last_modified)
         return ordered_branches
 
