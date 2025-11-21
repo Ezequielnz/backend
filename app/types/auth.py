@@ -1,5 +1,5 @@
-from typing import Optional
-from pydantic import BaseModel, EmailStr
+from typing import Optional, Union
+from pydantic import BaseModel, EmailStr, Field
 
 class Token(BaseModel):
     access_token: str
@@ -15,10 +15,11 @@ class UserBase(BaseModel):
 
 class UserSignUp(UserBase):
     password: str
-    # Removed business selection fields - users will be invited by business admins in the future
 
 class UserLogin(BaseModel):
-    email: EmailStr
+    # Cambiamos EmailStr a str para evitar el error 422 si envían un username
+    # Usamos alias para aceptar tanto 'username' como 'email'
+    email: str 
     password: str
 
 class User(UserBase):
@@ -32,4 +33,4 @@ class User(UserBase):
 class SignUpResponse(BaseModel):
     message: str
     email: str
-    requires_confirmation: bool = True 
+    requires_confirmation: bool = True
