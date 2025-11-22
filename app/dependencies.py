@@ -1,5 +1,5 @@
 from fastapi import Depends, HTTPException, status, Request
-from app.db.supabase_client import get_supabase_client
+from app.db.supabase_client import get_supabase_client, get_supabase_user_client
 from typing import Optional, List
 
 def is_public_products_services_request(request: Request) -> bool:
@@ -24,12 +24,22 @@ async def verify_permission_logic(request: Request, business_id: str, required_p
         if not user:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not authenticated")
         
-        supabase = get_supabase_client()
+        authorization = request.headers.get("Authorization", "")
+        if not authorization:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing Authorization header")
+        
+        user_id = getattr(user, "id", None)
+        if user_id is None and isinstance(user, dict):
+            user_id = user.get("id")
+        if not user_id:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User id not available")
+        
+        supabase = get_supabase_user_client(authorization)
 
         # Verificar acceso al negocio
         user_business_response = supabase.table("usuarios_negocios") \
             .select("id, rol") \
-            .eq("usuario_id", user.id) \
+            .eq("usuario_id", user_id) \
             .eq("negocio_id", business_id) \
             .eq("estado", "aceptado") \
             .execute()
@@ -45,7 +55,7 @@ async def verify_permission_logic(request: Request, business_id: str, required_p
 
         # Verificar si es el creador del negocio
         business_response = supabase.table("negocios").select("creada_por").eq("id", business_id).execute()
-        if business_response.data and business_response.data[0].get("creada_por") == user.id:
+        if business_response.data and business_response.data[0].get("creada_por") == user_id:
             return True
 
         # Los admins tienen todos los permisos

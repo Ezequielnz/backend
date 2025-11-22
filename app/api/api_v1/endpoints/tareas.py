@@ -42,10 +42,11 @@ async def get_tareas(
         raise HTTPException(status_code=401, detail="User not authenticated")
     
     supabase = scoped_client_from_request(request)
+    authorization = request.headers.get("Authorization", "")
     
     try:
         # Verificar acceso básico al negocio
-        business_access = await verify_basic_business_access(business_id, user)
+        business_access = await verify_basic_business_access(business_id, user, authorization)
         user_role = business_access.get("rol", "empleado")
         user_negocio_id = business_access.get("id")
         
@@ -424,10 +425,11 @@ async def get_estadisticas_tareas(
         raise HTTPException(status_code=401, detail="User not authenticated")
     
     supabase = scoped_client_from_request(request)
+    authorization = request.headers.get("Authorization", "")
     
     try:
         # Verificar acceso básico al negocio
-        business_access = await verify_basic_business_access(business_id, user)
+        business_access = await verify_basic_business_access(business_id, user, authorization)
         user_role = business_access.get("rol", "empleado")
         user_negocio_id = business_access.get("id")
         
@@ -472,7 +474,7 @@ async def get_estadisticas_tareas(
         fecha_tareas = fecha_response.data or []
         
         for tarea in fecha_tareas:
-            if (tarea.get("fecha_fin") and 
+            if (tarea.get("fecha_fin") and
                 tarea.get("estado") not in ["completada", "cancelada"]):
                 try:
                     # Manejar diferentes formatos de fecha
@@ -491,7 +493,8 @@ async def get_estadisticas_tareas(
                     if fecha_fin < now:
                         vencidas += 1
                 except (ValueError, TypeError) as e:
-                    print(f"Error al parsear fecha_fin: {fecha_fin_str}, error: {e}")
+                    raw_fecha_fin = tarea.get("fecha_fin")
+                    print(f"Error al parsear fecha_fin: {raw_fecha_fin}, error: {e}")
                     continue
         
         # Estadísticas por empleado (solo para admin/propietario)
@@ -574,10 +577,11 @@ async def get_tarea(
         raise HTTPException(status_code=401, detail="User not authenticated")
     
     supabase = scoped_client_from_request(request)
+    authorization = request.headers.get("Authorization", "")
     
     try:
         # Verificar acceso básico al negocio
-        business_access = await verify_basic_business_access(business_id, user)
+        business_access = await verify_basic_business_access(business_id, user, authorization)
         user_role = business_access.get("rol", "empleado")
         user_negocio_id = business_access.get("id")
         

@@ -89,24 +89,69 @@ app.add_middleware(JSONErrorMiddleware)
 # 4. CUARTO: Auth Middleware (Lógica de negocio)
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
+    # Log de TODAS las peticiones para debug
+    logger.info(f"[MIDDLEWARE] Petición: {request.method} {request.url.path}")
+    
     if request.method == "OPTIONS":
+        logger.info(f"[MIDDLEWARE] OPTIONS request, pasando sin autenticación")
         return await call_next(request)
 
-    # Rutas públicas
-    public_routes = [
+    # Rutas públicas - usar coincidencia exacta o con prefijo específico
+    public_routes_exact = [
         "/", "/health", "/wake-up", "/docs", "/redoc", "/openapi.json",
         f"{settings.API_V1_STR}/docs",
         f"{settings.API_V1_STR}/openapi.json",
-        f"{settings.API_V1_STR}/auth/login",
-        f"{settings.API_V1_STR}/auth/signup",
-        f"{settings.API_V1_STR}/auth/confirm",
     ]
     
-    if any(request.url.path.startswith(route) for route in public_routes):
+    # Rutas que empiezan con estos prefijos (solo auth)
+    public_routes_prefix = [
+        f"{settings.API_V1_STR}/auth/",
+    ]
+    
+    # Verificar coincidencia exacta
+    if request.url.path in public_routes_exact:
+        logger.info(f"[MIDDLEWARE] Ruta pública (exacta), pasando sin autenticación")
+        return await call_next(request)
+    
+    # Verificar prefijos de auth
+    if any(request.url.path.startswith(prefix) for prefix in public_routes_prefix):
+        logger.info(f"[MIDDLEWARE] Ruta pública (auth), pasando sin autenticación")
         return await call_next(request)
 
-    # Lógica simple de validación de token para rutas protegidas
-    # (La validación profunda se hace en las dependencias de los endpoints)
+    # Para rutas protegidas, validar token y establecer request.state.user
+    logger.info(f"[MIDDLEWARE] Ruta protegida, validando token...")
+    authorization = request.headers.get("Authorization", "")
+    logger.info(f"[MIDDLEWARE] Authorization header presente: {bool(authorization)}")
+    
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.replace("Bearer ", "")
+        logger.info(f"[MIDDLEWARE] Token extraído (primeros 10 chars): {token[:10]}...")
+        try:
+            # Validar token y obtener usuario
+            supabase = get_supabase_client()
+            auth_response = supabase.auth.get_user(token)
+            
+            if auth_response and auth_response.user:
+                # Crear objeto user simple para request.state
+                class SimpleUser:
+                    def __init__(self, user_id: str, email: str):
+                        self.id = user_id
+                        self.email = email
+                
+                request.state.user = SimpleUser(
+                    user_id=auth_response.user.id,
+                    email=auth_response.user.email or ""
+                )
+                logger.info(f"[MIDDLEWARE] ✅ Usuario autenticado: {auth_response.user.id}")
+            else:
+                logger.warning(f"[MIDDLEWARE] ❌ Token inválido - no se pudo obtener usuario")
+        except Exception as e:
+            logger.warning(f"[MIDDLEWARE] ❌ Error validando token: {str(e)}")
+            # No bloqueamos aquí, dejamos que los endpoints manejen la autenticación
+            pass
+    else:
+        logger.warning(f"[MIDDLEWARE] ❌ No hay token de autorización en la petición")
+    
     return await call_next(request)
 
 app.include_router(api_router, prefix=settings.API_V1_STR)

@@ -110,6 +110,9 @@ async def login(request: Request) -> Any:
 
             print("Login exitoso en Supabase.")
             access_token = response.session.access_token
+            print(f"Access token generado (primeros 10 chars): {access_token[:10]}...")
+            print(f"User ID: {response.user.id if response.user else 'N/A'}")
+            print(f"User email: {response.user.email if response.user else 'N/A'}")
 
             # Actualizar último acceso (Best effort, no bloquear si falla)
             try:
@@ -117,9 +120,11 @@ async def login(request: Request) -> Any:
                     user_id = response.user.id
                     now = datetime.now(timezone.utc).isoformat()
                     supabase.table("usuarios").update({"ultimo_acceso": now}).eq("id", user_id).execute()
+                    print(f"Último acceso actualizado para user_id: {user_id}")
             except Exception as e:
                 print(f"Advertencia (no crítica): Error actualizando ultimo_acceso: {str(e)}")
 
+            print("=== Login completado exitosamente, devolviendo token ===")
             return {
                 "access_token": access_token,
                 "token_type": "bearer"
@@ -259,69 +264,78 @@ async def read_users_me(request: Request) -> Any:
     Get current user using the user's own token (RLS Safe).
     """
     try:
+        print("=== /auth/me LLAMADO ===")
         # 1. Extraer y limpiar el token
         authorization = request.headers.get("Authorization", "")
+        print(f"Authorization header presente: {bool(authorization)}")
         if not authorization or not authorization.startswith("Bearer "):
-            raise HTTPException(
-                status_code=401, 
-                detail="Token de autenticación requerido"
-            )
+            print("[ERROR] Token no presente o formato incorrecto")
+            raise HTTPException(status_code=401, detail="Token requerido")
         
         token = authorization.replace("Bearer ", "")
+        print(f"Token extraído (primeros 10 chars): {token[:10]}...")
         
-        # 2. Obtener cliente Supabase CON EL TOKEN DEL USUARIO
-        # Esto es crucial: inyecta el token en los headers para PostgreSQL
+        # 2. Cliente Supabase con token de usuario
+        print("Creando cliente Supabase con token de usuario...")
         supabase = get_supabase_user_client(token)
         
-        # 3. Validar token y obtener ID de Auth
-        try:
-            auth_response = supabase.auth.get_user(token)
-            if not auth_response or not auth_response.user:
-                raise HTTPException(status_code=401, detail="Token inválido o expirado")
+        # 3. Validar token
+        print("Validando token con Supabase Auth...")
+        auth_response = supabase.auth.get_user(token)
+        if not auth_response or not auth_response.user:
+            print("[ERROR] Token inválido - auth_response vacío")
+            raise HTTPException(status_code=401, detail="Token inválido")
             
-            user = auth_response.user
-            user_id = user.id
-            
-        except Exception as auth_error:
-            print(f"Error verificando token en Supabase: {str(auth_error)}")
-            raise HTTPException(status_code=401, detail="Sesión inválida")
+        user = auth_response.user
+        user_id = user.id
+        print(f"Usuario autenticado: {user_id}, email: {user.email}")
         
-        # 4. Consultar perfil en tabla 'usuarios' (respetando RLS)
-        # Al usar el cliente de usuario, la política 'auth.uid() = id' funcionará
+        # 4. Consultar perfil
+        print(f"Consultando perfil en tabla usuarios para user_id: {user_id}")
         response = supabase.table("usuarios").select("*").eq("id", user_id).execute()
+        print(f"Respuesta de tabla usuarios: {len(response.data) if response.data else 0} registros")
         
         if not response.data:
-            # Si no existe perfil público, devolvemos la info básica del auth (Fallback)
-            print(f"Aviso: Usuario {user_id} no tiene perfil en tabla pública 'usuarios'")
-            return {
+            print("[FALLBACK] Usuario no encontrado en tabla, devolviendo datos básicos")
+            # FALLBACK: Si no existe en la tabla usuarios, devolvemos esto.
+            fallback_data = {
                 "id": user_id,
                 "email": user.email,
                 "nombre": "",
                 "apellido": "",
                 "rol": "usuario",
-                "activo": True
+                "activo": True,
+                "permisos": []
             }
+            print(f"Datos fallback: {fallback_data}")
+            return fallback_data
         
         user_data = response.data[0]
+        print(f"Datos de usuario encontrados: {user_data.keys()}")
         
-        # 5. Mezclar datos de Auth con datos de Perfil
+        # Asegurar que permisos sea una lista si es None
+        if user_data.get("permisos") is None:
+            print("[FIX] Agregando permisos vacíos")
+            user_data["permisos"] = []
+
+        # 5. Mezclar datos
         user_data.update({
             "email": user.email,
             "email_confirmed_at": getattr(user, "email_confirmed_at", None),
             "last_sign_in_at": getattr(user, "last_sign_in_at", None),
         })
         
+        print(f"[SUCCESS] Devolviendo datos de usuario completos")
         return user_data
         
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error crítico en /auth/me: {str(e)}")
-        # Importante: No devolver 500 si es solo un error de permisos, mejor 401
-        raise HTTPException(
-            status_code=401, 
-            detail="No se pudo recuperar la sesión del usuario"
-        )
+        print(f"[ERROR CRÍTICO] Error inesperado en /auth/me: {str(e)}")
+        print(f"Tipo de error: {type(e).__name__}")
+        import traceback
+        print(f"Traceback completo:\n{traceback.format_exc()}")
+        raise HTTPException(status_code=401, detail=f"Error de sesión: {str(e)}")
 
 
 @router.put("/profile", response_model=dict)

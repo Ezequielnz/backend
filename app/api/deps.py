@@ -1,4 +1,5 @@
 from typing import Dict, Any, Optional, TypedDict
+import logging
 from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordBearer, HTTPBearer
 
@@ -6,8 +7,11 @@ from fastapi.security import OAuth2PasswordBearer, HTTPBearer
 from app.db.session import get_db 
 from app.db.supabase_client import get_supabase_client, get_supabase_user_client
 from app.types.auth import User
+from app.core.config import settings
 
 print("--- DEPS.PY RECREADO DESDE CERO ---")
+
+logger = logging.getLogger(__name__)
 
 # Definición de tipos para evitar errores en frontend
 class UserData(TypedDict):
@@ -111,42 +115,139 @@ async def get_current_user_with_access_check(request: Request) -> UserData:
 
 security = HTTPBearer()
 
+def _resolve_user_id(user: Any) -> str:
+    try:
+        if isinstance(user, dict):
+            return str(user.get("id", ""))
+        return str(getattr(user, "id", ""))
+    except Exception:
+        return ""
+
 async def get_current_user_from_request(request: Request) -> User:
     user = getattr(request.state, "user", None)
     if not user:
         raise HTTPException(status_code=401, detail="No autenticado")
     return user
 
-async def verify_business_access(business_id: str, user: User) -> dict:
-    # Usamos cliente base asumiendo que ya pasamos el filtro de seguridad previo
-    supabase = get_supabase_client()
-    access = supabase.table("usuarios_negocios").select("id, rol, estado").eq("usuario_id", user.id).eq("negocio_id", business_id).eq("estado", "aceptado").execute()
+async def verify_business_access(business_id: str, user: User, authorization: Optional[str] = None) -> dict:
+    user_id = _resolve_user_id(user)
+    token = authorization or getattr(user, "token", None)
+    logger.debug(
+        "[access] Checking membership user=%s business=%s (token_supplied=%s service_role_configured=%s)",
+        user_id,
+        business_id,
+        bool(token),
+        bool(settings.SUPABASE_SERVICE_ROLE_KEY),
+    )
+    supabase = get_supabase_user_client(token) if token else get_supabase_client()
+    try:
+        access = (
+            supabase.table("usuarios_negocios")
+            .select("id, rol, estado")
+            .eq("usuario_id", user_id)
+            .eq("negocio_id", business_id)
+            .eq("estado", "aceptado")
+            .execute()
+        )
+    except Exception as exc:
+        logger.exception(
+            "[access] Supabase error while checking membership user=%s business=%s: %s",
+            user_id,
+            business_id,
+            exc,
+        )
+        raise
+
+    row_count = len(access.data or [])
+    logger.debug(
+        "[access] Membership lookup user=%s business=%s returned %d rows",
+        user_id,
+        business_id,
+        row_count,
+    )
+
     if not access.data:
+        logger.warning(
+            "[access] Membership missing for user=%s business=%s (RLS active=%s)",
+            user_id,
+            business_id,
+            not bool(settings.SUPABASE_SERVICE_ROLE_KEY),
+        )
         raise HTTPException(status_code=403, detail="Sin acceso al negocio")
     return access.data[0]
 
-async def verify_module_permission(business_id: str, user: User, module: str, action: str = "ver") -> dict:
-    access = await verify_business_access(business_id, user)
-    if access["rol"] == "admin": return access
+async def verify_module_permission(
+    business_id: str,
+    user: User,
+    module: str,
+    action: str = "ver",
+    authorization: Optional[str] = None,
+) -> dict:
+    access = await verify_business_access(business_id, user, authorization)
+    if access["rol"] == "admin":
+        logger.debug(
+            "[perm] Granting admin override user=%s business=%s module=%s action=%s",
+            _resolve_user_id(user),
+            business_id,
+            module,
+            action,
+        )
+        return access
     
-    supabase = get_supabase_client()
-    perms = supabase.table("permisos_usuario_negocio").select("*").eq("usuario_negocio_id", access["id"]).execute()
+    token = authorization or getattr(user, "token", None)
+    supabase = get_supabase_user_client(token) if token else get_supabase_client()
+    try:
+        perms = (
+            supabase.table("permisos_usuario_negocio")
+            .select("*")
+            .eq("usuario_negocio_id", access["id"])
+            .execute()
+        )
+    except Exception as exc:
+        logger.exception(
+            "[perm] Supabase error fetching permissions usuario_negocio_id=%s: %s",
+            access["id"],
+            exc,
+        )
+        raise
     
-    if not perms.data: raise HTTPException(status_code=403, detail="Permisos no configurados")
+    if not perms.data:
+        logger.warning(
+            "[perm] No permission row for usuario_negocio_id=%s user=%s business=%s",
+            access["id"],
+            _resolve_user_id(user),
+            business_id,
+        )
+        raise HTTPException(status_code=403, detail="Permisos no configurados")
     
     p = perms.data[0]
     if p.get("acceso_total") or p.get(f"puede_{action}_{module}", False):
+        logger.debug(
+            "[perm] Permission granted user=%s business=%s module=%s action=%s",
+            _resolve_user_id(user),
+            business_id,
+            module,
+            action,
+        )
         return access
         
+    logger.warning(
+        "[perm] Permission denied user=%s business=%s module=%s action=%s acceso_total=%s",
+        _resolve_user_id(user),
+        business_id,
+        module,
+        action,
+        p.get("acceso_total"),
+    )
     raise HTTPException(status_code=403, detail=f"Sin permiso para {action} {module}")
 
 # Wrappers para cada módulo
-async def verify_productos_access(business_id: str, user: User, action: str = "ver"): return await verify_module_permission(business_id, user, "productos", action)
-async def verify_clientes_access(business_id: str, user: User, action: str = "ver"): return await verify_module_permission(business_id, user, "clientes", action)
-async def verify_categorias_access(business_id: str, user: User, action: str = "ver"): return await verify_module_permission(business_id, user, "categorias", action)
-async def verify_ventas_access(business_id: str, user: User, action: str = "ver"): return await verify_module_permission(business_id, user, "ventas", action)
-async def verify_stock_access(business_id: str, user: User, action: str = "ver"): return await verify_module_permission(business_id, user, "stock", action)
-async def verify_facturacion_access(business_id: str, user: User, action: str = "ver"): return await verify_module_permission(business_id, user, "facturacion", action)
-async def verify_tareas_access(business_id: str, user: User, action: str = "ver"): return await verify_module_permission(business_id, user, "tareas", action)
-async def verify_basic_business_access(business_id: str, user: User) -> dict: return await verify_business_access(business_id, user)
+async def verify_productos_access(business_id: str, user: User, action: str = "ver", authorization: Optional[str] = None): return await verify_module_permission(business_id, user, "productos", action, authorization)
+async def verify_clientes_access(business_id: str, user: User, action: str = "ver", authorization: Optional[str] = None): return await verify_module_permission(business_id, user, "clientes", action, authorization)
+async def verify_categorias_access(business_id: str, user: User, action: str = "ver", authorization: Optional[str] = None): return await verify_module_permission(business_id, user, "categorias", action, authorization)
+async def verify_ventas_access(business_id: str, user: User, action: str = "ver", authorization: Optional[str] = None): return await verify_module_permission(business_id, user, "ventas", action, authorization)
+async def verify_stock_access(business_id: str, user: User, action: str = "ver", authorization: Optional[str] = None): return await verify_module_permission(business_id, user, "stock", action, authorization)
+async def verify_facturacion_access(business_id: str, user: User, action: str = "ver", authorization: Optional[str] = None): return await verify_module_permission(business_id, user, "facturacion", action, authorization)
+async def verify_tareas_access(business_id: str, user: User, action: str = "ver", authorization: Optional[str] = None): return await verify_module_permission(business_id, user, "tareas", action, authorization)
+async def verify_basic_business_access(business_id: str, user: User, authorization: Optional[str] = None) -> dict: return await verify_business_access(business_id, user, authorization)
 async def get_current_tenant_id(current_user: UserData = Depends(get_current_user)) -> str: return "default_tenant"
