@@ -92,7 +92,7 @@ async def login(request: Request) -> Any:
         print(f"Login solicitado para: {username}")
 
         # 3. Autenticación con Supabase
-        supabase = get_supabase_client()
+        supabase = get_supabase_anon_client()
         
         try:
             # sign_in_with_password es el método correcto en supabase-py v2
@@ -248,13 +248,18 @@ async def signup(user_data: UserSignUp) -> Any:
         )
 
 
+# Asegúrate de importar get_supabase_service_client al inicio del archivo
+from app.db.supabase_client import get_supabase_client, get_supabase_anon_client, get_supabase_user_client, get_supabase_service_client 
+
+# ...
+
 @router.get("/me", response_model=dict)
 async def read_users_me(request: Request) -> Any:
     """
-    Get current user
+    Get current user using the user's own token (RLS Safe).
     """
     try:
-        # Extraer token del header Authorization
+        # 1. Extraer y limpiar el token
         authorization = request.headers.get("Authorization", "")
         if not authorization or not authorization.startswith("Bearer "):
             raise HTTPException(
@@ -264,44 +269,46 @@ async def read_users_me(request: Request) -> Any:
         
         token = authorization.replace("Bearer ", "")
         
-        # Obtener cliente Supabase con el token del usuario
+        # 2. Obtener cliente Supabase CON EL TOKEN DEL USUARIO
+        # Esto es crucial: inyecta el token en los headers para PostgreSQL
         supabase = get_supabase_user_client(token)
         
-        # Obtener usuario actual de Supabase Auth
+        # 3. Validar token y obtener ID de Auth
         try:
-            auth_user = supabase.auth.get_user(token)
-            if not auth_user or not auth_user.user:
-                raise HTTPException(
-                    status_code=401, 
-                    detail="Token inválido o expirado"
-                )
+            auth_response = supabase.auth.get_user(token)
+            if not auth_response or not auth_response.user:
+                raise HTTPException(status_code=401, detail="Token inválido o expirado")
             
-            user_id = auth_user.user.id
-            user_email = auth_user.user.email
+            user = auth_response.user
+            user_id = user.id
             
         except Exception as auth_error:
-            print(f"Error verificando token: {str(auth_error)}")
-            raise HTTPException(
-                status_code=401, 
-                detail="Token inválido o expirado"
-            )
+            print(f"Error verificando token en Supabase: {str(auth_error)}")
+            raise HTTPException(status_code=401, detail="Sesión inválida")
         
-        # Obtener datos adicionales de la tabla usuarios
+        # 4. Consultar perfil en tabla 'usuarios' (respetando RLS)
+        # Al usar el cliente de usuario, la política 'auth.uid() = id' funcionará
         response = supabase.table("usuarios").select("*").eq("id", user_id).execute()
         
         if not response.data:
-            raise HTTPException(
-                status_code=404, 
-                detail="Usuario no encontrado"
-            )
+            # Si no existe perfil público, devolvemos la info básica del auth (Fallback)
+            print(f"Aviso: Usuario {user_id} no tiene perfil en tabla pública 'usuarios'")
+            return {
+                "id": user_id,
+                "email": user.email,
+                "nombre": "",
+                "apellido": "",
+                "rol": "usuario",
+                "activo": True
+            }
         
         user_data = response.data[0]
         
-        # Agregar datos de auth
+        # 5. Mezclar datos de Auth con datos de Perfil
         user_data.update({
-            "email": user_email,
-            "email_confirmed_at": getattr(auth_user.user, "email_confirmed_at", None),
-            "last_sign_in_at": getattr(auth_user.user, "last_sign_in_at", None),
+            "email": user.email,
+            "email_confirmed_at": getattr(user, "email_confirmed_at", None),
+            "last_sign_in_at": getattr(user, "last_sign_in_at", None),
         })
         
         return user_data
@@ -309,12 +316,11 @@ async def read_users_me(request: Request) -> Any:
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error en /auth/me: {str(e)}")
-        import traceback
-        print(f"Traceback: {traceback.format_exc()}")
+        print(f"Error crítico en /auth/me: {str(e)}")
+        # Importante: No devolver 500 si es solo un error de permisos, mejor 401
         raise HTTPException(
-            status_code=500, 
-            detail="Error interno del servidor"
+            status_code=401, 
+            detail="No se pudo recuperar la sesión del usuario"
         )
 
 
