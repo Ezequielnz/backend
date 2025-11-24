@@ -200,6 +200,36 @@ async def signup(user_data: UserSignUp) -> Any:
                 "data": {
                     "nombre": user_data.nombre,
                     "apellido": user_data.apellido
+                }
+            }
+        
+        auth_response = supabase.auth.sign_up(cast(Any, signup_options))
+
+        if not auth_response.user or not auth_response.user.id:
+            raise Exception("No se obtuvo ID de usuario al registrar en Supabase")
+
+        user_id = auth_response.user.id
+        print(f"Usuario creado Auth ID: {user_id}")
+
+        # La creación del perfil en 'usuarios' ahora se maneja vía Trigger en la BD
+        # (ver migration 07_create_user_trigger.sql)
+
+        if settings.DEBUG:
+            message = "Usuario registrado. En desarrollo revisa logs o tabla para confirmar."
+            requires_confirmation = False
+        else:
+            message = "Usuario registrado correctamente. Por favor revisa tu email."
+            requires_confirmation = True
+
+        return SignUpResponse(
+            message=message,
+            email=user_data.email,
+            requires_confirmation=requires_confirmation
+        )
+
+    except Exception as e:
+        print(f"Registration error: {str(e)}")
+        error_message = str(e)
         if "User already registered" in error_message or "already been registered" in error_message:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
