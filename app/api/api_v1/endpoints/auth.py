@@ -25,7 +25,7 @@ router = APIRouter()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
 # JWT Secret para firma de tokens
-JWT_SECRET = "micropymes_secret_key"
+JWT_SECRET = settings.JWT_SECRET_KEY
 
 def generate_token(user_id: str, email: str) -> str:
     """Generar un token JWT para el usuario"""
@@ -110,7 +110,7 @@ async def login(request: Request) -> Any:
 
             print("Login exitoso en Supabase.")
             access_token = response.session.access_token
-            print(f"Access token generado (primeros 10 chars): {access_token[:10]}...")
+            # print(f"Access token generado (primeros 10 chars): {access_token[:10]}...") # Security: Don't log tokens
             print(f"User ID: {response.user.id if response.user else 'N/A'}")
             print(f"User email: {response.user.email if response.user else 'N/A'}")
 
@@ -261,7 +261,7 @@ async def read_users_me(request: Request) -> Any:
             raise HTTPException(status_code=401, detail="Token requerido")
         
         token = authorization.replace("Bearer ", "")
-        print(f"Token extraído (primeros 10 chars): {token[:10]}...")
+        # print(f"Token extraído (primeros 10 chars): {token[:10]}...") # Security: Don't log tokens
         
         # 2. Cliente Supabase con token de usuario
         print("Creando cliente Supabase con token de usuario...")

@@ -125,7 +125,7 @@ async def auth_middleware(request: Request, call_next):
     
     if authorization and authorization.startswith("Bearer "):
         token = authorization.replace("Bearer ", "")
-        logger.info(f"[MIDDLEWARE] Token extraído (primeros 10 chars): {token[:10]}...")
+        # logger.info(f"[MIDDLEWARE] Token extraído (primeros 10 chars): {token[:10]}...") # Security: Don't log tokens
         try:
             # Validar token y obtener usuario
             supabase = get_supabase_client()
