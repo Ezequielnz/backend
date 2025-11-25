@@ -182,27 +182,6 @@ async def signup(user_data: UserSignUp) -> Any:
     """
     try:
         print(f"Datos de registro recibidos: {user_data.dict()}")
-
-        # Usar cliente anónimo para el registro
-        supabase = get_supabase_anon_client()
-
-        print("Registrando usuario en Supabase Auth...")
-        
-        # Solución de tipos: Definir explícitamente como Dict[str, Any]
-        signup_options: Dict[str, Any] = {
-            "email": user_data.email,
-            "password": user_data.password,
-            "options": {
-                "data": {
-                    "nombre": user_data.nombre,
-                    "apellido": user_data.apellido
-                }
-            }
-        }
-        
-        # En modo DEBUG, intentamos deshabilitar confirmación si es posible
-        if settings.DEBUG:
-            print("🔧 MODO DEBUG: Solicitando registro")
         
         auth_response = supabase.auth.sign_up(cast(Any, signup_options))
 
