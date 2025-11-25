@@ -161,6 +161,7 @@ async def login(request: Request) -> Any:
             detail="Error interno del servidor al intentar ingresar."
         )
 
+
 @router.options("/signup")
 async def options_signup():
     """Manejar solicitudes OPTIONS para CORS"""
@@ -191,17 +192,17 @@ async def signup(user_data: UserSignUp) -> Any:
         signup_options: Dict[str, Any] = {
             "email": user_data.email,
             "password": user_data.password,
-        }
-        
-        # En modo DEBUG, intentamos deshabilitar confirmación si es posible
-        if settings.DEBUG:
-            print("🔧 MODO DEBUG: Solicitando registro")
-            signup_options["options"] = {
+            "options": {
                 "data": {
                     "nombre": user_data.nombre,
                     "apellido": user_data.apellido
                 }
             }
+        }
+        
+        # En modo DEBUG, intentamos deshabilitar confirmación si es posible
+        if settings.DEBUG:
+            print("🔧 MODO DEBUG: Solicitando registro")
         
         auth_response = supabase.auth.sign_up(cast(Any, signup_options))
 
@@ -240,11 +241,6 @@ async def signup(user_data: UserSignUp) -> Any:
             detail=f"Error al crear usuario: {str(e)}",
         )
 
-
-# Asegúrate de importar get_supabase_service_client al inicio del archivo
-from app.db.supabase_client import get_supabase_client, get_supabase_anon_client, get_supabase_user_client, get_supabase_service_client 
-
-# ...
 
 @router.get("/me", response_model=dict)
 async def read_users_me(request: Request) -> Any:
