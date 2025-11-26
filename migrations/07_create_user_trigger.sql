@@ -13,13 +13,12 @@ BEGIN
   user_rol := COALESCE(new.raw_user_meta_data->>'rol', 'usuario');
 
   -- 1. Insert into public.usuarios
-  INSERT INTO public.usuarios (id, email, nombre, apellido, rol, creado_en, ultimo_acceso)
+  INSERT INTO public.usuarios (id, email, nombre, apellido, creado_en, ultimo_acceso)
   VALUES (
     new.id,
     new.email,
     user_nombre,
     user_apellido,
-    user_rol,
     now(),
     now()
   );
