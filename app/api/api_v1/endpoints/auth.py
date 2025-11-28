@@ -186,23 +186,6 @@ async def signup(user_data: UserSignUp) -> Any:
         # 1. Inicializar cliente Supabase (Anon key es suficiente para registro)
         supabase = get_supabase_anon_client()
 
-        # 2. Preparar datos de registro
-        # En supabase-py v2, sign_up toma un diccionario con email, password y options (para metadata)
-        credentials = {
-            "email": user_data.email,
-            "password": user_data.password,
-            "options": {
-                "data": {
-                    "nombre": user_data.nombre,
-                    "apellido": user_data.apellido,
-                    # "rol": user_data.rol # El rol se maneja mejor via triggers o admin functions si es sensible
-                }
-            }
-        }
-
-        # 3. Registrar usuario en Supabase Auth
-        auth_response = supabase.auth.sign_up(credentials)
-
         if not auth_response.user or not auth_response.user.id:
             raise Exception("No se obtuvo ID de usuario al registrar en Supabase")
 
