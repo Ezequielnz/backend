@@ -461,26 +461,36 @@ async def confirm_redirect():
 @router.get("/check-confirmation/{email}")
 async def check_email_confirmation(email: str) -> Any:
     """
-    Verificar estado (simulado/inferido)
+    Verificar estado real de confirmación consultando auth.users via Admin API.
     """
     try:
+        # 1. Obtener ID del usuario desde tabla pública
         supabase = get_supabase_client()
-        try:
-            supabase.auth.sign_in_with_password({
-                "email": email,
-                "password": "dummy_password_check_123"
-            })
-            return {"email": email, "is_confirmed": True}
-        except Exception as e:
-            msg = str(e)
-            if "Email not confirmed" in msg:
-                return {"email": email, "is_confirmed": False, "message": "Pendiente de confirmación"}
-            else:
-                return {"email": email, "is_confirmed": True, "message": "Confirmado"}
+        user_query = supabase.table("usuarios").select("id").eq("email", email).execute()
+        
+        if not user_query.data:
+            # Usuario no existe en tabla pública
+            return {"email": email, "is_confirmed": False, "message": "Usuario no encontrado"}
+            
+        user_id = user_query.data[0]["id"]
+        
+        # 2. Consultar estado en auth.users usando Admin API
+        auth_user = await supabase_admin.get_auth_user(user_id)
+        
+        if not auth_user:
+             return {"email": email, "is_confirmed": False, "message": "Error al consultar estado"}
+             
+        email_confirmed_at = auth_user.get("email_confirmed_at")
+        
+        if email_confirmed_at:
+            return {"email": email, "is_confirmed": True, "message": "Confirmado"}
+        else:
+            return {"email": email, "is_confirmed": False, "message": "Pendiente de confirmación"}
 
     except Exception as e:
         print(f"Check confirmation error: {e}")
-        raise HTTPException(status_code=500, detail="Error verificando estado")
+        # No devolver 500 para no romper el frontend, sino estado desconocido/falso
+        return {"email": email, "is_confirmed": False, "message": "Error verificando estado"}
 
 
 @router.delete("/users/{user_id}")
