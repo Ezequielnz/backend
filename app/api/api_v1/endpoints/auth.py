@@ -195,7 +195,7 @@ async def signup(user_data: UserSignUp) -> Any:
                     "nombre": user_data.nombre,
                     "apellido": user_data.apellido,
                 },
-                "emailRedirectTo": f"{settings.FRONTEND_URL}/login"
+                "emailRedirectTo": settings.FRONTEND_CONFIRMATION_URL
             }
         }
 
