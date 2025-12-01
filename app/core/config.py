@@ -22,7 +22,7 @@ class Settings(BaseSettings):
         "http://localhost:8080",  # Frontend alternativo (por si se usa otro puerto)
     ]
     FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:5173")
-    FRONTEND_CONFIRMATION_PATH: str = os.getenv("FRONTEND_CONFIRMATION_PATH", "/confirm-email")
+    FRONTEND_CONFIRMATION_PATH: str = os.getenv("FRONTEND_CONFIRMATION_PATH", "/login")
 
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")
     @classmethod
