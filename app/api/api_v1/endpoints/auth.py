@@ -384,9 +384,6 @@ async def change_password(password_data: dict, request: Request) -> Any:
         
     except HTTPException:
         raise
-    except Exception as e:
-        print(f"Error cambio pass: {str(e)}")
-        raise HTTPException(status_code=500, detail="Error interno del servidor")
 
 
 @router.post("/resend-confirmation")
@@ -451,10 +448,64 @@ async def resend_confirmation_email(email_data: Dict[str, str] = Body(...)) -> A
             detail="Error interno del servidor"
         )
 
+
 @router.get("/confirm")
 async def confirm_redirect():
     """Redirige confirmaciones al frontend"""
     return RedirectResponse(url=settings.FRONTEND_CONFIRMATION_URL)
+
+
+@router.post("/verify-email")
+async def verify_email(data: Dict[str, str] = Body(...)) -> Any:
+    """
+    Verifica el token_hash del correo (PKCE flow).
+    """
+    try:
+        token_hash = data.get("token_hash")
+        type_ = data.get("type", "email")
+
+        if not token_hash:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Token hash es requerido"
+            )
+
+        supabase = get_supabase_anon_client()
+        
+        # Verificar OTP con Supabase
+        response = supabase.auth.verify_otp({
+            "token_hash": token_hash,
+            "type": type_
+        })
+
+        if not response.session:
+             raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Error al verificar el token o sesión no creada."
+            )
+
+        return {
+            "message": "Email verificado correctamente",
+            "access_token": response.session.access_token,
+            "refresh_token": response.session.refresh_token,
+            "user": {
+                "id": response.user.id,
+                "email": response.user.email
+            }
+        }
+
+    except Exception as e:
+        print(f"Error verifying email: {str(e)}")
+        error_msg = str(e).lower()
+        if "expired" in error_msg:
+             raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="El enlace ha expirado."
+            )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Error al verificar el email."
+        )
 
 
 @router.get("/check-confirmation/{email}")
