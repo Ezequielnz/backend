@@ -130,7 +130,11 @@ class Settings(BaseSettings):
     def FRONTEND_CONFIRMATION_URL(self) -> str:
         """Return absolute URL for Supabase email confirmation redirect."""
         base = self.FRONTEND_URL.rstrip("/") or "http://localhost:5173"
-        path = self.FRONTEND_CONFIRMATION_PATH or "/confirm-email"
+        path = self.FRONTEND_CONFIRMATION_PATH
+        
+        if not path:
+            return base
+            
         if not path.startswith("/"):
             path = f"/{path}"
         return f"{base}{path}"
