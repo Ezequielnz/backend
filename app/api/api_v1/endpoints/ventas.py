@@ -14,6 +14,7 @@ from app.db.supabase_client import get_supabase_user_client
 from app.db.scoped_client import get_scoped_supabase_user_client
 from app.dependencies import PermissionDependency
 from app.api.context import BusinessBranchContextDep
+from app.core.permissions import check_subscription_access
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +137,8 @@ async def record_sale_branch(
     branch_id: str,
     venta_data: VentaRequest,
     request: Request,
-    authorization: str = Header(..., description="Bearer token")
+    authorization: str = Header(..., description="Bearer token"),
+    subscription_check: bool = Depends(check_subscription_access)
 ):
     """
     Registra una nueva venta de forma branch-scoped (requiere business_id y branch_id).
@@ -295,7 +297,9 @@ async def record_sale_branch(
 @router.post("/record-sale", response_model=VentaResponseSimple)
 async def record_sale(
     venta_data: VentaRequest,
-    authorization: str = Header(..., description="Bearer token")
+    request: Request,
+    authorization: str = Header(..., description="Bearer token"),
+    subscription_check: bool = Depends(check_subscription_access)
 ):
     """
     Registra una nueva venta y actualiza el stock de productos.

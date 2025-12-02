@@ -77,6 +77,9 @@ class Usuario(SupabaseModel):
     permisos: Optional[List[str]] = Field(default_factory=list)
     creado_en: Optional[datetime] = None
     ultimo_acceso: Optional[datetime] = None
+    subscription_status: Optional[str] = "trial"
+    trial_end: Optional[datetime] = None
+    is_exempt: bool = False
     
     @classmethod
     def table_name(cls) -> str:

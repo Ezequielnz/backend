@@ -4,7 +4,7 @@ import json
 import time
 import traceback
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, HTTPException, status, Request, Body, Depends, UploadFile
 from app.db.supabase_client import get_supabase_client, get_supabase_anon_client, get_supabase_user_client
@@ -210,6 +210,26 @@ async def signup(user_data: UserSignUp) -> Any:
 
         # La creación del perfil en 'usuarios' ahora se maneja vía Trigger en la BD
         # (ver migration 07_create_user_trigger.sql)
+
+        # 4. Configurar periodo de prueba (30 días)
+        try:
+            trial_end = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+            
+            # Verificar si es un usuario exento
+            is_exempt = user_data.email in settings.EXEMPT_EMAILS
+            
+            update_data = {
+                "subscription_status": "trial",
+                "trial_end": trial_end,
+                "is_exempt": is_exempt
+            }
+            
+            print(f"Configurando suscripción para {user_data.email}: {update_data}")
+            supabase.table("usuarios").update(update_data).eq("id", user_id).execute()
+            
+        except Exception as sub_error:
+            print(f"Error configurando suscripción inicial: {sub_error}")
+            # No bloqueamos el registro por esto, pero logueamos el error
 
         if settings.DEBUG:
             message = "Usuario registrado. En desarrollo revisa logs o tabla para confirmar."

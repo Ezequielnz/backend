@@ -14,6 +14,13 @@ class Settings(BaseSettings):
     # Environment configuration
     DEBUG: bool = os.getenv("DEBUG", "false").lower() == "true"
     
+    # Subscription Settings
+    EXEMPT_EMAILS: list[str] = [
+        "admin1@example.com", 
+        "admin2@example.com", 
+        "admin3@example.com"
+    ]
+    
     # CORS configuration
     # Añadir http://localhost:5173 para aceptar peticiones del frontend de Vite
     BACKEND_CORS_ORIGINS: list[str] = [

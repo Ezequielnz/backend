@@ -7,6 +7,7 @@ from app.db.supabase_client import get_supabase_anon_client
 from app.db.scoped_client import get_scoped_supabase_user_client
 from app.schemas.producto import ProductoCreate, ProductoUpdate, Producto
 from app.dependencies import PermissionDependency
+from app.core.permissions import check_subscription_access
 import logging
 import datetime
 
@@ -112,6 +113,7 @@ async def create_product(
     business_id: str,
     product_in: ProductoCreate,
     request: Request,
+    subscription_check: bool = Depends(check_subscription_access),
 ) -> Any:
     """
     Create a new product for a specific business, optionally within a category (requires puede_editar_productos).
@@ -198,6 +200,7 @@ async def update_product(
     product_id: str,
     product_update: ProductoUpdate,
     request: Request,
+    subscription_check: bool = Depends(check_subscription_access),
 ) -> Any:
     """
     Update a product by ID for a business (requires puede_editar_productos).
@@ -258,6 +261,7 @@ async def delete_product(
     business_id: str,
     product_id: str,
     request: Request,
+    subscription_check: bool = Depends(check_subscription_access),
 ):
     """
     Delete a product by ID for a business (requires puede_editar_productos).
