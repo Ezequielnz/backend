@@ -15,6 +15,7 @@ class Producto(Base):
     categoria_id = Column(String, nullable=True)  # UUID as string
     negocio_id = Column(String, nullable=True)  # UUID as string
     codigo = Column(String, unique=True, index=True, nullable=True)
+    unidades = Column(String, nullable=True)
     activo = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.current_timestamp())
     updated_at = Column(DateTime(timezone=True), onupdate=func.current_timestamp())

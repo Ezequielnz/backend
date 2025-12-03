@@ -12,6 +12,7 @@ class ProductoBase(BaseModel):
     stock_minimo: Optional[int] = Field(0, ge=0)
     categoria_id: Optional[str] = Field(None, description="UUID de la categoría")
     codigo: Optional[str] = Field(None, max_length=50)
+    unidades: Optional[str] = Field(None, max_length=50)
 
 class ProductoCreate(BaseModel):
     """Schema for creating a new product."""
@@ -23,6 +24,7 @@ class ProductoCreate(BaseModel):
     stock_minimo: Optional[int] = Field(0, ge=0)
     categoria_id: Optional[str] = Field(None, description="UUID de la categoría")
     codigo: Optional[str] = Field(None, max_length=50)
+    unidades: Optional[str] = Field(None, max_length=50)
 
 class ProductoUpdate(BaseModel):
     """Schema for updating a product."""
@@ -34,6 +36,7 @@ class ProductoUpdate(BaseModel):
     stock_minimo: Optional[int] = Field(None, ge=0)
     categoria_id: Optional[str] = Field(None, description="UUID de la categoría")
     codigo: Optional[str] = Field(None, max_length=50)
+    unidades: Optional[str] = Field(None, max_length=50)
     activo: Optional[bool] = None
 
 class Producto(ProductoBase):
@@ -62,6 +65,7 @@ class ProductoConfirmado(BaseModel):
     descripcion: Optional[str] = None
     precio: float = Field(..., gt=0)
     stock: int = Field(default=0, ge=0)
+    unidades: Optional[str] = Field(None, max_length=50)
 
 class ImportacionMasiva(BaseModel):
     """Schema for bulk import request."""

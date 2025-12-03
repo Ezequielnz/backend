@@ -135,6 +135,19 @@ async def create_product(
                     detail="Categoría especificada no encontrada o no pertenece a este negocio.",
                 )
 
+        # Handle empty code as None to allow multiple products without code
+        if product_in.codigo == "":
+            product_in.codigo = None
+            
+        # Check for duplicate code if code is provided
+        if product_in.codigo:
+            existing_code = supabase.table("productos").select("id").eq("negocio_id", business_id).eq("codigo", product_in.codigo).execute()
+            if existing_code.data:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"El código '{product_in.codigo}' ya está en uso por otro producto."
+                )
+
         product_data = product_in.model_dump()
         product_data["negocio_id"] = business_id
 
@@ -223,6 +236,25 @@ async def update_product(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="Nueva categoría especificada no encontrada o no pertenece a este negocio.",
                  )
+
+        # Handle empty code as None
+        if "codigo" in update_data and update_data["codigo"] == "":
+            update_data["codigo"] = None
+
+        # Check for duplicate code if code is being updated and is not None
+        if "codigo" in update_data and update_data["codigo"] is not None:
+            # Check if another product has this code
+            existing_code = supabase.table("productos").select("id")\
+                .eq("negocio_id", business_id)\
+                .eq("codigo", update_data["codigo"])\
+                .neq("id", product_id)\
+                .execute()
+            
+            if existing_code.data:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"El código '{update_data['codigo']}' ya está en uso por otro producto."
+                )
 
         # Update the product, ensuring it belongs to the correct business
         response = supabase.table("productos").update(update_data).eq("id", product_id).eq("negocio_id", business_id).execute()
@@ -431,7 +463,9 @@ async def bulk_upsert_products(
                 # The frontend should ensure 'nombre' is populated (maybe from description).
                 
                 product_data['descripcion'] = item.descripcion
-                product_data['codigo'] = item.codigo
+                # Handle empty code as None
+                product_data['codigo'] = item.codigo if item.codigo else None
+                product_data['unidades'] = item.unidades
                 product_data['stock_actual'] = item.stock
                 product_data['activo'] = True
                 
