@@ -114,6 +114,7 @@ class Producto(SupabaseModel):
     precio_venta: float
     stock_actual: int
     stock_minimo: Optional[int] = None
+    unidades: Optional[str] = None
     categoria_id: Optional[str] = None
     activo: bool = True
     creado_en: Optional[datetime] = None

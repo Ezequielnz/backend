@@ -63,7 +63,7 @@ class ProductoConfirmado(BaseModel):
     codigo: Optional[str] = Field(None)
     nombre: str = Field(..., min_length=1)
     descripcion: Optional[str] = None
-    precio: float = Field(..., gt=0)
+    precio: float = Field(..., ge=0)
     stock: int = Field(default=0, ge=0)
     unidades: Optional[str] = Field(None, max_length=50)
 

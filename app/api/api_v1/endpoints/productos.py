@@ -139,14 +139,7 @@ async def create_product(
         if product_in.codigo == "":
             product_in.codigo = None
             
-        # Check for duplicate code if code is provided
-        if product_in.codigo:
-            existing_code = supabase.table("productos").select("id").eq("negocio_id", business_id).eq("codigo", product_in.codigo).execute()
-            if existing_code.data:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"El código '{product_in.codigo}' ya está en uso por otro producto."
-                )
+        # Duplicate code check removed as per user request (multiple products can share code)
 
         product_data = product_in.model_dump()
         product_data["negocio_id"] = business_id
@@ -241,20 +234,7 @@ async def update_product(
         if "codigo" in update_data and update_data["codigo"] == "":
             update_data["codigo"] = None
 
-        # Check for duplicate code if code is being updated and is not None
-        if "codigo" in update_data and update_data["codigo"] is not None:
-            # Check if another product has this code
-            existing_code = supabase.table("productos").select("id")\
-                .eq("negocio_id", business_id)\
-                .eq("codigo", update_data["codigo"])\
-                .neq("id", product_id)\
-                .execute()
-            
-            if existing_code.data:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"El código '{update_data['codigo']}' ya está en uso por otro producto."
-                )
+        # Duplicate code check removed as per user request
 
         # Update the product, ensuring it belongs to the correct business
         response = supabase.table("productos").update(update_data).eq("id", product_id).eq("negocio_id", business_id).execute()
