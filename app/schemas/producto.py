@@ -45,4 +45,25 @@ class Producto(ProductoBase):
     actualizado_en: datetime
 
     class Config:
-        from_attributes = True 
+        from_attributes = True
+
+class ProductoImportado(BaseModel):
+    """Schema for a product detected in the PDF."""
+    codigo: Optional[str] = Field(None, description="Código detectado en el PDF")
+    descripcion: str = Field(..., description="Descripción extraída")
+    precio_detectado: float = Field(..., description="Valor numérico del precio")
+    precio_raw: Optional[str] = Field(None, description="Texto original del precio")
+    pagina: int = Field(..., description="Número de página donde se encontró")
+
+class ProductoConfirmado(BaseModel):
+    """Schema for a product confirmed by the user for import."""
+    codigo: Optional[str] = Field(None)
+    nombre: str = Field(..., min_length=1)
+    descripcion: Optional[str] = None
+    precio: float = Field(..., gt=0)
+    stock: int = Field(default=0, ge=0)
+
+class ImportacionMasiva(BaseModel):
+    """Schema for bulk import request."""
+    productos: list[ProductoConfirmado]
+    tipo_precio: str = Field(..., pattern="^(costo|venta)$", description="Indica si el precio es costo o venta") 

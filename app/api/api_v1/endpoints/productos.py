@@ -295,4 +295,159 @@ async def delete_product(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error al eliminar producto: {str(e)}",
-        ) 
+        )
+
+# --- Catalog Upload & Bulk Import Endpoints ---
+
+from fastapi import UploadFile, File
+from app.schemas.producto import ProductoImportado, ImportacionMasiva
+from app.services.pdf_parser import parse_pdf_catalog
+
+@router.post("/upload-catalog", response_model=List[ProductoImportado],
+    dependencies=[Depends(PermissionDependency("puede_editar_productos"))]
+)
+async def upload_catalog(
+    business_id: str,
+    file: UploadFile = File(...),
+    request: Request = None,
+    subscription_check: bool = Depends(check_subscription_access),
+) -> Any:
+    """
+    Upload a PDF catalog and return parsed product data.
+    
+    This endpoint:
+    1. Receives a PDF file.
+    2. Parses it using the PDF parser service.
+    3. Returns a list of potential products found in the PDF.
+    
+    The user is expected to review this data on the frontend before confirming the import.
+    """
+    if not file.filename.lower().endswith('.pdf'):
+        raise HTTPException(status_code=400, detail="El archivo debe ser un PDF.")
+    
+    try:
+        contents = await file.read()
+        products = parse_pdf_catalog(contents)
+        
+        # Convert to schema
+        result = []
+        for p in products:
+            result.append(ProductoImportado(
+                codigo=p['code'],
+                descripcion=p['description'],
+                precio_detectado=p['price_value'],
+                precio_raw=p['raw_price'],
+                pagina=p['page']
+            ))
+            
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error processing catalog upload: {e}")
+        raise HTTPException(status_code=500, detail=f"Error al procesar el catálogo: {str(e)}")
+
+@router.post("/bulk-upsert", status_code=status.HTTP_200_OK,
+    dependencies=[Depends(PermissionDependency("puede_editar_productos"))]
+)
+async def bulk_upsert_products(
+    business_id: str,
+    import_data: ImportacionMasiva,
+    request: Request,
+    subscription_check: bool = Depends(check_subscription_access),
+) -> Any:
+    """
+    Bulk upsert products from confirmed import data.
+    
+    This endpoint:
+    1. Receives a list of confirmed products and a price type (cost or sale).
+    2. Iterates through the products.
+    3. Checks if a product with the same code exists for this business.
+    4. If exists: Updates price (cost or sale) and stock (adds to existing).
+    5. If new: Creates the product.
+    """
+    token = request.headers.get("Authorization", "")
+    supabase = (
+        get_scoped_supabase_user_client(token, business_id)
+        if token
+        else get_supabase_anon_client()
+    )
+    
+    processed_count = 0
+    errors = []
+    
+    for item in import_data.productos:
+        try:
+            # Check if product exists by code
+            existing = None
+            if item.codigo:
+                resp = supabase.table("productos").select("*").eq("negocio_id", business_id).eq("codigo", item.codigo).execute()
+                if resp.data:
+                    existing = resp.data[0]
+            
+            product_data = {}
+            
+            # Determine price fields based on tipo_precio
+            if import_data.tipo_precio == 'costo':
+                product_data['precio_compra'] = item.precio
+                # If new product, we must set a sale price too. 
+                # If we don't have one, maybe default to cost * markup or just cost.
+                # For now, if new, let's set sale price = cost (user can update later)
+                if not existing:
+                    product_data['precio_venta'] = item.precio 
+            else: # venta
+                product_data['precio_venta'] = item.precio
+                
+            if existing:
+                # Update logic
+                # We only update the price specified.
+                # We might also want to update description if it changed? 
+                # Let's assume description from PDF might be better or worse. 
+                # For now, let's ONLY update price and stock if provided.
+                
+                # Update stock? The prompt says "cargue o actualice de una manera masiva".
+                # Usually catalogs don't have stock, but if they do (or if we treat this as stock entry),
+                # we should add to stock.
+                # The prompt says "complementar la información faltante".
+                
+                # Let's update description if existing is empty
+                if not existing.get('descripcion') and item.descripcion:
+                    product_data['descripcion'] = item.descripcion
+                    
+                # Update stock - add to existing
+                # Wait, the PDF is a price list, usually doesn't have stock quantity.
+                # But our schema has 'stock' default 0.
+                # If the user input stock in the review table, we should add it.
+                if item.stock > 0:
+                    product_data['stock_actual'] = existing['stock_actual'] + item.stock
+                
+                supabase.table("productos").update(product_data).eq("id", existing['id']).execute()
+                
+            else:
+                # Create logic
+                product_data['negocio_id'] = business_id
+                product_data['nombre'] = item.nombre # Use description as name if name not provided?
+                # In our schema 'nombre' is required. The PDF parser extracts 'description'.
+                # We should map description to nombre for new products if nombre is missing?
+                # The frontend should ensure 'nombre' is populated (maybe from description).
+                
+                product_data['descripcion'] = item.descripcion
+                product_data['codigo'] = item.codigo
+                product_data['stock_actual'] = item.stock
+                product_data['activo'] = True
+                
+                # Ensure required fields
+                if 'precio_venta' not in product_data:
+                    product_data['precio_venta'] = 0 # Should not happen due to logic above
+                    
+                supabase.table("productos").insert(product_data).execute()
+                
+            processed_count += 1
+            
+        except Exception as e:
+            logger.error(f"Error upserting product {item.codigo}: {e}")
+            errors.append(f"Error con producto {item.codigo}: {str(e)}")
+            
+    return {
+        "message": f"Procesados {processed_count} productos.",
+        "errors": errors
+    } 

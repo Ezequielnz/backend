@@ -1,7 +1,7 @@
 from fastapi import HTTPException, status, Depends, Request
 from datetime import datetime, timezone
 from app.core.config import settings
-from app.db.supabase_client import get_supabase_client
+from app.db.supabase_client import get_supabase_client, get_supabase_service_client
 
 async def check_subscription_access(request: Request):
     """
@@ -26,7 +26,8 @@ async def check_subscription_access(request: Request):
             return True
 
         # 2. Check DB status
-        supabase = get_supabase_client()
+        # Use service client to bypass RLS and ensure we can read the user's status
+        supabase = get_supabase_service_client()
         response = supabase.table("usuarios").select("subscription_status, trial_end, is_exempt").eq("id", user_id).execute()
         
         if not response.data:
