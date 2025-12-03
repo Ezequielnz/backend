@@ -25,5 +25,5 @@ RUN mkdir -p /app/models
 # Exponer puerto para FastAPI
 EXPOSE 8000
 
-# Comando por defecto (se sobrescribe en docker-compose)
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Comando por defecto (usa la variable de entorno PORT proporcionada por Render)
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
