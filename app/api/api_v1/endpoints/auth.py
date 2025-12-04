@@ -305,7 +305,8 @@ async def read_users_me(request: Request) -> Any:
                 "apellido": "",
                 "rol": "usuario",
                 "activo": True,
-                "permisos": []
+                "permisos": [],
+                "onboarding_completed": False
             }
             print(f"Datos fallback: {fallback_data}")
             return fallback_data
@@ -323,6 +324,7 @@ async def read_users_me(request: Request) -> Any:
             "email": user.email,
             "email_confirmed_at": getattr(user, "email_confirmed_at", None),
             "last_sign_in_at": getattr(user, "last_sign_in_at", None),
+            "onboarding_completed": user_data.get("onboarding_completed", False)
         })
         
         print(f"[SUCCESS] Devolviendo datos de usuario completos")
@@ -586,3 +588,31 @@ async def delete_user_completely(user_id: str, request: Request) -> Any:
     except Exception as e:
         print(f"Error delete user: {str(e)}")
         raise HTTPException(status_code=500, detail="Error interno al eliminar usuario")
+
+@router.post("/complete-onboarding", response_model=dict)
+async def complete_onboarding(request: Request) -> Any:
+    """
+    Marcar el onboarding como completado para el usuario actual.
+    """
+    try:
+        if not hasattr(request.state, 'user') or not request.state.user:
+            raise HTTPException(status_code=401, detail="Usuario no autenticado")
+        
+        user = request.state.user
+        user_id = user.id
+        
+        supabase = get_supabase_client()
+        
+        # Actualizar flag en la base de datos
+        response = supabase.table("usuarios").update({"onboarding_completed": True}).eq("id", user_id).execute()
+        
+        if not response.data:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado al actualizar onboarding")
+            
+        return {"message": "Onboarding completado", "onboarding_completed": True}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error completing onboarding: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error al completar el onboarding")

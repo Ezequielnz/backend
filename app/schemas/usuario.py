@@ -9,6 +9,7 @@ class UsuarioBase(BaseModel):
     apellido: str = Field(..., min_length=1, max_length=50)
     is_active: bool = True
     is_superuser: bool = False
+    onboarding_completed: bool = False
 
 class UsuarioCreate(UsuarioBase):
     """Schema for creating a new user."""
@@ -22,6 +23,7 @@ class UsuarioUpdate(BaseModel):
     password: Optional[str] = Field(None, min_length=8)
     is_active: Optional[bool] = None
     is_superuser: Optional[bool] = None
+    onboarding_completed: Optional[bool] = None
 
 class Usuario(UsuarioBase):
     """Schema for user response."""
@@ -34,4 +36,4 @@ class Usuario(UsuarioBase):
 
 class UsuarioInDB(Usuario):
     """Schema for user in database."""
-    hashed_password: str 
+    hashed_password: str

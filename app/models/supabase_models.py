@@ -80,6 +80,7 @@ class Usuario(SupabaseModel):
     subscription_status: Optional[str] = "trial"
     trial_end: Optional[datetime] = None
     is_exempt: bool = False
+    onboarding_completed: bool = False
     
     @classmethod
     def table_name(cls) -> str:
