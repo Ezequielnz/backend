@@ -52,6 +52,7 @@ async def check_subscription_access(request: Request):
         if subscription_status == "trial":
             if not trial_end_str:
                 # No trial end date? Assume expired or invalid.
+                print(f"access_denied: User {user_id} ({email}) has trial status but no trial_end date.")
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Modo de prueba inválido o expirado. Por favor suscríbase."
@@ -61,6 +62,7 @@ async def check_subscription_access(request: Request):
             now = datetime.now(timezone.utc)
             
             if now > trial_end:
+                print(f"access_denied: User {user_id} ({email}) trial expired on {trial_end_str} (now: {now}).")
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Su periodo de prueba ha finalizado. El sistema está en modo lectura."
@@ -70,6 +72,7 @@ async def check_subscription_access(request: Request):
             return True
 
         # If we are here, status is not active or trial (e.g. 'expired', 'cancelled')
+        print(f"access_denied: User {user_id} ({email}) subscription status is '{subscription_status}'.")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Suscripción inactiva. El sistema está en modo lectura."
