@@ -6,6 +6,7 @@ import json
 import time
 from typing import List, Dict, Any, Optional
 from pdf2image import convert_from_bytes
+from PIL import Image
 from pydantic import BaseModel, Field
 from openai import OpenAI, RateLimitError
 from decouple import config
@@ -108,6 +109,25 @@ def limpiar_precio(precio_str: str) -> float:
         logger.warning(f"No se pudo convertir el precio: {precio_str} -> {s}")
         return 0.0
 
+def resize_image_for_llm(image: Image.Image, max_size: int = 1024) -> Image.Image:
+    """
+    Redimensiona la imagen para reducir el consumo de tokens y acelerar el proceso.
+    Mantiene el aspect ratio.
+    """
+    width, height = image.size
+    if width <= max_size and height <= max_size:
+        return image
+    
+    # Calcular nueva escala
+    if width > height:
+        new_width = max_size
+        new_height = int(height * (max_size / width))
+    else:
+        new_height = max_size
+        new_width = int(width * (max_size / height))
+        
+    return image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
 def encode_image(image_bytes: bytes) -> str:
     """Codifica bytes de imagen a base64 string."""
     return base64.b64encode(image_bytes).decode('utf-8')
@@ -139,7 +159,7 @@ def extract_products_from_image(image_bytes: bytes, page_num: int) -> List[Dict[
                             "type": "image_url",
                             "image_url": {
                                 "url": f"data:image/jpeg;base64,{base64_image}",
-                                "detail": "high"
+                                "detail": "auto" # Let API decide detail level based on size
                             }
                         }
                     ]
@@ -154,12 +174,6 @@ def extract_products_from_image(image_bytes: bytes, page_num: int) -> List[Dict[
             return []
             
         # Parse JSON response using Pydantic for validation
-        # The LLM might wrap it in a root key like "products" or just return the list.
-        # We'll try to parse it into our CatalogPage model.
-        
-        # Sometimes LLM returns just the list, sometimes { "products": [...] }
-        # We instructed "JSON Structured", usually follows schema if provided in tools, 
-        # but here we are using json_mode. Let's try to parse generic JSON first.
         data = json.loads(content)
         
         products_list = []
@@ -172,16 +186,13 @@ def extract_products_from_image(image_bytes: bytes, page_num: int) -> List[Dict[
                     products_list = data[key]
                     break
             if not products_list and 'products' not in data:
-                 # Fallback: maybe the dict itself is a single product? Unlikely for a catalog page.
                  pass
 
         # Validate and convert
         valid_products = []
         for p in products_list:
             try:
-                # Map keys if they are slightly different (LLM can be unpredictable without strict schema enforcement via tools)
-                # But gpt-4o-mini is good at following instructions.
-                # Let's normalize keys just in case
+                # Map keys if they are slightly different
                 normalized_p = {}
                 for k, v in p.items():
                     k_lower = k.lower()
@@ -219,8 +230,9 @@ def parse_pdf_catalog(file_bytes: bytes) -> List[Dict[str, Any]]:
     Parses a PDF catalog file using Multimodal LLM (GPT-4o-mini).
     
     1. Converts PDF pages to Images.
-    2. Sends each image to LLM to extract structured data.
-    3. Post-processes prices.
+    2. Resizes images to optimize tokens.
+    3. Sends each image to LLM to extract structured data.
+    4. Post-processes prices.
     """
     all_products = []
     
@@ -230,21 +242,23 @@ def parse_pdf_catalog(file_bytes: bytes) -> List[Dict[str, Any]]:
         logger.info("Converting PDF to images...")
         
         # Check for POPPLER env var (user specific config)
-        # Use decouple config to ensure .env is read
         poppler_path = config("POPPLER", default=None)
         
-        logger.info(f"Using Poppler path: {poppler_path}")
-        
-        images = convert_from_bytes(file_bytes, fmt='jpeg', poppler_path=poppler_path)
+        # Use 150 DPI for faster conversion and reasonable quality for OCR
+        images = convert_from_bytes(file_bytes, fmt='jpeg', dpi=150, poppler_path=poppler_path)
         logger.info(f"Converted {len(images)} pages.")
         
         for i, image in enumerate(images):
             page_num = i + 1
             logger.info(f"Processing page {page_num} with LLM...")
             
+            # Optimización: Redimensionar imagen a max 1024px
+            # Esto reduce drásticamente los tokens de visión (de ~1000 a ~250)
+            optimized_image = resize_image_for_llm(image, max_size=1024)
+            
             # Convert PIL Image to bytes
             img_byte_arr = io.BytesIO()
-            image.save(img_byte_arr, format='JPEG')
+            optimized_image.save(img_byte_arr, format='JPEG', quality=85)
             img_bytes = img_byte_arr.getvalue()
             
             products = extract_products_from_image(img_bytes, page_num)
@@ -252,14 +266,12 @@ def parse_pdf_catalog(file_bytes: bytes) -> List[Dict[str, Any]]:
             
             logger.info(f"Extracted {len(products)} products from page {page_num}.")
             
-            # Add a small delay to avoid hitting rate limits too aggressively
-            time.sleep(1)
+            # Rate Limit Protection:
+            # Esperar 2 segundos entre páginas para no saturar el TPM/RPM
+            time.sleep(2)
             
     except Exception as e:
         logger.error(f"Error parsing PDF catalog: {str(e)}")
-        # Re-raise or return empty? User expects exception on failure usually, 
-        # but if partial success, maybe return what we have? 
-        # The original code raised exception. Let's keep it consistent.
         raise e
         
     return all_products
