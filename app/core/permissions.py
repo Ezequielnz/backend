@@ -82,5 +82,5 @@ async def check_subscription_access(request: Request):
         # Fail closed
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Error verificando estado de suscripción."
+            detail=f"Error verificando estado de suscripción: {str(e)}"
         )

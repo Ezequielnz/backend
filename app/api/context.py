@@ -37,11 +37,13 @@ async def BusinessBranchContextDep(request: Request, business_id: str, branch_id
     client = get_supabase_user_client(token)
     user_id = get_user_id_from_token(token)
 
+    from_header = False
     # Allow branch to be provided via header when not in path/query.
     if not branch_id:
         header_branch = request.headers.get("X-Branch-Id") or request.headers.get("X-Sucursal-Id")
         if header_branch:
             branch_id = header_branch
+            from_header = True
 
     # Verify business membership
     user_business = (
@@ -72,7 +74,14 @@ async def BusinessBranchContextDep(request: Request, business_id: str, branch_id
             .execute()
         )
         if not user_branch.data:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User not assigned to this branch")
+            # If the branch came from the header and is invalid, we ignore it
+            # instead of raising 403. This prevents stale headers from breaking
+            # business-level endpoints.
+            if from_header:
+                print(f"⚠️ Warning: User {user_id} sent invalid branch header {branch_id}. Ignoring.")
+                branch_id = None
+            else:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User not assigned to this branch")
 
     # Retrieve branch settings (negocio_configuracion)
     settings_response = (
