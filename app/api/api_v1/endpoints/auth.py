@@ -3,6 +3,7 @@ import uuid
 import json
 import time
 import traceback
+import asyncio
 import sys
 from datetime import datetime, timezone, timedelta
 
@@ -212,6 +213,8 @@ async def signup(user_data: UserSignUp) -> Any:
         # (ver migration 07_create_user_trigger.sql)
 
         # 4. Configurar periodo de prueba (30 días)
+        # Implementamos retries porque el trigger de creación de usuario en public.usuarios
+        # puede tener un ligero retraso respecto a auth.users
         try:
             trial_end = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
             
@@ -225,7 +228,26 @@ async def signup(user_data: UserSignUp) -> Any:
             }
             
             print(f"Configurando suscripción para {user_data.email}: {update_data}")
-            supabase.table("usuarios").update(update_data).eq("id", user_id).execute()
+            
+            max_retries = 5
+            for attempt in range(max_retries):
+                try:
+                    # Intentamos actualizar. Si el usuario no existe aún en public.usuarios,
+                    # response.data estará vacío.
+                    response = supabase.table("usuarios").update(update_data).eq("id", user_id).execute()
+                    
+                    if response.data and len(response.data) > 0:
+                        print(f"Suscripción configurada correctamente en intento {attempt + 1}")
+                        break
+                    else:
+                        print(f"Intento {attempt + 1}/{max_retries}: Usuario no encontrado aún en public.usuarios, reintentando...")
+                except Exception as e:
+                    print(f"Error en intento {attempt + 1}/{max_retries}: {str(e)}")
+                
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(1.0) # Esperar 1 segundo antes del siguiente intento
+            else:
+                print("ADVERTENCIA: No se pudo configurar la suscripción después de varios intentos. Es posible que el trigger haya fallado.")
             
         except Exception as sub_error:
             print(f"Error configurando suscripción inicial: {sub_error}")
