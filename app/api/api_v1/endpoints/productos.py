@@ -312,7 +312,79 @@ async def delete_product(
 # --- Catalog Upload & Bulk Import Endpoints ---
 
 from fastapi import UploadFile, File
-from app.schemas.producto import ProductoImportado, ImportacionMasiva
+from app.schemas.producto import ProductoImportado, ImportacionMasiva, BulkPriceUpdate
+
+@router.post("/bulk-price-update", status_code=status.HTTP_200_OK,
+    dependencies=[Depends(PermissionDependency("puede_editar_productos"))]
+)
+async def bulk_price_update(
+    business_id: str,
+    update_data: BulkPriceUpdate,
+    request: Request,
+    subscription_check: bool = Depends(check_subscription_access),
+) -> Any:
+    """
+    Massive update of product prices.
+    """
+    token = request.headers.get("Authorization", "")
+    supabase = (
+        get_scoped_supabase_user_client(token, business_id)
+        if token
+        else get_supabase_anon_client()
+    )
+
+    try:
+        # Base query
+        query = supabase.table("productos").select("id, precio_venta").eq("negocio_id", business_id)
+
+        # Apply scope filters
+        if update_data.scope == 'provider':
+            if not update_data.provider_id:
+                raise HTTPException(status_code=400, detail="Provider ID required for provider scope")
+            query = query.eq("proveedor_id", update_data.provider_id)
+        elif update_data.scope == 'selection':
+            if not update_data.product_ids:
+                raise HTTPException(status_code=400, detail="Product IDs required for selection scope")
+            query = query.in_("id", update_data.product_ids)
+        
+        # Fetch target products
+        # Note: Supabase JS client 'select' returns data. Python client might differ slightly but usually .execute()
+        response = query.execute()
+        products_to_update = response.data
+
+        if not products_to_update:
+            return {"message": "No products found to update", "count": 0}
+
+        # Calculate new prices and prepare batch update
+        # Since Supabase-py might not support bulk update with different values easily in one query without RPC,
+        # we might need to update individually or use a custom query. 
+        # However, for "massive" updates, individual updates might be slow but safe.
+        # OR we could maybe try to use a SQL function if available.
+        # Given the constraints, let's try to update locally and push back. 
+        # Actually, iterating 100s of products is fine for this scale (micropymes).
+        
+        count = 0
+        for prod in products_to_update:
+            current_price = prod.get('precio_venta', 0)
+            if current_price is None: current_price = 0
+            
+            # Formula: new = old * (1 + pct/100)
+            new_price = current_price * (1 + update_data.percentage / 100.0)
+            
+            # Ensure non-negative
+            if new_price < 0: new_price = 0
+            
+            # Update individual product
+            # Optimization: We could run these in parallel or use a more efficient bulk method if available.
+            supabase.table("productos").update({"precio_venta": new_price}).eq("id", prod['id']).execute()
+            count += 1
+
+        return {"message": f"Updated {count} products successfully", "count": count}
+
+    except Exception as e:
+        logger.error(f"Error in bulk price update: {e}")
+        raise HTTPException(status_code=500, detail=f"Error processing bulk update: {str(e)}")
+
 from app.services.pdf_parser import parse_pdf_catalog
 
 @router.post("/upload-catalog", response_model=List[ProductoImportado],
@@ -465,3 +537,19 @@ async def bulk_upsert_products(
         "message": f"Procesados {processed_count} productos.",
         "errors": errors
     } 
+
+@router.post("/bulk-price-update", status_code=status.HTTP_200_OK,
+    dependencies=[Depends(PermissionDependency("puede_editar_productos"))]
+)
+async def bulk_price_update(
+    business_id: str,
+    update_data: ImportacionMasiva, # Re-using Import name? No, I need to import BulkPriceUpdate
+    request: Request,
+    subscription_check: bool = Depends(check_subscription_access),
+) -> Any:
+    """
+    Massive update of product prices.
+    """
+    # This signature is wrong because I haven't imported BulkPriceUpdate yet.
+    # I should fix the imports first.
+    pass

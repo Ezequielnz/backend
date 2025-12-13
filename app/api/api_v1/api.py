@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.api_v1.endpoints import auth, branch_settings, businesses, ventas, stock, facturacion, tareas, comunicacion, productos, categorias, clientes, servicios, suscripciones, importacion, permissions, finanzas, compras, proveedores, tenant_settings, notifications, action, monitoring, stock_transfers
+from app.api.api_v1.endpoints import auth, branch_settings, businesses, ventas, stock, facturacion, tareas, comunicacion, productos, categorias, clientes, servicios, suscripciones, importacion, permissions, finanzas, compras, proveedores, tenant_settings, notifications, action, monitoring, stock_transfers, metodos_pago
 
 api_router = APIRouter()
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
@@ -26,3 +26,4 @@ api_router.include_router(tenant_settings.router, prefix="/businesses/{business_
 api_router.include_router(notifications.router, prefix="/notifications", tags=["notifications"])
 api_router.include_router(action.router, prefix="/actions", tags=["actions"])
 api_router.include_router(monitoring.router, prefix="/monitoring", tags=["monitoring"])
+api_router.include_router(metodos_pago.router, prefix="/businesses/{business_id}/payment-methods", tags=["payment-methods"])

@@ -11,6 +11,7 @@ class ProductoBase(BaseModel):
     stock_actual: int = Field(..., ge=0)
     stock_minimo: Optional[int] = Field(0, ge=0)
     categoria_id: Optional[str] = Field(None, description="UUID de la categoría")
+    proveedor_id: Optional[str] = Field(None, description="UUID del proveedor")
     codigo: Optional[str] = Field(None, max_length=50)
     unidades: Optional[str] = Field(None, max_length=50)
 
@@ -23,6 +24,7 @@ class ProductoCreate(BaseModel):
     stock_actual: int = Field(..., ge=0)
     stock_minimo: Optional[int] = Field(0, ge=0)
     categoria_id: Optional[str] = Field(None, description="UUID de la categoría")
+    proveedor_id: Optional[str] = Field(None, description="UUID del proveedor")
     codigo: Optional[str] = Field(None, max_length=50)
     unidades: Optional[str] = Field(None, max_length=50)
 
@@ -35,6 +37,7 @@ class ProductoUpdate(BaseModel):
     stock_actual: Optional[int] = Field(None, ge=0)
     stock_minimo: Optional[int] = Field(None, ge=0)
     categoria_id: Optional[str] = Field(None, description="UUID de la categoría")
+    proveedor_id: Optional[str] = Field(None, description="UUID del proveedor")
     codigo: Optional[str] = Field(None, max_length=50)
     unidades: Optional[str] = Field(None, max_length=50)
     activo: Optional[bool] = None
@@ -66,8 +69,15 @@ class ProductoConfirmado(BaseModel):
     precio: float = Field(..., ge=0)
     stock: int = Field(default=0, ge=0)
     unidades: Optional[str] = Field(None, max_length=50)
+    proveedor_id: Optional[str] = Field(None, description="UUID del proveedor")
 
 class ImportacionMasiva(BaseModel):
     """Schema for bulk import request."""
     productos: list[ProductoConfirmado]
-    tipo_precio: str = Field(..., pattern="^(costo|venta)$", description="Indica si el precio es costo o venta") 
+    tipo_precio: str = Field(..., pattern="^(costo|venta)$", description="Indica si el precio es costo o venta")
+
+class BulkPriceUpdate(BaseModel):
+    percentage: float
+    scope: str = Field(..., pattern="^(all|provider|selection)$")
+    provider_id: Optional[str] = None
+    product_ids: Optional[list[str]] = None

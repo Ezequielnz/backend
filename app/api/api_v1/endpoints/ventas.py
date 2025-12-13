@@ -399,6 +399,20 @@ async def record_sale(
             "fecha": datetime.now().isoformat(),
             "observaciones": venta_data.observaciones
         }
+
+        # Verificar descuento por método de pago
+        metodo_pago_response = client.table("metodos_pago").select("descuento_porcentaje").eq("negocio_id", negocio_id).eq("nombre", venta_data.metodo_pago).eq("activo", True).execute()
+        if metodo_pago_response.data:
+            descuento_pct = metodo_pago_response.data[0]["descuento_porcentaje"]
+            if descuento_pct > 0:
+                descuento_monto = total * (descuento_pct / 100)
+                venta_insert_data["total"] = total - descuento_monto
+                # Agregar nota sobre descuento
+                nota_descuento = f" (Descuento {descuento_pct}% aplicado: ${descuento_monto:.2f})"
+                if venta_insert_data["observaciones"]:
+                    venta_insert_data["observaciones"] += nota_descuento
+                else:
+                    venta_insert_data["observaciones"] = nota_descuento.strip()
         
         # Insertar la venta (cada venta debe ser única)
         venta_response = client.table("ventas").insert(venta_insert_data).execute()
