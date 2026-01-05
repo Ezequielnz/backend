@@ -430,6 +430,39 @@ async def change_password(password_data: dict, request: Request) -> Any:
         raise
 
 
+@router.post("/request-password-reset")
+async def request_password_reset(data: Dict[str, str] = Body(...)) -> Any:
+    """
+    Solicita un correo para restablecer la contraseña.
+    Genera un link tipo: {FRONTEND}/login#access_token=...&type=recovery
+    """
+    try:
+        email = data.get("email")
+        if not email:
+            raise HTTPException(status_code=400, detail="Email es requerido")
+
+        supabase = get_supabase_client()
+        
+        # Redirigir al usuario al login, donde el frontend detectará type=recovery
+        # El frontend debería manejar el token y redirigir a /update-password
+        redirect_url = f"{settings.FRONTEND_CONFIRMATION_URL.replace('/confirm', '/login')}"
+        
+        try:
+            supabase.auth.reset_password_email(email, options={
+                "redirect_to": redirect_url
+            })
+            return {"message": "Si el correo existe, se han enviado instrucciones."}
+        
+        except Exception as sb_error:
+            print(f"Error Supabase Reset Password: {sb_error}")
+            # No revelar error exacto por seguridad, pero loguearlo
+            return {"message": "Si el correo existe, se han enviado instrucciones."}
+
+    except Exception as e:
+        print(f"Error request password reset: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al procesar solicitud")
+
+
 @router.post("/resend-confirmation")
 async def resend_confirmation_email(email_data: Dict[str, str] = Body(...)) -> Any:
     """
