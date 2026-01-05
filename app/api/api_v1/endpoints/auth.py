@@ -674,3 +674,49 @@ async def complete_onboarding(request: Request) -> Any:
     except Exception as e:
         print(f"Error completing onboarding: {str(e)}")
         raise HTTPException(status_code=500, detail="Error al completar el onboarding")
+
+
+@router.post("/exchange")
+async def exchange_auth_code(data: Dict[str, str] = Body(...)) -> Any:
+    """
+    Intercambia un código de autorización (PKCE) por una sesión (tokens).
+    Usado para confirmar emails y resetear contraseñas cuando se usa redirect_to.
+    """
+    try:
+        auth_code = data.get("code")
+        if not auth_code:
+             raise HTTPException(status_code=400, detail="Código de autorización requerido")
+
+        print(f"Intercambiando código Auth: {auth_code[:10]}...")
+        
+        supabase = get_supabase_anon_client()
+        
+        # Intercambiar código por sesión
+        response = supabase.auth.exchange_code_for_session({"auth_code": auth_code})
+        
+        if not response.session:
+             raise HTTPException(status_code=400, detail="No se pudo establecer la sesión. El código puede haber expirado.")
+             
+        print("Intercambio de código exitoso.")
+        
+        return {
+            "access_token": response.session.access_token,
+            "refresh_token": response.session.refresh_token,
+             "user": {
+                "id": response.user.id,
+                "email": response.user.email
+            }
+        }
+
+    except Exception as e:
+        print(f"Error exchanging code: {str(e)}")
+        error_msg = str(e).lower()
+        if "pkce" in error_msg or "code" in error_msg:
+             raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="El enlace es inválido o ha expirado."
+            )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error al procesar el código de verificación."
+        )
