@@ -445,7 +445,10 @@ async def request_password_reset(data: Dict[str, str] = Body(...)) -> Any:
         
         # Redirigir al usuario al login, donde el frontend detectará type=recovery
         # El frontend debería manejar el token y redirigir a /update-password
-        redirect_url = f"{settings.FRONTEND_CONFIRMATION_URL.replace('/confirm', '/login')}"
+        
+        # Construir URL de login explícitamente en lugar de reemplazo frágil
+        base_url = settings.FRONTEND_URL.rstrip("/")
+        redirect_url = f"{base_url}/login"
         
         try:
             supabase.auth.reset_password_email(email, options={
