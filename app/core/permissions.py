@@ -27,8 +27,26 @@ async def check_subscription_access(request: Request):
 
         # 2. Check DB status
         # Use service client to bypass RLS and ensure we can read the user's status
-        supabase = get_supabase_service_client()
-        response = supabase.table("usuarios").select("subscription_status, trial_end, is_exempt").eq("id", user_id).execute()
+        try:
+            supabase = get_supabase_service_client()
+            response = supabase.table("usuarios").select("subscription_status, trial_end, is_exempt").eq("id", user_id).execute()
+        except Exception as service_error:
+            # Fallback: Validation with service role failed (likely 401 or configuration error). 
+            # Try using the user's own token if available.
+            print(f"Warning: Service client check failed ({service_error}). Attempting fallback with user token.")
+            
+            auth_header = request.headers.get("Authorization")
+            if auth_header and auth_header.startswith("Bearer "):
+                try:
+                    from app.db.supabase_client import get_supabase_user_client
+                    token = auth_header.replace("Bearer ", "").strip()
+                    user_client = get_supabase_user_client(token)
+                    response = user_client.table("usuarios").select("subscription_status, trial_end, is_exempt").eq("id", user_id).execute()
+                except Exception as user_error:
+                    print(f"Error checking subscription with user token: {user_error}")
+                    raise service_error
+            else:
+                 raise service_error
         
         if not response.data:
             # User not found in DB? Should not happen if auth passed.
@@ -52,6 +70,7 @@ async def check_subscription_access(request: Request):
         if subscription_status == "trial":
             if not trial_end_str:
                 # No trial end date? Assume expired or invalid.
+                print(f"access_denied: User {user_id} ({email}) has trial status but no trial_end date.")
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Modo de prueba inválido o expirado. Por favor suscríbase."
@@ -61,6 +80,7 @@ async def check_subscription_access(request: Request):
             now = datetime.now(timezone.utc)
             
             if now > trial_end:
+                print(f"access_denied: User {user_id} ({email}) trial expired on {trial_end_str} (now: {now}).")
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Su periodo de prueba ha finalizado. El sistema está en modo lectura."
@@ -70,6 +90,7 @@ async def check_subscription_access(request: Request):
             return True
 
         # If we are here, status is not active or trial (e.g. 'expired', 'cancelled')
+        print(f"access_denied: User {user_id} ({email}) subscription status is '{subscription_status}'.")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Suscripción inactiva. El sistema está en modo lectura."
@@ -82,5 +103,5 @@ async def check_subscription_access(request: Request):
         # Fail closed
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Error verificando estado de suscripción."
+            detail=f"Error verificando estado de suscripción: {str(e)}"
         )

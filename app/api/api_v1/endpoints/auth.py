@@ -4,6 +4,7 @@ import uuid
 import json
 import time
 import traceback
+import asyncio
 import sys
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Body
@@ -210,6 +211,8 @@ async def signup(user_data: UserSignUp) -> Any:
         # (ver migration 07_create_user_trigger.sql)
 
         # 4. Configurar periodo de prueba (30 días)
+        # Implementamos retries porque el trigger de creación de usuario en public.usuarios
+        # puede tener un ligero retraso respecto a auth.users
         try:
             trial_end = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
             
@@ -223,7 +226,26 @@ async def signup(user_data: UserSignUp) -> Any:
             }
             
             print(f"Configurando suscripción para {user_data.email}: {update_data}")
-            supabase.table("usuarios").update(update_data).eq("id", user_id).execute()
+            
+            max_retries = 5
+            for attempt in range(max_retries):
+                try:
+                    # Intentamos actualizar. Si el usuario no existe aún en public.usuarios,
+                    # response.data estará vacío.
+                    response = supabase.table("usuarios").update(update_data).eq("id", user_id).execute()
+                    
+                    if response.data and len(response.data) > 0:
+                        print(f"Suscripción configurada correctamente en intento {attempt + 1}")
+                        break
+                    else:
+                        print(f"Intento {attempt + 1}/{max_retries}: Usuario no encontrado aún en public.usuarios, reintentando...")
+                except Exception as e:
+                    print(f"Error en intento {attempt + 1}/{max_retries}: {str(e)}")
+                
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(1.0) # Esperar 1 segundo antes del siguiente intento
+            else:
+                print("ADVERTENCIA: No se pudo configurar la suscripción después de varios intentos. Es posible que el trigger haya fallado.")
             
         except Exception as sub_error:
             print(f"Error configurando suscripción inicial: {sub_error}")
@@ -337,7 +359,115 @@ async def read_users_me(request: Request) -> Any:
         )
 
 
+<<<<<<< HEAD
 @router.post("/resend-confirmation-email")
+=======
+@router.put("/profile", response_model=dict)
+async def update_profile(profile_data: dict, request: Request) -> Any:
+    try:
+        if not hasattr(request.state, 'user') or not request.state.user:
+            raise HTTPException(status_code=401, detail="Usuario no autenticado")
+        
+        user = request.state.user
+        user_id = user.id
+        
+        allowed_fields = ['nombre', 'apellido', 'telefono']
+        update_data = {k: v for k, v in profile_data.items() if k in allowed_fields and v is not None}
+        
+        if not update_data:
+            raise HTTPException(status_code=400, detail="No hay datos válidos para actualizar")
+        
+        update_data['updated_at'] = datetime.now(timezone.utc).isoformat()
+        
+        supabase = get_supabase_client()
+        response = supabase.table("usuarios").update(update_data).eq("id", user_id).execute()
+        
+        if not response.data:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        
+        updated_user = response.data[0]
+        updated_user.update({
+            "email": user.email
+        })
+        
+        return updated_user
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error update profile: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error interno del servidor")
+
+
+@router.put("/change-password", response_model=dict)
+async def change_password(password_data: dict, request: Request) -> Any:
+    try:
+        if not hasattr(request.state, 'user') or not request.state.user:
+            raise HTTPException(status_code=401, detail="Usuario no autenticado")
+        
+        user = request.state.user
+        # current_password = password_data.get('currentPassword')
+        new_password = password_data.get('newPassword')
+        
+        if not new_password or len(new_password) < 6:
+            raise HTTPException(status_code=400, detail="La nueva contraseña debe tener al menos 6 caracteres")
+        
+        supabase = get_supabase_client()
+        token = request.headers.get("Authorization", "").replace("Bearer ", "")
+        
+        try:
+            # Actualizar usuario autenticado
+            supabase.auth.update_user({
+                "password": new_password
+            })
+            return {"message": "Contraseña actualizada correctamente"}
+            
+        except Exception as update_error:
+            print(f"Error al actualizar contraseña: {str(update_error)}")
+            raise HTTPException(status_code=500, detail="Error al actualizar la contraseña")
+        
+    except HTTPException:
+        raise
+
+
+@router.post("/request-password-reset")
+async def request_password_reset(data: Dict[str, str] = Body(...)) -> Any:
+    """
+    Solicita un correo para restablecer la contraseña.
+    Genera un link tipo: {FRONTEND}/login#access_token=...&type=recovery
+    """
+    try:
+        email = data.get("email")
+        if not email:
+            raise HTTPException(status_code=400, detail="Email es requerido")
+
+        supabase = get_supabase_client()
+        
+        # Redirigir al usuario al login, donde el frontend detectará type=recovery
+        # El frontend debería manejar el token y redirigir a /update-password
+        
+        # Construir URL de login explícitamente en lugar de reemplazo frágil
+        base_url = settings.FRONTEND_URL.rstrip("/")
+        redirect_url = f"{base_url}/login"
+        
+        try:
+            supabase.auth.reset_password_email(email, options={
+                "redirect_to": redirect_url
+            })
+            return {"message": "Si el correo existe, se han enviado instrucciones."}
+        
+        except Exception as sb_error:
+            print(f"Error Supabase Reset Password: {sb_error}")
+            # No revelar error exacto por seguridad, pero loguearlo
+            return {"message": "Si el correo existe, se han enviado instrucciones."}
+
+    except Exception as e:
+        print(f"Error request password reset: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al procesar solicitud")
+
+
+@router.post("/resend-confirmation")
+>>>>>>> 9ae699143c0b25007219338caeb3c6b10ef167d9
 async def resend_confirmation_email(email_data: Dict[str, str] = Body(...)) -> Any:
     """
     Reenviar correo de confirmación (usando Magic Link / OTP).
@@ -629,3 +759,49 @@ async def complete_onboarding(request: Request) -> Any:
     except Exception as e:
         print(f"Error completing onboarding: {str(e)}")
         raise HTTPException(status_code=500, detail="Error al completar el onboarding")
+
+
+@router.post("/exchange")
+async def exchange_auth_code(data: Dict[str, str] = Body(...)) -> Any:
+    """
+    Intercambia un código de autorización (PKCE) por una sesión (tokens).
+    Usado para confirmar emails y resetear contraseñas cuando se usa redirect_to.
+    """
+    try:
+        auth_code = data.get("code")
+        if not auth_code:
+             raise HTTPException(status_code=400, detail="Código de autorización requerido")
+
+        print(f"Intercambiando código Auth: {auth_code[:10]}...")
+        
+        supabase = get_supabase_anon_client()
+        
+        # Intercambiar código por sesión
+        response = supabase.auth.exchange_code_for_session({"auth_code": auth_code})
+        
+        if not response.session:
+             raise HTTPException(status_code=400, detail="No se pudo establecer la sesión. El código puede haber expirado.")
+             
+        print("Intercambio de código exitoso.")
+        
+        return {
+            "access_token": response.session.access_token,
+            "refresh_token": response.session.refresh_token,
+             "user": {
+                "id": response.user.id,
+                "email": response.user.email
+            }
+        }
+
+    except Exception as e:
+        print(f"Error exchanging code: {str(e)}")
+        error_msg = str(e).lower()
+        if "pkce" in error_msg or "code" in error_msg:
+             raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="El enlace es inválido o ha expirado."
+            )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error al procesar el código de verificación."
+        )

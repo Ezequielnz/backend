@@ -14,6 +14,7 @@ class ProductoBase(BaseModel):
     stock_minimo: int = 0
     codigo: Optional[str] = None
     categoria_id: Optional[int] = None
+    proveedor_id: Optional[str] = None
     activo: bool = True
 
 
@@ -31,6 +32,7 @@ class ProductoUpdate(ProductoBase):
     stock_actual: Optional[int] = None
     stock_minimo: Optional[int] = None
     categoria_id: Optional[int] = None
+    proveedor_id: Optional[str] = None
 
 
 # Propiedades al leer desde la base de datos

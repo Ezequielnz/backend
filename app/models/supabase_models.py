@@ -117,6 +117,7 @@ class Producto(SupabaseModel):
     stock_minimo: Optional[int] = None
     unidades: Optional[str] = None
     categoria_id: Optional[str] = None
+    proveedor_id: Optional[str] = None
     activo: bool = True
     creado_en: Optional[datetime] = None
     actualizado_en: Optional[datetime] = None
@@ -239,3 +240,17 @@ class CuentaPendiente(SupabaseModel):
     @classmethod
     def table_name(cls) -> str:
         return "cuentas_pendientes"
+
+# Método de Pago model
+class MetodoPago(SupabaseModel):
+    id: Optional[int] = None
+    negocio_id: str
+    nombre: str
+    descuento_porcentaje: float = 0
+    activo: bool = True
+    creado_en: Optional[datetime] = None
+    actualizado_en: Optional[datetime] = None
+    
+    @classmethod
+    def table_name(cls) -> str:
+        return "metodos_pago"
