@@ -1,27 +1,25 @@
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, Dict, cast
 import uuid
 import json
 import time
 import traceback
 import sys
-from datetime import datetime, timezone, timedelta
 
-from fastapi import APIRouter, HTTPException, status, Request, Body, Depends, UploadFile
-from app.db.supabase_client import get_supabase_client, get_supabase_anon_client, get_supabase_user_client
-from fastapi.security import OAuth2PasswordBearer
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Body
 from fastapi.responses import JSONResponse, RedirectResponse
-from pydantic import EmailStr, ValidationError
-import jwt
-import requests
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from jose import jwt
+from pydantic import BaseModel, EmailStr
 
-from app.db.supabase_client import get_supabase_client, get_supabase_anon_client
 from app.core.config import settings
-from app.types.auth import Token, UserLogin, UserSignUp, SignUpResponse
+from app.db.supabase_client import get_supabase_client, get_supabase_anon_client, get_supabase_user_client, get_supabase_service_client
+from app.schemas.user import UserCreate, UserUpdate, UserResponse, Token, UserSignUp, SignUpResponse
+from app.api import deps
 from app.core.supabase_admin import supabase_admin
 
 router = APIRouter()
 
-# OAuth2 scheme for token authentication
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
 # JWT Secret para firma de tokens
@@ -326,103 +324,30 @@ async def read_users_me(request: Request) -> Any:
             "last_sign_in_at": getattr(user, "last_sign_in_at", None),
             "onboarding_completed": user_data.get("onboarding_completed", False)
         })
-        
-        print(f"[SUCCESS] Devolviendo datos de usuario completos")
+
         return user_data
-        
+
     except HTTPException:
         raise
     except Exception as e:
-        print(f"[ERROR CRÍTICO] Error inesperado en /auth/me: {str(e)}")
-        print(f"Tipo de error: {type(e).__name__}")
-        import traceback
-        print(f"Traceback completo:\n{traceback.format_exc()}")
-        raise HTTPException(status_code=401, detail=f"Error de sesión: {str(e)}")
+        print(f"Error /auth/me: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error al obtener perfil de usuario"
+        )
 
 
-@router.put("/profile", response_model=dict)
-async def update_profile(profile_data: dict, request: Request) -> Any:
-    try:
-        if not hasattr(request.state, 'user') or not request.state.user:
-            raise HTTPException(status_code=401, detail="Usuario no autenticado")
-        
-        user = request.state.user
-        user_id = user.id
-        
-        allowed_fields = ['nombre', 'apellido', 'telefono']
-        update_data = {k: v for k, v in profile_data.items() if k in allowed_fields and v is not None}
-        
-        if not update_data:
-            raise HTTPException(status_code=400, detail="No hay datos válidos para actualizar")
-        
-        update_data['updated_at'] = datetime.now(timezone.utc).isoformat()
-        
-        supabase = get_supabase_client()
-        response = supabase.table("usuarios").update(update_data).eq("id", user_id).execute()
-        
-        if not response.data:
-            raise HTTPException(status_code=404, detail="Usuario no encontrado")
-        
-        updated_user = response.data[0]
-        updated_user.update({
-            "email": user.email
-        })
-        
-        return updated_user
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Error update profile: {str(e)}")
-        raise HTTPException(status_code=500, detail="Error interno del servidor")
-
-
-@router.put("/change-password", response_model=dict)
-async def change_password(password_data: dict, request: Request) -> Any:
-    try:
-        if not hasattr(request.state, 'user') or not request.state.user:
-            raise HTTPException(status_code=401, detail="Usuario no autenticado")
-        
-        user = request.state.user
-        # current_password = password_data.get('currentPassword')
-        new_password = password_data.get('newPassword')
-        
-        if not new_password or len(new_password) < 6:
-            raise HTTPException(status_code=400, detail="La nueva contraseña debe tener al menos 6 caracteres")
-        
-        supabase = get_supabase_client()
-        token = request.headers.get("Authorization", "").replace("Bearer ", "")
-        
-        try:
-            # Actualizar usuario autenticado
-            supabase.auth.update_user({
-                "password": new_password
-            })
-            return {"message": "Contraseña actualizada correctamente"}
-            
-        except Exception as update_error:
-            print(f"Error al actualizar contraseña: {str(update_error)}")
-            raise HTTPException(status_code=500, detail="Error al actualizar la contraseña")
-        
-    except HTTPException:
-        raise
-
-
-@router.post("/resend-confirmation")
+@router.post("/resend-confirmation-email")
 async def resend_confirmation_email(email_data: Dict[str, str] = Body(...)) -> Any:
     """
-    Reenviar email de confirmación usando sign_in_with_otp (Magic Link).
-    Esta es la forma compatible con supabase-py v2 para verificar emails no confirmados.
+    Reenviar correo de confirmación (usando Magic Link / OTP).
     """
     try:
         email = email_data.get("email")
         if not email:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Email es requerido"
-            )
-        
-        supabase = get_supabase_client()
+             raise HTTPException(status_code=400, detail="Email requerido")
+
+        supabase = get_supabase_anon_client()
         
         # Verificar existencia local primero
         user_check = supabase.table("usuarios").select("id").eq("email", email).execute()
@@ -469,6 +394,76 @@ async def resend_confirmation_email(email_data: Dict[str, str] = Body(...)) -> A
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error interno del servidor"
         )
+
+
+@router.put("/profile", response_model=UserResponse)
+async def update_profile(
+    request: Request,
+    user_update: UserUpdate,
+    current_user: dict = Depends(deps.get_current_user)
+) -> Any:
+    """
+    Actualizar perfil del usuario logueado.
+    """
+    try:
+        user_id = current_user["id"]
+        
+        # Extraer token para usar cliente de usuario (RLS Safe)
+        authorization = request.headers.get("Authorization", "")
+        token = authorization.replace("Bearer ", "")
+        
+        if token:
+            supabase = get_supabase_user_client(token)
+        else:
+            print("[WARNING] No token found in update_profile, using anon client")
+            supabase = get_supabase_client()
+
+        update_data = user_update.dict(exclude_unset=True)
+        if not update_data:
+            raise HTTPException(status_code=400, detail="No se enviaron datos para actualizar")
+
+        # Actualizar en tabla usuarios
+        response = supabase.table("usuarios").update(update_data).eq("id", user_id).execute()
+        
+        if not response.data:
+            print(f"[ERROR] Update returned no data for user {user_id}. Checking permissions.")
+            raise HTTPException(status_code=404, detail="Error al actualizar perfil o usuario no encontrado")
+
+        return response.data[0]
+
+    except Exception as e:
+        print(f"Error updating profile: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error interno al actualizar perfil: {str(e)}")
+
+
+@router.post("/change-password")
+async def change_password(
+    passwords: Dict[str, str] = Body(...),
+    current_user: dict = Depends(deps.get_current_user)
+) -> Any:
+    """
+    Cambiar contraseña del usuario logueado.
+    """
+    try:
+        new_password = passwords.get("password")
+        if not new_password:
+            raise HTTPException(status_code=400, detail="Nueva contraseña requerida")
+
+        # Usamos Admin API para actualizar la contraseña sin necesitar el token del usuario
+        attributes = {"password": new_password}
+        user = await supabase_admin.update_user(current_user["id"], attributes)
+        
+        if not user:
+             raise HTTPException(status_code=500, detail="Error al actualizar contraseña en Auth")
+
+        return {"message": "Contraseña actualizada correctamente"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error changing password: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al cambiar contraseña")
 
 
 @router.get("/confirm")
@@ -589,24 +584,42 @@ async def delete_user_completely(user_id: str, request: Request) -> Any:
         print(f"Error delete user: {str(e)}")
         raise HTTPException(status_code=500, detail="Error interno al eliminar usuario")
 
+
 @router.post("/complete-onboarding", response_model=dict)
 async def complete_onboarding(request: Request) -> Any:
     """
     Marcar el onboarding como completado para el usuario actual.
     """
     try:
-        if not hasattr(request.state, 'user') or not request.state.user:
-            raise HTTPException(status_code=401, detail="Usuario no autenticado")
+        # 1. Extraer y limpiar el token (Manual Auth porque el middleware salta /auth)
+        authorization = request.headers.get("Authorization", "")
+        if not authorization or not authorization.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail="Token requerido")
         
-        user = request.state.user
+        token = authorization.replace("Bearer ", "")
+        
+        # 2. Cliente Supabase con token de usuario
+        supabase = get_supabase_user_client(token)
+        
+        # 3. Validar token
+        auth_response = supabase.auth.get_user(token)
+        if not auth_response or not auth_response.user:
+            raise HTTPException(status_code=401, detail="Token inválido")
+            
+        user = auth_response.user
         user_id = user.id
         
-        supabase = get_supabase_client()
-        
-        # Actualizar flag en la base de datos
-        response = supabase.table("usuarios").update({"onboarding_completed": True}).eq("id", user_id).execute()
+        # 4. Actualizar flag en la base de datos
+        try:
+            response = supabase.table("usuarios").update({"onboarding_completed": True}).eq("id", user_id).execute()
+        except Exception as e:
+            print(f"[WARNING] RLS update failed: {e}. Trying service role...")
+            # Fallback a service client si RLS falla
+            supabase_admin = get_supabase_service_client()
+            response = supabase_admin.table("usuarios").update({"onboarding_completed": True}).eq("id", user_id).execute()
         
         if not response.data:
+            # Si aún así falla, puede ser que el usuario no exista en la tabla usuarios
             raise HTTPException(status_code=404, detail="Usuario no encontrado al actualizar onboarding")
             
         return {"message": "Onboarding completado", "onboarding_completed": True}

@@ -27,8 +27,8 @@ class UsuarioUpdate(BaseModel):
 
 class Usuario(UsuarioBase):
     """Schema for user response."""
-    id: int
-    fecha_creacion: datetime
+    id: str
+    creado_en: datetime
     fecha_actualizacion: datetime
 
     class Config:

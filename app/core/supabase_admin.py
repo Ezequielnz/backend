@@ -45,6 +45,27 @@ class SupabaseAdmin:
             print(f"❌ Excepción eliminando usuario de auth.users: {e}")
             return False
     
+    async def update_user(self, user_id: str, attributes: dict) -> Optional[dict]:
+        """
+        Actualizar usuario en auth.users usando la API de administración
+        """
+        try:
+            async with httpx.AsyncClient() as client:
+                url = f"{self.project_url}/auth/v1/admin/users/{user_id}"
+                
+                response = await client.put(url, headers=self.headers, json=attributes)
+                
+                if response.status_code == 200:
+                    return response.json()
+                else:
+                    print(f"❌ Error actualizando usuario en auth.users: {response.status_code} - {response.text}")
+                    return None
+                    
+        except Exception as e:
+            print(f"❌ Error actualizando usuario en auth.users: {e}")
+            return None
+
+    
     async def get_auth_user(self, user_id: str) -> Optional[dict]:
         """
         Obtener información de usuario de auth.users

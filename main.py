@@ -101,11 +101,16 @@ async def auth_middleware(request: Request, call_next):
         "/", "/health", "/wake-up", "/docs", "/redoc", "/openapi.json",
         f"{settings.API_V1_STR}/docs",
         f"{settings.API_V1_STR}/openapi.json",
+        f"{settings.API_V1_STR}/auth/login",
+        f"{settings.API_V1_STR}/auth/signup",
+        f"{settings.API_V1_STR}/auth/resend-confirmation",
+        f"{settings.API_V1_STR}/auth/confirm",
+        f"{settings.API_V1_STR}/auth/verify-email",
     ]
     
     # Rutas que empiezan con estos prefijos (solo auth)
     public_routes_prefix = [
-        f"{settings.API_V1_STR}/auth/",
+        f"{settings.API_V1_STR}/auth/check-confirmation/",
     ]
     
     # Verificar coincidencia exacta
