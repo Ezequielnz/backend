@@ -1,40 +1,11 @@
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-import ssl
+"""
+session.py — Re-exporta engine y sesión desde local_db.py
+===========================================================
+Mantenido por compatibilidad con código existente que importa desde aquí.
+La implementación real vive en app.db.local_db.
+"""
 
-from app.core.config import settings
+from app.db.local_db import engine, SessionLocal, get_db  # noqa: F401
 
-# Get the database URL from settings
-SQLALCHEMY_DATABASE_URL = settings.DATABASE_URL
-
-# Configure database engine
-connect_args = {}
-if SQLALCHEMY_DATABASE_URL.startswith("sqlite"):
-    # Only for SQLite, we need this argument
-    connect_args = {"check_same_thread": False}
-elif SQLALCHEMY_DATABASE_URL.startswith("postgresql"):
-    # For PostgreSQL with Supabase Session Pooler, configure SSL
-    connect_args = {
-        "sslmode": "require",
-        "ssl_context": ssl.create_default_context()
-    }
-
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL, 
-    connect_args=connect_args,
-    pool_size=5,  # Connection pool size
-    max_overflow=10,  # Maximum overflow connections
-    pool_timeout=30,  # Timeout for getting a connection from the pool
-    pool_recycle=1800  # Recycle connections after 30 minutes
-)
-
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-
-# Dependency
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close() 
+# Alias legacy que algunos módulos internos esperan
+SQLALCHEMY_DATABASE_URL = str(engine.url)

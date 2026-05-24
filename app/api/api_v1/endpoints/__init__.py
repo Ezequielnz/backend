@@ -1,27 +1,26 @@
 """
 API v1 endpoints package.
-Imports all endpoint modules for the API router.
 """
 
 from . import (
     auth,
+    branch_settings,
     businesses,
-    ventas,
-    stock,
-    facturacion,
-    tareas,
-    comunicacion,
-    productos,
     categorias,
     clientes,
-    servicios,
-    suscripciones,
-    importacion,
-    permissions,
-    finanzas,
+    comunicacion,
     compras,
+    facturacion,
+    finanzas,
+    importacion,
+    metodos_pago,
+    permissions,
+    productos,
     proveedores,
+    servicios,
+    stock,
+    stock_transfers,
+    tareas,
     tenant_settings,
-    notifications,
-    action
+    ventas,
 )

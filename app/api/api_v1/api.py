@@ -1,7 +1,29 @@
 from fastapi import APIRouter
-from app.api.api_v1.endpoints import auth, branch_settings, businesses, ventas, stock, facturacion, tareas, comunicacion, productos, categorias, clientes, servicios, suscripciones, importacion, permissions, finanzas, compras, proveedores, tenant_settings, notifications, action, monitoring, stock_transfers, metodos_pago
+from app.api.api_v1.endpoints import (
+    auth,
+    branch_settings,
+    businesses,
+    categorias,
+    clientes,
+    comunicacion,
+    compras,
+    facturacion,
+    finanzas,
+    importacion,
+    metodos_pago,
+    permissions,
+    productos,
+    proveedores,
+    servicios,
+    stock,
+    stock_transfers,
+    tareas,
+    tenant_settings,
+    ventas,
+)
 
 api_router = APIRouter()
+
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
 api_router.include_router(businesses.router, prefix="/businesses", tags=["businesses"])
 api_router.include_router(branch_settings.router, prefix="/businesses/{business_id}/branch-settings", tags=["branch-settings"])
@@ -18,12 +40,8 @@ api_router.include_router(productos.router, prefix="/businesses/{business_id}/pr
 api_router.include_router(categorias.router, prefix="/businesses/{business_id}/categories", tags=["categories"])
 api_router.include_router(clientes.router, prefix="/businesses/{business_id}/clientes", tags=["clientes"])
 api_router.include_router(servicios.router, prefix="/businesses/{business_id}/services", tags=["servicios"])
-api_router.include_router(suscripciones.router, prefix="/businesses/{business_id}/subscriptions", tags=["suscripciones"])
 api_router.include_router(importacion.router, prefix="/businesses/{business_id}/import", tags=["import"])
 api_router.include_router(permissions.router, prefix="", tags=["permissions"])
 api_router.include_router(finanzas.router, prefix="/businesses/{business_id}/finanzas", tags=["finanzas"])
 api_router.include_router(tenant_settings.router, prefix="/businesses/{business_id}/tenant-settings", tags=["tenant-settings"])
-api_router.include_router(notifications.router, prefix="/notifications", tags=["notifications"])
-api_router.include_router(action.router, prefix="/actions", tags=["actions"])
-api_router.include_router(monitoring.router, prefix="/monitoring", tags=["monitoring"])
 api_router.include_router(metodos_pago.router, prefix="/businesses/{business_id}/payment-methods", tags=["payment-methods"])

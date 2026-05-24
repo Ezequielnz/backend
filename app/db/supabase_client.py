@@ -1,244 +1,160 @@
-from supabase.client import create_client, Client
-from functools import lru_cache
-import os
+"""
+supabase_client.py — SHIM DE COMPATIBILIDAD (DEPRECADO)
+=========================================================
+Este archivo ya NO contiene lógica de Supabase.
 
-from app.core.config import settings
-from collections.abc import Mapping, Sequence
-from typing import Protocol, Callable, cast
+Propósito: evitar ImportError en archivos que todavía importan desde
+aquí y serán eliminados en la Fase 1 Tarea 5 (limpieza de services/workers ML).
 
-@lru_cache()
-def get_supabase_client() -> Client:
+IMPORTANTE: No usar estas funciones en código nuevo.
+            Importar desde app.db.local_db en su lugar.
+
+Mapa de reemplazos:
+    get_supabase_client()      → get_db() / SessionLocal (app.db.local_db)
+    get_supabase_service_client() → get_db() (mismo engine, sin RLS en desktop)
+    get_supabase_anon_client() → get_db()
+    get_supabase_user_client() → get_db()
+    get_table()                → db.query(Model) (SQLAlchemy ORM)
+    check_supabase_connection() → check_db_connection() (app.db.local_db)
+    TableQueryProto            → Session (sqlalchemy.orm)
+    APIResponseProto           → (no tiene equivalente, acceso directo ORM)
+"""
+
+import logging
+from typing import Any
+
+from app.db.local_db import (  # noqa: F401
+    SessionLocal,
+    check_db_connection as check_supabase_connection,
+    engine,
+    get_db,
+)
+
+logger = logging.getLogger(__name__)
+
+_DEPRECATION_MSG = (
+    "[DEPRECADO] supabase_client.%s() fue llamado. "
+    "Migrar a app.db.local_db. Este shim será eliminado en Fase 3."
+)
+
+
+# ---------------------------------------------------------------------------
+# Stubs de las funciones Supabase — retornan None / False con warning
+# ---------------------------------------------------------------------------
+
+class _NullClient:
     """
-    Create and return a Supabase client using the configuration from settings.
-    Uses lru_cache to cache the client and avoid creating a new one for each request.
-    This client is typically used for operations that don't require user authentication (e.g., public reads, auth operations themselves).
+    Objeto nulo que absorbe las llamadas al cliente Supabase sin crashear.
+    Permite que el proceso arranque aunque código legacy aún importe estas funciones.
+    Cualquier operación real sobre este objeto fallará con un error claro.
     """
-    url = settings.SUPABASE_URL
-    key = settings.SUPABASE_KEY
-    
-    print("=== Creando cliente Supabase Base ===")
-    print(f"URL: {url}")
-    print(f"KEY: {'*'*(len(key)//4) if key else 'No configurada'}")
-    
-    # Verificar que las credenciales están configuradas
-    if not url:
-        raise ValueError("SUPABASE_URL no está configurado en variables de entorno o .env")
-    
-    if not key:
-        raise ValueError("SUPABASE_KEY no está configurado en variables de entorno o .env")
-    
-    try:
-        # Crear cliente Supabase
-        client = create_client(url, key)
-        print("[OK] Cliente Supabase Base creado exitosamente")
-        return client
-    except Exception as e:
-        print(f"[ERROR] Error al crear cliente Supabase Base: {str(e)}")
-        print(f"Tipo de error: {type(e)}")
-        raise
 
-# Lightweight protocols to type Supabase responses and table query builders we use.
-class APIResponseProto(Protocol):
+    def table(self, name: str) -> "_NullTable":
+        return _NullTable(name)
+
     @property
-    def data(self) -> list[dict[str, object]] | None: ...
+    def auth(self):
+        return _NullAuth()
 
-class TableQueryProto(Protocol):
-    def select(self, columns: str) -> "TableQueryProto": ...
-    def eq(self, column: str, value: object) -> "TableQueryProto": ...
-    def gte(self, column: str, value: object) -> "TableQueryProto": ...
-    def lte(self, column: str, value: object) -> "TableQueryProto": ...
-    def order(self, column: str, desc: bool = False) -> "TableQueryProto": ...
-    def limit(self, n: int) -> "TableQueryProto": ...
-    def insert(
-        self,
-        data: Mapping[str, object] | Sequence[Mapping[str, object]],
-        *,
-        count: object | None = None,
-        returning: object | None = None,
-        upsert: bool = False,
-    ) -> "TableQueryProto": ...
-    def upsert(
-        self,
-        data: Mapping[str, object] | Sequence[Mapping[str, object]],
-        *,
-        on_conflict: str | None = None,
-        returning: object | None = None,
-    ) -> "TableQueryProto": ...
-    def update(self, data: Mapping[str, object]) -> "TableQueryProto": ...
-    def delete(self) -> "TableQueryProto": ...
-    def execute(self) -> APIResponseProto: ...
+    def __repr__(self) -> str:
+        return "<NullClient: Supabase reemplazado por SQLite>"
 
-class HasAuth(Protocol):
-    def auth(self, token: str) -> object: ...
 
-class HasSetAuth(Protocol):
-    def set_auth(self, token: str) -> object: ...
+class _NullTable:
+    def __init__(self, name: str):
+        self._name = name
 
-class HasSetAuthHeaders(Protocol):
-    def _set_auth_headers(self, headers: Mapping[str, str]) -> object: ...
+    def _warn(self, method: str) -> "_NullTable":
+        logger.error(
+            "[supabase_client shim] Llamada a tabla '%s'.%s() — "
+            "este código debe ser migrado a SQLAlchemy ORM.",
+            self._name, method
+        )
+        return self
 
-@lru_cache()
-def get_supabase_service_client() -> Client:
-    """
-    Create and return a Supabase client using the Service Role key.
-    Use this ONLY for server-side operations where RLS must be bypassed,
-    e.g., automatic finance movements on purchase creation.
-    """
-    url = settings.SUPABASE_URL
-    service_key = settings.SUPABASE_SERVICE_ROLE_KEY or settings.SUPABASE_KEY
-    
-    print("=== Creando cliente Supabase Service ===")
-    print(f"URL: {url}")
-    print(f"SERVICE_KEY: {'*'*(len(service_key)//4) if service_key else 'No configurada'}")
-    
-    if not url:
-        raise ValueError("SUPABASE_URL no está configurado en variables de entorno o .env")
-    if not service_key:
-        raise ValueError("SUPABASE_SERVICE_ROLE_KEY o SUPABASE_KEY no están configurados")
-    
-    try:
-        client = create_client(url, service_key)
-        print("[OK] Cliente Supabase Service creado exitosamente")
-        return client
-    except Exception as e:
-        print(f"[ERROR] Error al crear cliente Supabase Service: {str(e)}")
-        print(f"Tipo de error: {type(e)}")
-        raise
+    def select(self, *a, **kw) -> "_NullTable": return self._warn("select")
+    def eq(self, *a, **kw) -> "_NullTable": return self._warn("eq")
+    def neq(self, *a, **kw) -> "_NullTable": return self._warn("neq")
+    def gte(self, *a, **kw) -> "_NullTable": return self._warn("gte")
+    def lte(self, *a, **kw) -> "_NullTable": return self._warn("lte")
+    def gt(self, *a, **kw) -> "_NullTable": return self._warn("gt")
+    def lt(self, *a, **kw) -> "_NullTable": return self._warn("lt")
+    def order(self, *a, **kw) -> "_NullTable": return self._warn("order")
+    def limit(self, *a, **kw) -> "_NullTable": return self._warn("limit")
+    def offset(self, *a, **kw) -> "_NullTable": return self._warn("offset")
+    def insert(self, *a, **kw) -> "_NullTable": return self._warn("insert")
+    def upsert(self, *a, **kw) -> "_NullTable": return self._warn("upsert")
+    def update(self, *a, **kw) -> "_NullTable": return self._warn("update")
+    def delete(self, *a, **kw) -> "_NullTable": return self._warn("delete")
+    def in_(self, *a, **kw) -> "_NullTable": return self._warn("in_")
+    def ilike(self, *a, **kw) -> "_NullTable": return self._warn("ilike")
+    def or_(self, *a, **kw) -> "_NullTable": return self._warn("or_")
+    def is_(self, *a, **kw) -> "_NullTable": return self._warn("is_")
+    def not_(self, *a, **kw) -> "_NullTable": return self._warn("not_")
+    def contains(self, *a, **kw) -> "_NullTable": return self._warn("contains")
+    def execute(self) -> "_NullResponse": return _NullResponse()
 
-def get_supabase_anon_client() -> Client:
-    """
-    Create and return a Supabase client using the anon key for user registration.
-    This ensures auth.uid() is null during registration, allowing RLS policies to work correctly.
-    """
-    url = settings.SUPABASE_URL
-    # Use anon key instead of service key for registration
-    anon_key = os.getenv("SUPABASE_ANON_KEY", settings.SUPABASE_KEY)
-    
-    print("=== Creando cliente Supabase Anónimo ===")
-    print(f"URL: {url}")
-    print(f"ANON_KEY: {'*'*(len(anon_key)//4) if anon_key else 'No configurada'}")
-    
-    if not url or not anon_key:
-        raise ValueError("SUPABASE_URL o SUPABASE_ANON_KEY no están configurados")
-    
-    try:
-        # Crear cliente Supabase con anon key
-        client = create_client(url, anon_key)
-        print("[OK] Cliente Supabase Anonimo creado exitosamente")
-        return client
-    except Exception as e:
-        print(f"[ERROR] Error al crear cliente Supabase Anonimo: {str(e)}")
-        print(f"Tipo de error: {type(e)}")
-        raise
 
-def get_supabase_user_client(user_token: str) -> Client:
-    """
-    Create and return a Supabase client with user authentication.
-    This client will use the user's token for RLS-protected operations.
-    """
-    url = settings.SUPABASE_URL
-    # Use anon key for user client - this is the correct approach
-    anon_key = settings.SUPABASE_ANON_KEY or settings.SUPABASE_KEY
-    
-    print("=== Creando cliente Supabase con token de usuario ===")
-    print(f"URL: {url}")
-    print(f"ANON_KEY: {'*'*(len(anon_key)//4) if anon_key else 'No configurada'}")
-    
-    if not url or not anon_key:
-         raise ValueError("SUPABASE_URL o SUPABASE_ANON_KEY no están configurados")
-    
-    # Asegurar que el token esté limpio (sin 'Bearer ' al inicio)
-    clean_token = user_token
-    if clean_token and clean_token.startswith('Bearer '):
-        clean_token = clean_token[7:]
-    
-    print(f"Token procesado (primeros 10 chars): {clean_token[:10] if clean_token else 'None'}...")
-    
-    try:
-        # Create client with anon key
-        client = create_client(url, anon_key)
-        
-        # Set authorization header on the client based on version
-        # Different versions of supabase-py have different structures
-        try:
-            # postgrest.auth(token)
-            postgrest_obj = cast(object, getattr(client, 'postgrest', None))
-            if postgrest_obj is not None:
-                _ = cast(HasAuth, postgrest_obj).auth(clean_token)
-                print("[OK] Token establecido en cliente postgrest")
-        except Exception as e:
-            print(f"[ERROR] No se pudo establecer token en cliente postgrest: {e}")
-        
-        # Establecer el token también en el cliente auth si está disponible
-        auth_obj = cast(object, getattr(client, 'auth', None))
-        if auth_obj is not None:
-            token_configured = False
-            if hasattr(auth_obj, 'set_auth'):
-                try:
-                    _ = cast(HasSetAuth, auth_obj).set_auth(clean_token)
-                    print("[OK] Token establecido en cliente auth mediante set_auth")
-                    token_configured = True
-                except Exception as auth_error:
-                    print(f"[AVISO] No se pudo usar set_auth en cliente auth: {auth_error}")
-            if not token_configured and hasattr(auth_obj, '_set_auth_headers'):
-                try:
-                    _ = cast(HasSetAuthHeaders, auth_obj)._set_auth_headers({  # pyright: ignore[reportPrivateUsage]
-                        "Authorization": f"Bearer {clean_token}"
-                    })
-                    print("[OK] Token establecido en cliente auth mediante _set_auth_headers")
-                    token_configured = True
-                except Exception as auth_error:
-                    print(f"[AVISO] No se pudo usar _set_auth_headers en cliente auth: {auth_error}")
-            if not token_configured:
-                print("[AVISO] Cliente auth no soporta métodos set_auth ni _set_auth_headers; se omite configuración adicional.")
-        
-        # Enfoque adicional para versiones más recientes de supabase-py
-        try:
-            rest_obj = cast(object, getattr(client, 'rest', None))
-            if rest_obj is not None:
-                _ = cast(HasAuth, rest_obj).auth(clean_token)
-                print("[OK] Token establecido en cliente rest")
-        except Exception as e:
-            print(f"[AVISO] No se pudo establecer token en cliente rest: {e}")
-                
-        print("[OK] Cliente Supabase con token de usuario creado exitosamente")
-        return client
-    except Exception as e:
-        print(f"[ERROR] Error al crear cliente Supabase con token: {str(e)}")
-        print(f"Tipo de error: {type(e)}")
-        raise
+class _NullResponse:
+    """Respuesta nula que evita AttributeError en código que hace .data."""
+    @property
+    def data(self) -> list:
+        return []
 
-# Convenience function to get a table (consider if this should use user client or base client)
-# Current implementation uses the base client - modify if RLS applies to basic table access
-def get_table(table_name: str) -> TableQueryProto:
-    """
-    Get a reference to a Supabase table using the base client.
-    Use get_supabase_user_client for RLS-protected operations.
-    """
-    client = get_supabase_client()
-    table_fn = cast(Callable[[str], object], getattr(client, "table"))
-    return cast(TableQueryProto, table_fn(table_name))
+    @property
+    def count(self) -> int:
+        return 0
 
-# Función para verificar la conexión a Supabase
-def check_supabase_connection() -> bool:
-    """
-    Verifica si la conexión a Supabase está correctamente configurada usando el cliente base.
-    """
-    try:
-        _ = get_supabase_client()
-        # Intentar realizar una operación más simple, como listar tablas disponibles
-        # o consultar una tabla que sabemos que existe
-        try:
-            # Intentar obtener registro de la tabla usuarios (limitado a 1)
-            _ = get_table("usuarios").select("*").limit(1).execute()
-            # print(f"✅ Conexión correcta - consulta a 'usuarios' ejecutada") # Too verbose
-            return True
-        except Exception:
-            # print(f"Error al consultar tabla durante check: {str(table_error)}") # Too verbose
-            # Aún si no se puede consultar la tabla, la conexión podría estar bien
-            # La tabla podría no existir todavía o RLS podría estar interfiriendo sin token
-            # Return True for base connection check even on table access error if client created
-            return True # Assume base client connection is ok if get_supabase_client didn't fail
-    except Exception as e:
-        print(f"[ERROR] Error de conexion con Supabase (check): {str(e)}")
-        return False 
+
+class _NullAuth:
+    def get_user(self, *a, **kw) -> None:
+        return None
+
+    def sign_in_with_password(self, *a, **kw) -> None:
+        return None
+
+    def sign_out(self, *a, **kw) -> None:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Protocol stubs para código que importa los tipos
+# ---------------------------------------------------------------------------
+
+class TableQueryProto:  # type: ignore[misc]
+    """Stub de tipo para compatibilidad de imports. No usar."""
+    pass
+
+
+class APIResponseProto:  # type: ignore[misc]
+    """Stub de tipo para compatibilidad de imports. No usar."""
+    data: list = []
+
+
+# ---------------------------------------------------------------------------
+# Funciones públicas del shim
+# ---------------------------------------------------------------------------
+
+def get_supabase_client() -> _NullClient:
+    logger.warning(_DEPRECATION_MSG, "get_supabase_client")
+    return _NullClient()
+
+
+def get_supabase_service_client() -> _NullClient:
+    logger.warning(_DEPRECATION_MSG, "get_supabase_service_client")
+    return _NullClient()
+
+
+def get_supabase_anon_client() -> _NullClient:
+    logger.warning(_DEPRECATION_MSG, "get_supabase_anon_client")
+    return _NullClient()
+
+
+def get_supabase_user_client(user_token: str = "") -> _NullClient:
+    logger.warning(_DEPRECATION_MSG, "get_supabase_user_client")
+    return _NullClient()
+
+
+def get_table(table_name: str) -> _NullTable:
+    logger.warning(_DEPRECATION_MSG, "get_table")
+    return _NullTable(table_name)
