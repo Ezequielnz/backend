@@ -16,7 +16,6 @@ from app.db.supabase_client import (
 from app.schemas.business import BusinessCreate, Business
 from app.schemas.branch import Branch, BranchCreate, BranchUpdate
 from app.schemas.invitacion import InvitacionCreate, InvitacionResponse, UsuarioNegocioUpdate
-from supabase.lib.client_options import ClientOptions
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)

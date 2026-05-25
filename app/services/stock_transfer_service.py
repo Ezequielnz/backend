@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Any, Dict, Iterable, List, Optional
 from uuid import UUID, uuid4
 
-from app.db.scoped_client import ScopedSupabaseClient
+from app.api.context import ScopedSupabaseClient
 from app.schemas.branch_settings import BranchSettings
 from app.schemas.stock_transfer import (
     StockTransfer,

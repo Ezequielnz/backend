@@ -11,7 +11,7 @@ import time
 import asyncio
 
 from app.db.supabase_client import get_supabase_user_client
-from app.db.scoped_client import get_scoped_supabase_user_client
+from app.api.context import ScopedSupabaseClient
 from app.dependencies import PermissionDependency
 from app.api.context import BusinessBranchContextDep
 from app.core.permissions import check_subscription_access

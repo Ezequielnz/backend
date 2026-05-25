@@ -1,5 +1,5 @@
 from typing import List, Dict, Any, Optional, Tuple
-from app.db.scoped_client import ScopedSupabaseClient
+from app.api.context import ScopedSupabaseClient
 from app.services.importacion_excel import ExcelProcessor
 from app.schemas.importacion import (
     ProductoImportacionTemporal, 

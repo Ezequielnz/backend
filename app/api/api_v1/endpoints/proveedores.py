@@ -1,6 +1,6 @@
 from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Query, Response
-from app.db.scoped_client import get_scoped_supabase_user_client
+from app.api.context import ScopedSupabaseClient
 from app.schemas.proveedor import Proveedor, ProveedorCreate, ProveedorUpdate
 from app.dependencies import PermissionDependency
 

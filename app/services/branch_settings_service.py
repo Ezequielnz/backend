@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from app.db.scoped_client import ScopedSupabaseClient
+from app.api.context import ScopedSupabaseClient
 from app.schemas.branch_settings import BranchSettings, BranchSettingsUpdate
 
 

@@ -1,11 +1,22 @@
+"""
+context.py — Contexto de negocio/sucursal para endpoints
+==========================================================
+Versión desktop: ScopedSupabaseClient es un alias del NullClient del shim.
+Toda la lógica de "scoping" vía RLS ha sido simplificada.
+Será reemplazado en Fase 3 cuando los endpoints migren a SQLAlchemy ORM.
+"""
 from typing import Any, NamedTuple, Optional
 
 import jwt
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel
 
-from app.db.scoped_client import ScopedSupabaseClient, get_scoped_supabase_user_client
-from app.db.supabase_client import get_supabase_user_client
+from app.db.supabase_client import get_supabase_user_client, _NullClient
+
+# En desktop, ScopedSupabaseClient = el NullClient del shim.
+# Se mantiene el alias para que los endpoints que hacen
+# `from app.api.context import ScopedClientContext` sigan importando.
+ScopedSupabaseClient = _NullClient
 
 
 class BusinessBranchContext(BaseModel):
@@ -30,22 +41,28 @@ def get_user_id_from_token(token: str) -> str:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Invalid token: {e}")
 
 
-async def BusinessBranchContextDep(request: Request, business_id: str, branch_id: Optional[str] = None) -> BusinessBranchContext:
+async def BusinessBranchContextDep(
+    request: Request,
+    business_id: str,
+    branch_id: Optional[str] = None,
+) -> BusinessBranchContext:
+    """
+    Dependency para validar contexto de negocio.
+    En modo desktop usa el shim — la lógica real de auth será Fase 3.
+    """
     token = request.headers.get("Authorization", "")
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authorization header missing")
+
     client = get_supabase_user_client(token)
     user_id = get_user_id_from_token(token)
 
-    from_header = False
-    # Allow branch to be provided via header when not in path/query.
     if not branch_id:
         header_branch = request.headers.get("X-Branch-Id") or request.headers.get("X-Sucursal-Id")
         if header_branch:
             branch_id = header_branch
-            from_header = True
 
-    # Verify business membership
+    # Membership verification via shim (retorna [] — no bloquea el flujo en desktop)
     user_business = (
         client.table("usuarios_negocios")
         .select("id, negocio_id, estado, rol")
@@ -55,51 +72,19 @@ async def BusinessBranchContextDep(request: Request, business_id: str, branch_id
         .limit(1)
         .execute()
     )
-    if not user_business.data:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User not a member of this business")
-    business_record = user_business.data[0]
-    usuario_negocio_id = business_record["id"]
-    user_role = business_record.get("rol") or "empleado"
+    # Shim retorna data=[] — en desktop usamos fallback: user_role=admin
+    if user_business.data:
+        business_record = user_business.data[0]
+        usuario_negocio_id = business_record["id"]
+        user_role = business_record.get("rol") or "admin"
+    else:
+        usuario_negocio_id = "local"
+        user_role = "admin"  # desktop: usuario único siempre es admin
 
-    # If branch specified, verify assignment
-    if branch_id:
-        user_branch = (
-            client.table("usuarios_sucursales")
-            .select("id")
-            .eq("usuario_id", user_id)
-            .eq("negocio_id", business_id)
-            .eq("sucursal_id", branch_id)
-            .eq("activo", True)
-            .limit(1)
-            .execute()
-        )
-        if not user_branch.data:
-            # If the branch came from the header and is invalid, we ignore it
-            # instead of raising 403. This prevents stale headers from breaking
-            # business-level endpoints.
-            if from_header:
-                print(f"⚠️ Warning: User {user_id} sent invalid branch header {branch_id}. Ignoring.")
-                branch_id = None
-            else:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User not assigned to this branch")
-
-    # Retrieve branch settings (negocio_configuracion)
-    settings_response = (
-        client.table("negocio_configuracion")
-        .select(
-            "negocio_id, inventario_modo, servicios_modo, catalogo_producto_modo, permite_transferencias, transferencia_auto_confirma, default_branch_id, metadata, created_at, updated_at"
-        )
-        .eq("negocio_id", business_id)
-        .limit(1)
-        .execute()
-    )
-    branch_settings = settings_response.data[0] if settings_response.data else None
-
-    # Set context into request.state for downstream usage
     setattr(request.state, "company_id", business_id)
     setattr(request.state, "branch_id", branch_id)
     setattr(request.state, "user_role", user_role)
-    setattr(request.state, "branch_settings", branch_settings)
+    setattr(request.state, "branch_settings", None)
 
     return BusinessBranchContext(
         user_id=user_id,
@@ -107,7 +92,7 @@ async def BusinessBranchContextDep(request: Request, business_id: str, branch_id
         branch_id=branch_id,
         usuario_negocio_id=usuario_negocio_id,
         user_role=user_role,
-        branch_settings=branch_settings,
+        branch_settings=None,
     )
 
 
@@ -130,12 +115,10 @@ async def BusinessScopedClientDep(
     request: Request,
     business_id: str,
 ) -> ScopedClientContext:
-    """
-    Dependency that returns a scoped Supabase client plus the validated business context.
-    """
+    """Dependency que devuelve un NullClient + contexto validado de negocio."""
     token = _extract_authorization_token(request)
     context = await BusinessBranchContextDep(request, business_id)
-    client = get_scoped_supabase_user_client(token, context.business_id)
+    client = get_supabase_user_client(token)
     setattr(request.state, "scoped_supabase_client", client)
     return ScopedClientContext(client=client, context=context)
 
@@ -145,25 +128,20 @@ async def BranchScopedClientDep(
     business_id: str,
     branch_id: str,
 ) -> ScopedClientContext:
-    """
-    Dependency that validates business + branch membership and returns a scoped client.
-    """
+    """Dependency que valida negocio + sucursal y devuelve NullClient + contexto."""
     token = _extract_authorization_token(request)
     context = await BusinessBranchContextDep(request, business_id, branch_id)
-    client = get_scoped_supabase_user_client(token, context.business_id, context.branch_id)
+    client = get_supabase_user_client(token)
     setattr(request.state, "scoped_supabase_client", client)
     return ScopedClientContext(client=client, context=context)
 
 
 def scoped_client_from_request(request: Request) -> ScopedSupabaseClient:
-    """
-    Helper to reuse the scoped client set by BusinessScopedClientDep/BranchScopedClientDep.
-    Raises an HTTP 500 if the dependency was not executed beforehand.
-    """
+    """Helper para reutilizar el cliente ya inyectado por los Deps anteriores."""
     client = getattr(request.state, "scoped_supabase_client", None)
     if client is None:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Scoped Supabase client not initialised for this request",
+            detail="Scoped client not initialised for this request",
         )
     return client

@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from app.api import deps
 from app.schemas.metodo_pago import MetodoPagoCreate, MetodoPagoUpdate, MetodoPagoResponse
 from app.models.supabase_models import MetodoPago
-from app.db.scoped_client import get_scoped_supabase_user_client
+from app.api.context import ScopedSupabaseClient
 from app.db.supabase_client import get_supabase_anon_client
 from app.dependencies import PermissionDependency
 import datetime

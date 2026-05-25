@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request, Response
 from app.types.auth import User
 from app.api.deps import get_current_user
 from app.db.supabase_client import get_supabase_client
-from app.db.scoped_client import get_scoped_supabase_user_client
+from app.api.context import ScopedSupabaseClient
 from app.schemas.categoria import CategoriaCreate, CategoriaUpdate, Categoria
 from app.dependencies import verify_permission, PermissionDependency
 

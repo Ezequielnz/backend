@@ -1,89 +1,33 @@
 """
-Módulo para operaciones administrativas de Supabase
-Incluye funciones que requieren permisos de administrador
+supabase_admin.py — STUB (DEPRECADO)
+=====================================
+En la arquitectura desktop no hay Supabase Admin API.
+Este módulo expone un stub nulo para que los imports existentes
+en auth.py no rompan el servidor mientras se migra el endpoint.
 """
-import os
-import httpx
-from typing import Optional
-from app.core.config import settings
+import logging
 
-class SupabaseAdmin:
-    def __init__(self):
-        self.project_url = settings.SUPABASE_URL
-        # Usar service role key si está disponible, sino usar la key normal
-        self.service_role_key = settings.SUPABASE_SERVICE_ROLE_KEY or settings.SUPABASE_KEY
-        self.headers = {
-            "Authorization": f"Bearer {self.service_role_key}",
-            "Content-Type": "application/json",
-            "apikey": self.service_role_key
-        }
-    
-    async def delete_auth_user(self, user_id: str) -> bool:
-        """
-        Eliminar usuario de auth.users usando la API de administración
-        """
-        try:
-            print(f"🗑️ Eliminando usuario {user_id} de auth.users...")
-            
-            async with httpx.AsyncClient() as client:
-                # URL para eliminar usuario usando la API de administración
-                url = f"{self.project_url}/auth/v1/admin/users/{user_id}"
-                
-                response = await client.delete(url, headers=self.headers)
-                
-                if response.status_code == 200:
-                    print(f"✅ Usuario {user_id} eliminado de auth.users")
-                    return True
-                elif response.status_code == 404:
-                    print(f"⚠️ Usuario {user_id} no encontrado en auth.users (ya eliminado)")
-                    return True
-                else:
-                    print(f"❌ Error eliminando usuario de auth.users: {response.status_code} - {response.text}")
-                    return False
-                    
-        except Exception as e:
-            print(f"❌ Excepción eliminando usuario de auth.users: {e}")
-            return False
-    
-    async def update_user(self, user_id: str, attributes: dict) -> Optional[dict]:
-        """
-        Actualizar usuario en auth.users usando la API de administración
-        """
-        try:
-            async with httpx.AsyncClient() as client:
-                url = f"{self.project_url}/auth/v1/admin/users/{user_id}"
-                
-                response = await client.put(url, headers=self.headers, json=attributes)
-                
-                if response.status_code == 200:
-                    return response.json()
-                else:
-                    print(f"❌ Error actualizando usuario en auth.users: {response.status_code} - {response.text}")
-                    return None
-                    
-        except Exception as e:
-            print(f"❌ Error actualizando usuario en auth.users: {e}")
-            return None
+logger = logging.getLogger(__name__)
 
-    
-    async def get_auth_user(self, user_id: str) -> Optional[dict]:
-        """
-        Obtener información de usuario de auth.users
-        """
-        try:
-            async with httpx.AsyncClient() as client:
-                url = f"{self.project_url}/auth/v1/admin/users/{user_id}"
-                
-                response = await client.get(url, headers=self.headers)
-                
-                if response.status_code == 200:
-                    return response.json()
-                else:
-                    return None
-                    
-        except Exception as e:
-            print(f"❌ Error obteniendo usuario de auth.users: {e}")
-            return None
 
-# Instancia global
-supabase_admin = SupabaseAdmin() 
+class _NullSupabaseAdmin:
+    """Objeto nulo — todas las operaciones son no-op con warning."""
+
+    async def get_auth_user(self, user_id: str) -> dict | None:
+        logger.warning("[supabase_admin stub] get_auth_user('%s') llamado — no operativo en modo desktop.", user_id)
+        return None
+
+    async def update_user(self, user_id: str, attributes: dict) -> dict | None:
+        logger.warning("[supabase_admin stub] update_user('%s') llamado — no operativo en modo desktop.", user_id)
+        return None
+
+    async def delete_user(self, user_id: str) -> bool:
+        logger.warning("[supabase_admin stub] delete_user('%s') llamado — no operativo en modo desktop.", user_id)
+        return False
+
+    async def list_users(self) -> list:
+        logger.warning("[supabase_admin stub] list_users() llamado — no operativo en modo desktop.")
+        return []
+
+
+supabase_admin = _NullSupabaseAdmin()

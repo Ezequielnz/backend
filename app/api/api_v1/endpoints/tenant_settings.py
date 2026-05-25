@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.responses import JSONResponse
 import jwt
 
-from app.db.scoped_client import get_scoped_supabase_user_client
+from app.api.context import ScopedSupabaseClient
 from app.dependencies import PermissionDependency
 from app.schemas.tenant_settings import TenantSettingsCreate, TenantSettingsUpdate, TenantSettings
 

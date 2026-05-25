@@ -4,7 +4,7 @@ from pydantic import BaseModel, ValidationError
 from app.types.auth import User
 from app.api.deps import get_current_user_from_request as get_current_user
 from app.db.supabase_client import get_supabase_anon_client
-from app.db.scoped_client import get_scoped_supabase_user_client
+from app.api.context import ScopedSupabaseClient
 from app.schemas.producto import ProductoCreate, ProductoUpdate, Producto
 from app.dependencies import PermissionDependency
 from app.core.permissions import check_subscription_access
