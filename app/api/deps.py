@@ -137,7 +137,7 @@ async def verify_business_access(business_id: str, user: User, authorization: Op
         user_id,
         business_id,
         bool(token),
-        bool(settings.SUPABASE_SERVICE_ROLE_KEY),
+        True,  # desktop: sin RLS de Supabase
     )
     supabase = get_supabase_user_client(token) if token else get_supabase_client()
     try:
@@ -171,7 +171,7 @@ async def verify_business_access(business_id: str, user: User, authorization: Op
             "[access] Membership missing for user=%s business=%s (RLS active=%s)",
             user_id,
             business_id,
-            not bool(settings.SUPABASE_SERVICE_ROLE_KEY),
+            not True,  # desktop: RLS no aplica
         )
         raise HTTPException(status_code=403, detail="Sin acceso al negocio")
     return access.data[0]
