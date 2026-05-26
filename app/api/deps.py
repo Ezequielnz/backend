@@ -1,121 +1,202 @@
-from typing import Dict, Any, Optional, TypedDict
+"""
+deps.py — Dependencias de FastAPI
+===================================
+FASE 2: Auth 100% local. Sin Supabase.
+
+En la versión desktop el sistema tiene:
+  - Un único negocio por instalación.
+  - Un único usuario (el dueño del negocio) con rol "admin".
+  - Sin RLS ni permisos multi-tenant.
+
+Por eso las funciones de verificación de acceso se simplifican:
+la única pregunta es "¿el token es válido y el usuario está activo?".
+Las interfaces públicas (firmas de funciones) se mantienen para no
+romper los endpoints existentes mientras se migran en la Fase 3.
+"""
+
+from typing import Any, Dict, Optional, TypedDict
 import logging
-from fastapi import Depends, HTTPException, status, Request
-from fastapi.security import OAuth2PasswordBearer, HTTPBearer
 
-# Importaciones necesarias
-from app.db.session import get_db 
-from app.db.supabase_client import get_supabase_client, get_supabase_user_client
-from app.types.auth import User
+import jwt
+from fastapi import Depends, HTTPException, Request, status
+from fastapi.security import HTTPBearer, OAuth2PasswordBearer
+from sqlalchemy.orm import Session
+
 from app.core.config import settings
-
-print("--- DEPS.PY RECREADO DESDE CERO ---")
+from app.db.session import get_db
+from app.models.orm_models import Usuario
+from app.types.auth import User
 
 logger = logging.getLogger(__name__)
 
-# Definición de tipos para evitar errores en frontend
+
+# ---------------------------------------------------------------------------
+# Tipos
+# ---------------------------------------------------------------------------
+
 class UserData(TypedDict):
     id: str
     email: Optional[str]
-    rol: str
-    activo: bool
     nombre: Optional[str]
     apellido: Optional[str]
+    negocio_id: Optional[str]
+    activo: bool
+    is_active: bool
+    is_superuser: bool
+    rol: str
+    onboarding_completed: bool
+    permisos: list
 
-# Esquema OAuth2
+
+# ---------------------------------------------------------------------------
+# Esquemas de seguridad
+# ---------------------------------------------------------------------------
+
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
+security = HTTPBearer()
 
-async def get_current_user(token: str = Depends(oauth2_scheme)) -> UserData:
+
+# ---------------------------------------------------------------------------
+# get_db — re-exportado para que otros módulos puedan importar desde deps
+# ---------------------------------------------------------------------------
+
+# (ya importado arriba: from app.db.session import get_db)
+
+
+# ---------------------------------------------------------------------------
+# get_current_user  ← DEPENDENCIA PRINCIPAL
+# ---------------------------------------------------------------------------
+
+async def get_current_user(
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+) -> UserData:
     """
-    Obtiene el usuario actual usando SU PROPIO token para respetar RLS.
+    Valida el JWT local (HS256) y devuelve el perfil del usuario desde SQLite.
+    FASE 2: 100% local, sin Supabase Auth.
+
+    Lanza HTTP 401 si:
+    - El token es inválido o está expirado.
+    - El usuario no existe o está desactivado.
     """
+    credentials_exc = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Token inválido o expirado.",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    # 1. Decodificar JWT
     try:
-        # 1. Validar token (Cliente Anónimo)
-        supabase_anon = get_supabase_client()
-        auth_response = supabase_anon.auth.get_user(token)
-        
-        if not auth_response.user:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Token inválido",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        
-        user_id = auth_response.user.id
-        user_email = auth_response.user.email
-
-        # 2. Obtener Perfil (Cliente de Usuario - RLS Safe)
-        # Usamos el token del usuario para que Postgres sepa quién hace la consulta
-        supabase_user = get_supabase_user_client(token)
-        
-        user_response = supabase_user.table("usuarios").select("*").eq("id", user_id).execute()
-        
-        # Si el usuario no existe en la tabla pública, devolvemos datos básicos
-        if not user_response.data:
-            return {
-                "id": user_id,
-                "email": user_email,
-                "rol": "usuario",
-                "activo": True,
-                "nombre": "",
-                "apellido": ""
-            }
-            
-        return user_response.data[0]
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Error crítico en get_current_user: {str(e)}")
+        payload = jwt.decode(
+            token,
+            settings.JWT_SECRET_KEY,
+            algorithms=[settings.JWT_ALGORITHM],
+        )
+        user_id: Optional[str] = payload.get("sub")
+        if not user_id:
+            raise credentials_exc
+    except jwt.ExpiredSignatureError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Error de autenticación",
+            detail="La sesión expiró. Volvé a ingresar.",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    except jwt.InvalidTokenError:
+        raise credentials_exc
 
-# Dependencias adicionales requeridas por otros endpoints
+    # 2. Cargar usuario desde SQLite
+    usuario = db.query(Usuario).filter(
+        Usuario.id == user_id,
+        Usuario.is_active == True,
+    ).first()
 
-async def get_current_active_user(current_user: UserData = Depends(get_current_user)) -> UserData:
+    if not usuario:
+        raise credentials_exc
+
+    logger.debug("[auth] Usuario autenticado: id=%s email=%s", usuario.id, usuario.email)
+
+    # 3. Construir UserData (compatible con el frontend existente)
+    return {
+        "id": usuario.id,
+        "email": usuario.email,
+        "nombre": usuario.nombre,
+        "apellido": usuario.apellido,
+        "negocio_id": usuario.negocio_id,
+        "activo": usuario.is_active,
+        "is_active": usuario.is_active,
+        "is_superuser": usuario.is_superuser,
+        "rol": "admin" if usuario.is_superuser else "usuario",
+        "onboarding_completed": usuario.onboarding_completed,
+        "permisos": [],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Dependencias de conveniencia
+# ---------------------------------------------------------------------------
+
+async def get_current_active_user(
+    current_user: UserData = Depends(get_current_user),
+) -> UserData:
+    """Igual a get_current_user pero falla con 403 si el usuario está inactivo."""
     if not current_user.get("activo", True):
-        raise HTTPException(status_code=403, detail="Usuario inactivo")
+        raise HTTPException(status_code=403, detail="Usuario inactivo.")
     return current_user
 
-async def get_admin_user(current_user: UserData = Depends(get_current_active_user)) -> UserData:
+
+async def get_admin_user(
+    current_user: UserData = Depends(get_current_active_user),
+) -> UserData:
+    """Solo permite el paso a usuarios con rol 'admin'."""
     if current_user.get("rol") != "admin":
-        raise HTTPException(status_code=403, detail="Se requieren permisos de administrador")
+        raise HTTPException(status_code=403, detail="Se requieren permisos de administrador.")
     return current_user
 
-# Helpers para endpoints que verifican acceso
+
+async def get_current_tenant_id(
+    current_user: UserData = Depends(get_current_user),
+) -> str:
+    """Retorna el negocio_id del usuario autenticado (single-tenant desktop)."""
+    negocio_id = current_user.get("negocio_id") or "default_tenant"
+    return str(negocio_id)
+
+
+# ---------------------------------------------------------------------------
+# Helpers de request
+# ---------------------------------------------------------------------------
 
 def get_token_from_request(request: Request) -> str:
+    """Extrae el Bearer token del header Authorization. Retorna '' si no hay."""
     authorization = request.headers.get("Authorization", "")
     if not authorization.startswith("Bearer "):
         return ""
-    return authorization.replace("Bearer ", "")
+    return authorization.replace("Bearer ", "").strip()
 
-async def verify_user_access(user_id: str, token: str) -> bool:
-    if not token: return False
-    # Usar cliente de usuario para ver si tiene acceso a sus propios negocios
-    supabase = get_supabase_user_client(token)
-    try:
-        approved = supabase.table("usuarios_negocios").select("id").eq("usuario_id", user_id).eq("estado", "aceptado").execute()
-        return len(approved.data or []) > 0
-    except: return False
 
-async def get_current_user_with_access_check(request: Request) -> UserData:
+async def get_current_user_from_request(request: Request) -> User:
+    """
+    Obtiene el usuario desde request.state.user (inyectado por middleware).
+    Usado en endpoints que procesan el user antes de llegar al handler.
+    """
     user = getattr(request.state, "user", None)
     if not user:
-        raise HTTPException(status_code=401, detail="No autenticado")
-    
-    token = get_token_from_request(request)
-    # Si falla la verificación, lanzamos error
-    if not await verify_user_access(user['id'], token):
-         raise HTTPException(status_code=403, detail="Cuenta pendiente de aprobación")
-    return user
+        raise HTTPException(status_code=401, detail="No autenticado.")
+    return user  # type: ignore[return-value]
 
-security = HTTPBearer()
+
+# ---------------------------------------------------------------------------
+# Verificación de acceso al negocio
+# ---------------------------------------------------------------------------
+# En la versión desktop hay un único negocio y un único usuario (admin).
+# Las funciones de verificación se mantienen con la misma firma para no
+# romper los endpoints existentes, pero la lógica se simplifica:
+# si el usuario está autenticado → tiene acceso al negocio.
+#
+# En la Fase 3 (migración de endpoints), se puede refinar si se decide
+# agregar múltiples usuarios en el futuro.
 
 def _resolve_user_id(user: Any) -> str:
+    """Extrae el ID de usuario independientemente del tipo (dict o objeto)."""
     try:
         if isinstance(user, dict):
             return str(user.get("id", ""))
@@ -123,131 +204,135 @@ def _resolve_user_id(user: Any) -> str:
     except Exception:
         return ""
 
-async def get_current_user_from_request(request: Request) -> User:
+
+async def verify_business_access(
+    business_id: str,
+    user: Any,
+    authorization: Optional[str] = None,
+) -> dict:
+    """
+    Verifica que el usuario autenticado tenga acceso al negocio indicado.
+
+    Desktop (single-tenant): el usuario siempre es admin de su único negocio.
+    Se valida que business_id coincida con el negocio_id del usuario.
+    Mantiene la firma original para compatibilidad con los endpoints existentes.
+    """
+    user_id = _resolve_user_id(user)
+    user_negocio = user.get("negocio_id") if isinstance(user, dict) else getattr(user, "negocio_id", None)
+
+    logger.debug(
+        "[access] verify_business_access user=%s business=%s user_negocio=%s",
+        user_id, business_id, user_negocio,
+    )
+
+    # Aceptar si el negocio coincide o si el usuario es superusuario
+    is_superuser = (
+        user.get("is_superuser") if isinstance(user, dict)
+        else getattr(user, "is_superuser", False)
+    )
+
+    if user_negocio and str(user_negocio) != str(business_id) and not is_superuser:
+        logger.warning(
+            "[access] Denied: user=%s tiene negocio=%s pero solicitó business=%s",
+            user_id, user_negocio, business_id,
+        )
+        raise HTTPException(status_code=403, detail="Sin acceso al negocio.")
+
+    # Retorna un dict con la misma forma que retornaba la versión Supabase
+    rol = "admin" if is_superuser else (
+        user.get("rol") if isinstance(user, dict) else getattr(user, "rol", "usuario")
+    )
+    return {"id": user_id, "rol": rol, "estado": "aceptado"}
+
+
+async def verify_user_access(user_id: str, token: str) -> bool:
+    """
+    Verifica que el token pertenezca al user_id dado.
+    Desktop: basta con que el token sea válido (get_current_user ya lo garantiza).
+    Se mantiene por compatibilidad; retorna True si hay token.
+    """
+    return bool(token)
+
+
+async def get_current_user_with_access_check(request: Request) -> UserData:
+    """
+    Versión legacy: obtiene el usuario desde request.state y verifica acceso.
+    Desktop: si el usuario está en request.state, ya pasó por el middleware de auth.
+    """
     user = getattr(request.state, "user", None)
     if not user:
-        raise HTTPException(status_code=401, detail="No autenticado")
-    return user
+        raise HTTPException(status_code=401, detail="No autenticado.")
+    return user  # type: ignore[return-value]
 
-async def verify_business_access(business_id: str, user: User, authorization: Optional[str] = None) -> dict:
-    user_id = _resolve_user_id(user)
-    token = authorization or getattr(user, "token", None)
-    logger.debug(
-        "[access] Checking membership user=%s business=%s (token_supplied=%s service_role_configured=%s)",
-        user_id,
-        business_id,
-        bool(token),
-        True,  # desktop: sin RLS de Supabase
-    )
-    supabase = get_supabase_user_client(token) if token else get_supabase_client()
-    try:
-        access = (
-            supabase.table("usuarios_negocios")
-            .select("id, rol, estado")
-            .eq("usuario_id", user_id)
-            .eq("negocio_id", business_id)
-            .eq("estado", "aceptado")
-            .execute()
-        )
-    except Exception as exc:
-        logger.exception(
-            "[access] Supabase error while checking membership user=%s business=%s: %s",
-            user_id,
-            business_id,
-            exc,
-        )
-        raise
 
-    row_count = len(access.data or [])
-    logger.debug(
-        "[access] Membership lookup user=%s business=%s returned %d rows",
-        user_id,
-        business_id,
-        row_count,
-    )
-
-    if not access.data:
-        logger.warning(
-            "[access] Membership missing for user=%s business=%s (RLS active=%s)",
-            user_id,
-            business_id,
-            not True,  # desktop: RLS no aplica
-        )
-        raise HTTPException(status_code=403, detail="Sin acceso al negocio")
-    return access.data[0]
+# ---------------------------------------------------------------------------
+# Verificación de permisos por módulo
+# ---------------------------------------------------------------------------
 
 async def verify_module_permission(
     business_id: str,
-    user: User,
+    user: Any,
     module: str,
     action: str = "ver",
     authorization: Optional[str] = None,
 ) -> dict:
-    access = await verify_business_access(business_id, user, authorization)
-    if access["rol"] == "admin":
-        logger.debug(
-            "[perm] Granting admin override user=%s business=%s module=%s action=%s",
-            _resolve_user_id(user),
-            business_id,
-            module,
-            action,
-        )
-        return access
-    
-    token = authorization or getattr(user, "token", None)
-    supabase = get_supabase_user_client(token) if token else get_supabase_client()
-    try:
-        perms = (
-            supabase.table("permisos_usuario_negocio")
-            .select("*")
-            .eq("usuario_negocio_id", access["id"])
-            .execute()
-        )
-    except Exception as exc:
-        logger.exception(
-            "[perm] Supabase error fetching permissions usuario_negocio_id=%s: %s",
-            access["id"],
-            exc,
-        )
-        raise
-    
-    if not perms.data:
-        logger.warning(
-            "[perm] No permission row for usuario_negocio_id=%s user=%s business=%s",
-            access["id"],
-            _resolve_user_id(user),
-            business_id,
-        )
-        raise HTTPException(status_code=403, detail="Permisos no configurados")
-    
-    p = perms.data[0]
-    if p.get("acceso_total") or p.get(f"puede_{action}_{module}", False):
-        logger.debug(
-            "[perm] Permission granted user=%s business=%s module=%s action=%s",
-            _resolve_user_id(user),
-            business_id,
-            module,
-            action,
-        )
-        return access
-        
-    logger.warning(
-        "[perm] Permission denied user=%s business=%s module=%s action=%s acceso_total=%s",
-        _resolve_user_id(user),
-        business_id,
-        module,
-        action,
-        p.get("acceso_total"),
-    )
-    raise HTTPException(status_code=403, detail=f"Sin permiso para {action} {module}")
+    """
+    Verifica permiso sobre un módulo específico.
 
-# Wrappers para cada módulo
-async def verify_productos_access(business_id: str, user: User, action: str = "ver", authorization: Optional[str] = None): return await verify_module_permission(business_id, user, "productos", action, authorization)
-async def verify_clientes_access(business_id: str, user: User, action: str = "ver", authorization: Optional[str] = None): return await verify_module_permission(business_id, user, "clientes", action, authorization)
-async def verify_categorias_access(business_id: str, user: User, action: str = "ver", authorization: Optional[str] = None): return await verify_module_permission(business_id, user, "categorias", action, authorization)
-async def verify_ventas_access(business_id: str, user: User, action: str = "ver", authorization: Optional[str] = None): return await verify_module_permission(business_id, user, "ventas", action, authorization)
-async def verify_stock_access(business_id: str, user: User, action: str = "ver", authorization: Optional[str] = None): return await verify_module_permission(business_id, user, "stock", action, authorization)
-async def verify_facturacion_access(business_id: str, user: User, action: str = "ver", authorization: Optional[str] = None): return await verify_module_permission(business_id, user, "facturacion", action, authorization)
-async def verify_tareas_access(business_id: str, user: User, action: str = "ver", authorization: Optional[str] = None): return await verify_module_permission(business_id, user, "tareas", action, authorization)
-async def verify_basic_business_access(business_id: str, user: User, authorization: Optional[str] = None) -> dict: return await verify_business_access(business_id, user, authorization)
-async def get_current_tenant_id(current_user: UserData = Depends(get_current_user)) -> str: return "default_tenant"
+    Desktop (single-user admin): el único usuario tiene acceso total.
+    Se mantiene la firma para compatibilidad con los endpoints existentes.
+    """
+    access = await verify_business_access(business_id, user, authorization)
+
+    logger.debug(
+        "[perm] verify_module_permission user=%s business=%s module=%s action=%s rol=%s",
+        _resolve_user_id(user), business_id, module, action, access.get("rol"),
+    )
+
+    # En desktop el usuario es siempre admin → acceso total
+    return access
+
+
+# ---------------------------------------------------------------------------
+# Wrappers por módulo  (mantienen interfaz pública sin cambios)
+# ---------------------------------------------------------------------------
+
+async def verify_productos_access(
+    business_id: str, user: Any, action: str = "ver", authorization: Optional[str] = None
+) -> dict:
+    return await verify_module_permission(business_id, user, "productos", action, authorization)
+
+async def verify_clientes_access(
+    business_id: str, user: Any, action: str = "ver", authorization: Optional[str] = None
+) -> dict:
+    return await verify_module_permission(business_id, user, "clientes", action, authorization)
+
+async def verify_categorias_access(
+    business_id: str, user: Any, action: str = "ver", authorization: Optional[str] = None
+) -> dict:
+    return await verify_module_permission(business_id, user, "categorias", action, authorization)
+
+async def verify_ventas_access(
+    business_id: str, user: Any, action: str = "ver", authorization: Optional[str] = None
+) -> dict:
+    return await verify_module_permission(business_id, user, "ventas", action, authorization)
+
+async def verify_stock_access(
+    business_id: str, user: Any, action: str = "ver", authorization: Optional[str] = None
+) -> dict:
+    return await verify_module_permission(business_id, user, "stock", action, authorization)
+
+async def verify_facturacion_access(
+    business_id: str, user: Any, action: str = "ver", authorization: Optional[str] = None
+) -> dict:
+    return await verify_module_permission(business_id, user, "facturacion", action, authorization)
+
+async def verify_tareas_access(
+    business_id: str, user: Any, action: str = "ver", authorization: Optional[str] = None
+) -> dict:
+    return await verify_module_permission(business_id, user, "tareas", action, authorization)
+
+async def verify_basic_business_access(
+    business_id: str, user: Any, authorization: Optional[str] = None
+) -> dict:
+    return await verify_business_access(business_id, user, authorization)

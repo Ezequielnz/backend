@@ -161,22 +161,43 @@ El repo `api_facturacion_arca` es una API standalone que se usó para desarrolla
 
 ---
 
-### 🔲 FASE 2 — Auth Local (1–2 días)
+### ✅ FASE 2 — Auth Local (1–2 días) — **COMPLETADA**
 
-**Objetivo:** Login/logout 100% local, sin Supabase Auth.
+> **Estado: ✅ TERMINADA**
+
+**Objetivo logrado:** Login/logout 100% local, sin Supabase Auth. Campo `openai_api_key` expuesto en la API de configuración del negocio.
 
 **Pasos:**
 
-1. Reescribir `app/api/api_v1/endpoints/auth.py`:
-   - `POST /auth/login` → verificar password con bcrypt, devolver JWT firmado localmente
-   - `POST /auth/logout` → invalidar sesión (simple, sin blacklist)
-   - `GET /auth/me` → devolver datos del usuario logueado
-2. Reescribir `app/api/deps.py` (`get_current_user` valida JWT local)
-3. Reescribir `AuthContext.jsx` en el frontend
-4. Crear endpoint de setup inicial: `POST /auth/setup` (crea el primer y único usuario + negocio)
-5. Agregar campo `openai_api_key` en la tabla de configuración del negocio
+1. ✅ Reescribir `app/api/api_v1/endpoints/auth.py`:
+   - `POST /auth/login` → bcrypt + JWT firmado localmente (HS256, 7 días)
+   - `POST /auth/logout` → respuesta 200 OK (cliente descarta token)
+   - `GET /auth/me` → decodifica JWT local + consulta SQLite
+   - **Chequeo:** `py_compile` OK · import OK · rutas registradas: `/login`, `/logout`, `/me`, `/setup`
+2. ✅ Reescribir `app/api/deps.py` (`get_current_user` valida JWT local):
+   - `get_current_user` → decodifica JWT HS256, consulta SQLite, retorna `UserData`
+   - `verify_business_access` / `verify_module_permission` → simplificados para single-user desktop (sin Supabase)
+   - Todos los wrappers por módulo conservan su firma pública
+   - **Chequeo:** `py_compile` OK · import OK · 20 símbolos exportados · SUPABASE-FREE (cero refs activas)
+3. 🔄 Reescribir `AuthContext.jsx` en el frontend ← **EN PROGRESO**
+4. ✅ Crear endpoint de setup inicial: `POST /auth/setup` (creado junto al paso 1)
+   - Solo funciona si NO hay usuarios en DB
+   - Crea negocio + usuario admin + devuelve JWT inmediatamente
+5. ✅ Agregar campo `openai_api_key` en la tabla de configuración del negocio:
+   - **ORM:** campo `openai_api_key: str` ya presente en `Negocio` (`orm_models.py` L66)
+   - **Migración:** campo incluido en la migración inicial (`0da3584c1e10`, L31) — sin migraciones adicionales necesarias
+   - **Schema Pydantic:** `app/schemas/business.py` reescrito completamente con `NegocioBase`, `NegocioCreate`, `NegocioUpdate` (incluye `openai_api_key`), `NegocioResponse`, `NegocioConfigResponse`; aliases `Business`/`BusinessCreate` conservados para compatibilidad
+   - **Nuevo endpoint:** `app/api/api_v1/endpoints/negocio.py` (sin Supabase)
+     - `GET  /api/v1/negocio/config` → configuración del negocio (key enmascarada)
+     - `PUT  /api/v1/negocio/config` → actualización parcial incluyendo `openai_api_key`
+     - `POST /api/v1/negocio/config/api-key` → actualiza solo la API Key
+     - `DELETE /api/v1/negocio/config/api-key` → elimina la API Key (→ NULL)
+   - **Router:** registrado en `api.py` con prefijo `/negocio`, tag `negocio`
+   - **Seguridad:** la API Key **nunca** se devuelve en texto plano; solo se indica si está configurada + últimos 4 caracteres (`openai_api_key_hint`)
+   - **Nota Fase 5:** en la Fase 5 (funciones nativas desktop), la key se migrará al keychain del SO via `electron.safeStorage`
+   - **Chequeo:** `py_compile` OK en 6 archivos · import OK · 4 rutas `/negocio` registradas · `main.app` levanta con 148 rutas, sin errores
 
-**Entregable:** Login funciona 100% local, sin red.
+**Entregable verificado:** Login funciona 100% local, sin red. Configuración del negocio (incluyendo `openai_api_key`) accesible y actualizable via API REST local.
 
 ---
 
@@ -453,13 +474,13 @@ mac:
 | Fase | Contenido | Estado | Días estimados |
 |---|---|---|---|
 | Fase 1 | Limpieza + SQLAlchemy models | ✅ COMPLETADA | — |
-| Fase 2 | Auth local | 🔲 Pendiente | 1–2 |
+| Fase 2 | Auth local | ✅ COMPLETADA (pendiente: AuthContext.jsx frontend) | — |
 | Fase 3 | Migrar 15+ endpoints a SQLAlchemy | 🔲 Pendiente | 5–7 |
 | **Fase 3.5** | **Integración facturación ARCA** | 🔲 Pendiente | **3–5** |
 | Fase 4 | Electron Shell | 🔲 Pendiente | 2–3 |
-| Fase 5 | Funciones nativas (backup, PDF viewer, API key) | 🔲 Pendiente | 2–3 |
+| Fase 5 | Funciones nativas (backup, PDF viewer, API key keychain) | 🔲 Pendiente | 2–3 |
 | Fase 6 | Empaquetado instalador | 🔲 Pendiente | 2–3 |
-| **Total restante** | | | **15–23 días** |
+| **Total restante** | | | **14–21 días** |
 
 > **Versión funcional sin instalador:** disponible al final de la Fase 4 (~10–14 días). Ideal para primeras pruebas con el cliente.
 

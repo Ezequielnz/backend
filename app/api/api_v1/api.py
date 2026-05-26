@@ -11,6 +11,7 @@ from app.api.api_v1.endpoints import (
     finanzas,
     importacion,
     metodos_pago,
+    negocio,
     permissions,
     productos,
     proveedores,
@@ -25,6 +26,7 @@ from app.api.api_v1.endpoints import (
 api_router = APIRouter()
 
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
+api_router.include_router(negocio.router, prefix="/negocio", tags=["negocio"])
 api_router.include_router(businesses.router, prefix="/businesses", tags=["businesses"])
 api_router.include_router(branch_settings.router, prefix="/businesses/{business_id}/branch-settings", tags=["branch-settings"])
 api_router.include_router(stock_transfers.router, prefix="/businesses/{business_id}/stock-transfers", tags=["stock-transfers"])

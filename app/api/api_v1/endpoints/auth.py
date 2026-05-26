@@ -1,700 +1,371 @@
+"""
+auth.py — Endpoints de autenticación local
+============================================
+FASE 2: Auth 100% local. Sin Supabase Auth.
+
+Endpoints:
+  POST /auth/login   → verifica password con bcrypt, devuelve JWT firmado localmente
+  POST /auth/logout  → invalida sesión (simple, sin blacklist en esta versión)
+  GET  /auth/me      → devuelve datos del usuario logueado (desde JWT + DB)
+  POST /auth/setup   → crea el primer y único usuario + negocio (ver FASE 2, paso 4)
+"""
+
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional, Dict, cast
-import uuid
-import json
-import time
-import traceback
-import asyncio
-import sys
+from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status, Request, Body
-from fastapi.responses import JSONResponse, RedirectResponse
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from jose import jwt
-from pydantic import BaseModel, EmailStr
+import jwt
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.security import OAuth2PasswordBearer
+from passlib.context import CryptContext
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
+from app.api.deps import get_db
 from app.core.config import settings
-from app.db.supabase_client import get_supabase_client, get_supabase_anon_client, get_supabase_user_client, get_supabase_service_client
-from app.schemas.user import UserCreate, UserUpdate, UserResponse, Token, UserSignUp, SignUpResponse
-from app.api import deps
-from app.core.supabase_admin import supabase_admin
+from app.models.orm_models import Negocio, Usuario
+from app.schemas.user import Token
 
 router = APIRouter()
 
+# ---------------------------------------------------------------------------
+# Utilidades de seguridad
+# ---------------------------------------------------------------------------
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
-# JWT Secret para firma de tokens
-JWT_SECRET = settings.JWT_SECRET_KEY
 
-def generate_token(user_id: str, email: str) -> str:
-    """Generar un token JWT para el usuario"""
-    expires = int(time.time()) + 3600 * 24 * 7  # 7 días
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Verifica una contraseña en texto plano contra su hash bcrypt."""
+    return pwd_context.verify(plain_password, hashed_password)
+
+
+def get_password_hash(password: str) -> str:
+    """Genera el hash bcrypt de una contraseña."""
+    return pwd_context.hash(password)
+
+
+def create_access_token(user_id: str, email: str) -> str:
+    """
+    Crea un JWT firmado localmente con HS256.
+    El token expira según JWT_ACCESS_TOKEN_EXPIRE_MINUTES en settings.
+    """
+    expire = datetime.now(timezone.utc) + timedelta(
+        minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES
+    )
     payload = {
-        "user_id": user_id,
+        "sub": user_id,          # subject: ID del usuario
         "email": email,
-        "exp": expires
+        "exp": expire,
+        "iat": datetime.now(timezone.utc),
     }
-    token = jwt.encode(payload, JWT_SECRET, algorithm="HS256")
-    return token
+    return jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
+
+def decode_access_token(token: str) -> dict:
+    """
+    Decodifica y valida un JWT local.
+    Lanza HTTPException 401 si el token es inválido o expiró.
+    """
+    try:
+        payload = jwt.decode(
+            token,
+            settings.JWT_SECRET_KEY,
+            algorithms=[settings.JWT_ALGORITHM],
+        )
+        return payload
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="La sesión expiró. Volvé a ingresar.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except jwt.InvalidTokenError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token inválido.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+# ---------------------------------------------------------------------------
+# Schemas de request/response locales (solo los que se usan aquí)
+# ---------------------------------------------------------------------------
+
+class LoginRequest(BaseModel):
+    """Body del endpoint de login (acepta email o username)."""
+    email: Optional[str] = None
+    username: Optional[str] = None   # alias para compatibilidad OAuth2 form
+    password: str
+
+    @property
+    def resolved_email(self) -> str:
+        """Retorna el email resolviendo el alias username."""
+        return (self.email or self.username or "").strip()
+
+
+class SetupRequest(BaseModel):
+    """Datos para el wizard de primer uso (POST /auth/setup)."""
+    nombre_negocio: str
+    nombre: str
+    apellido: str
+    email: str
+    password: str
+
+
+# ---------------------------------------------------------------------------
+# POST /auth/login
+# ---------------------------------------------------------------------------
 
 @router.post("/login", response_model=Token)
-async def login(request: Request) -> Any:
+async def login(request: Request, db: Session = Depends(get_db)) -> Any:
     """
-    OAuth2 compatible token login.
-    Maneja manualmente el body para evitar errores 422 de Pydantic que rompen el frontend.
+    Autenticación local con email + password.
+
+    - Acepta JSON `{email, password}` o form-data OAuth2 `{username, password}`.
+    - Verifica la contraseña con bcrypt.
+    - Devuelve un JWT firmado localmente (HS256).
     """
+    # 1. Parsear body — soportar JSON y form-data
+    username: Optional[str] = None
+    password: Optional[str] = None
+
+    content_type = request.headers.get("content-type", "")
     try:
-        print("=== Iniciando proceso de login (Robust) ===")
-        username: Optional[str] = None
-        password: Optional[str] = None
-
-        # 1. Intentar leer como JSON o Form Data
-        content_type = request.headers.get("content-type", "")
-        
-        try:
-            if "application/json" in content_type:
-                payload = await request.json()
-                if isinstance(payload, dict):
-                    # Soportar tanto 'username' como 'email'
-                    u_val = payload.get("username") or payload.get("email")
-                    p_val = payload.get("password")
-                    
-                    # Asegurar que sean strings
-                    username = str(u_val) if u_val else None
-                    password = str(p_val) if p_val else None
-            else:
-                # Form data fallback
-                form = await request.form()
-                
-                # Solución de tipos: Extraer y asegurar que no son UploadFile
-                u_form = form.get("username") or form.get("email")
-                p_form = form.get("password")
-                
-                # Si es un string, lo usamos. Si es None o UploadFile, lo ignoramos/manejamos.
-                if isinstance(u_form, str):
-                    username = u_form
-                
-                if isinstance(p_form, str):
-                    password = p_form
-
-        except Exception as parse_error:
-            print(f"Error parseando entrada login: {parse_error}")
-        
-        # 2. Validación manual para devolver mensaje simple (evita React Error #31)
-        if not username or not password:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Por favor ingresa tu email y contraseña.",
-            )
-
-        print(f"Login solicitado para: {username}")
-
-        # 3. Autenticación con Supabase
-        supabase = get_supabase_anon_client()
-        
-        try:
-            # sign_in_with_password es el método correcto en supabase-py v2
-            response = supabase.auth.sign_in_with_password({
-                "email": username,
-                "password": password,
-            })
-
-            if not response or not response.session:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Credenciales inválidas.",
-                    headers={"WWW-Authenticate": "Bearer"},
-                )
-
-            print("Login exitoso en Supabase.")
-            access_token = response.session.access_token
-            # print(f"Access token generado (primeros 10 chars): {access_token[:10]}...") # Security: Don't log tokens
-            print(f"User ID: {response.user.id if response.user else 'N/A'}")
-            print(f"User email: {response.user.email if response.user else 'N/A'}")
-
-            # Actualizar último acceso (Best effort, no bloquear si falla)
-            try:
-                if response.user:
-                    user_id = response.user.id
-                    now = datetime.now(timezone.utc).isoformat()
-                    supabase.table("usuarios").update({"ultimo_acceso": now}).eq("id", user_id).execute()
-                    print(f"Último acceso actualizado para user_id: {user_id}")
-            except Exception as e:
-                print(f"Advertencia (no crítica): Error actualizando ultimo_acceso: {str(e)}")
-
-            print("=== Login completado exitosamente, devolviendo token ===")
-            return {
-                "access_token": access_token,
-                "token_type": "bearer"
-            }
-
-        except Exception as supabase_error:
-            # Capturar errores específicos de Supabase Auth
-            error_msg = str(supabase_error).lower()
-            print(f"Error Supabase Auth: {error_msg}")
-
-            if "email not confirmed" in error_msg:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Email no confirmado. Revisa tu correo para activar la cuenta."
-                )
-            elif "invalid login credentials" in error_msg:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Email o contraseña incorrectos."
-                )
-            else:
-                # Error genérico pero limpio para el frontend
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail=f"Error de autenticación: {str(supabase_error)}"
-                )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Error inesperado en login: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Error interno del servidor al intentar ingresar."
-        )
-
-
-@router.options("/signup")
-async def options_signup():
-    """Manejar solicitudes OPTIONS para CORS"""
-    return JSONResponse(
-        content={},
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization"
-        }
-    )
-
-
-@router.post("/signup", response_model=SignUpResponse)
-async def signup(user_data: UserSignUp) -> Any:
-    """
-    Create new user with the given data
-    """
-    try:
-        print(f"Datos de registro recibidos: {user_data.dict()}")
-        
-        # 1. Inicializar cliente Supabase (Anon key es suficiente para registro)
-        supabase = get_supabase_anon_client()
-
-        # 2. Preparar datos de registro
-        credentials = {
-            "email": user_data.email,
-            "password": user_data.password,
-            "options": {
-                "data": {
-                    "nombre": user_data.nombre,
-                    "apellido": user_data.apellido,
-                },
-                "emailRedirectTo": settings.FRONTEND_CONFIRMATION_URL
-            }
-        }
-
-        # 3. Registrar usuario en Supabase Auth
-        auth_response = supabase.auth.sign_up(credentials)
-
-        if not auth_response.user or not auth_response.user.id:
-            raise Exception("No se obtuvo ID de usuario al registrar en Supabase")
-
-        user_id = auth_response.user.id
-        print(f"Usuario creado Auth ID: {user_id}")
-
-        # La creación del perfil en 'usuarios' ahora se maneja vía Trigger en la BD
-        # (ver migration 07_create_user_trigger.sql)
-
-        # 4. Configurar periodo de prueba (30 días)
-        # Implementamos retries porque el trigger de creación de usuario en public.usuarios
-        # puede tener un ligero retraso respecto a auth.users
-        try:
-            trial_end = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
-            
-            # Verificar si es un usuario exento
-            is_exempt = user_data.email in settings.EXEMPT_EMAILS
-            
-            update_data = {
-                "subscription_status": "trial",
-                "trial_end": trial_end,
-                "is_exempt": is_exempt
-            }
-            
-            print(f"Configurando suscripción para {user_data.email}: {update_data}")
-            
-            max_retries = 5
-            for attempt in range(max_retries):
-                try:
-                    # Intentamos actualizar. Si el usuario no existe aún en public.usuarios,
-                    # response.data estará vacío.
-                    response = supabase.table("usuarios").update(update_data).eq("id", user_id).execute()
-                    
-                    if response.data and len(response.data) > 0:
-                        print(f"Suscripción configurada correctamente en intento {attempt + 1}")
-                        break
-                    else:
-                        print(f"Intento {attempt + 1}/{max_retries}: Usuario no encontrado aún en public.usuarios, reintentando...")
-                except Exception as e:
-                    print(f"Error en intento {attempt + 1}/{max_retries}: {str(e)}")
-                
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(1.0) # Esperar 1 segundo antes del siguiente intento
-            else:
-                print("ADVERTENCIA: No se pudo configurar la suscripción después de varios intentos. Es posible que el trigger haya fallado.")
-            
-        except Exception as sub_error:
-            print(f"Error configurando suscripción inicial: {sub_error}")
-            # No bloqueamos el registro por esto, pero logueamos el error
-
-        if settings.DEBUG:
-            message = "Usuario registrado. En desarrollo revisa logs o tabla para confirmar."
-            requires_confirmation = False
+        if "application/json" in content_type:
+            body = await request.json()
+            username = str(body.get("email") or body.get("username") or "").strip() or None
+            password = str(body.get("password") or "").strip() or None
         else:
-            message = "Usuario registrado correctamente. Por favor revisa tu email."
-            requires_confirmation = True
+            form = await request.form()
+            u = form.get("username") or form.get("email")
+            p = form.get("password")
+            username = str(u).strip() if isinstance(u, str) else None
+            password = str(p).strip() if isinstance(p, str) else None
+    except Exception as parse_err:
+        print(f"[login] Error parseando body: {parse_err}")
 
-        return SignUpResponse(
-            message=message,
-            email=user_data.email,
-            requires_confirmation=requires_confirmation
-        )
-
-    except Exception as e:
-        print(f"Registration error: {str(e)}")
-        error_message = str(e)
-        if "User already registered" in error_message or "already been registered" in error_message:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Este email ya está registrado.",
-            )
+    if not username or not password:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Error al crear usuario: {str(e)}",
+            detail="Email y contraseña son requeridos.",
         )
 
+    print(f"[login] Intento de login para: {username}")
+
+    # 2. Buscar usuario en DB local
+    usuario = db.query(Usuario).filter(
+        Usuario.email == username.lower(),
+        Usuario.is_active == True,
+    ).first()
+
+    if not usuario or not verify_password(password, usuario.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Email o contraseña incorrectos.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # 3. Actualizar último acceso (best-effort)
+    try:
+        usuario.ultimo_acceso = datetime.now(timezone.utc)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"[login] Advertencia: no se pudo actualizar ultimo_acceso: {e}")
+
+    # 4. Generar y devolver JWT
+    token = create_access_token(user_id=usuario.id, email=usuario.email)
+    print(f"[login] Login exitoso para user_id={usuario.id}")
+    return {"access_token": token, "token_type": "bearer"}
+
+
+# ---------------------------------------------------------------------------
+# POST /auth/logout
+# ---------------------------------------------------------------------------
+
+@router.post("/logout")
+async def logout() -> dict:
+    """
+    Cierre de sesión.
+
+    En esta versión desktop (single-user, sin blacklist), el logout es
+    responsabilidad del cliente: simplemente descarta el token del storage.
+    El endpoint existe para mantener compatibilidad con el frontend.
+    """
+    return {"message": "Sesión cerrada correctamente."}
+
+
+# ---------------------------------------------------------------------------
+# GET /auth/me
+# ---------------------------------------------------------------------------
 
 @router.get("/me", response_model=dict)
-async def read_users_me(request: Request) -> Any:
-    """
-    Get current user using the user's own token (RLS Safe).
-    """
-    try:
-        print("=== /auth/me LLAMADO ===")
-        # 1. Extraer y limpiar el token
-        authorization = request.headers.get("Authorization", "")
-        print(f"Authorization header presente: {bool(authorization)}")
-        if not authorization or not authorization.startswith("Bearer "):
-            print("[ERROR] Token no presente o formato incorrecto")
-            raise HTTPException(status_code=401, detail="Token requerido")
-        
-        token = authorization.replace("Bearer ", "")
-        # print(f"Token extraído (primeros 10 chars): {token[:10]}...") # Security: Don't log tokens
-        
-        # 2. Cliente Supabase con token de usuario
-        print("Creando cliente Supabase con token de usuario...")
-        supabase = get_supabase_user_client(token)
-        
-        # 3. Validar token
-        print("Validando token con Supabase Auth...")
-        auth_response = supabase.auth.get_user(token)
-        if not auth_response or not auth_response.user:
-            print("[ERROR] Token inválido - auth_response vacío")
-            raise HTTPException(status_code=401, detail="Token inválido")
-            
-        user = auth_response.user
-        user_id = user.id
-        print(f"Usuario autenticado: {user_id}, email: {user.email}")
-        
-        # 4. Consultar perfil
-        print(f"Consultando perfil en tabla usuarios para user_id: {user_id}")
-        response = supabase.table("usuarios").select("*").eq("id", user_id).execute()
-        print(f"Respuesta de tabla usuarios: {len(response.data) if response.data else 0} registros")
-        
-        if not response.data:
-            print("[FALLBACK] Usuario no encontrado en tabla, devolviendo datos básicos")
-            # FALLBACK: Si no existe en la tabla usuarios, devolvemos esto.
-            fallback_data = {
-                "id": user_id,
-                "email": user.email,
-                "nombre": "",
-                "apellido": "",
-                "rol": "usuario",
-                "activo": True,
-                "permisos": [],
-                "onboarding_completed": False
-            }
-            print(f"Datos fallback: {fallback_data}")
-            return fallback_data
-        
-        user_data = response.data[0]
-        print(f"Datos de usuario encontrados: {user_data.keys()}")
-        
-        # Asegurar que permisos sea una lista si es None
-        if user_data.get("permisos") is None:
-            print("[FIX] Agregando permisos vacíos")
-            user_data["permisos"] = []
-
-        # 5. Mezclar datos
-        user_data.update({
-            "email": user.email,
-            "email_confirmed_at": getattr(user, "email_confirmed_at", None),
-            "last_sign_in_at": getattr(user, "last_sign_in_at", None),
-            "onboarding_completed": user_data.get("onboarding_completed", False)
-        })
-
-        return user_data
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Error /auth/me: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Error al obtener perfil de usuario"
-        )
-
-
-@router.post("/resend-confirmation-email")
-@router.post("/resend-confirmation")
-async def resend_confirmation_email(email_data: Dict[str, str] = Body(...)) -> Any:
-    """
-    Reenviar correo de confirmación (usando Magic Link / OTP).
-    """
-    try:
-        email = email_data.get("email")
-        if not email:
-             raise HTTPException(status_code=400, detail="Email requerido")
-
-        supabase = get_supabase_anon_client()
-        
-        # Verificar existencia local primero
-        user_check = supabase.table("usuarios").select("id").eq("email", email).execute()
-        if not user_check.data:
-             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Usuario no encontrado"
-            )
-
-        try:
-            # SOLUCIÓN PRINCIPAL AL ERROR 'resend_method':
-            # Usamos sign_in_with_otp. Esto envía un Magic Link.
-            print(f"Enviando OTP/Magic Link a {email} para verificación...")
-            supabase.auth.sign_in_with_otp({
-                "email": email
-            })
-            
-            return {
-                "message": "Email de confirmación reenviado correctamente (Magic Link)",
-                "email": email
-            }
-            
-        except Exception as auth_error:
-            error_message = str(auth_error)
-            print(f"Error enviando OTP: {error_message}")
-            
-            if "Email already confirmed" in error_message:
-                return {
-                    "message": "El email ya está confirmado",
-                    "email": email,
-                    "already_confirmed": True
-                }
-            
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Error al reenviar correo: {error_message}"
-            )
-                
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Error interno resend: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Error interno del servidor"
-        )
-
-
-@router.put("/profile", response_model=UserResponse)
-async def update_profile(
-    request: Request,
-    user_update: UserUpdate,
-    current_user: dict = Depends(deps.get_current_user)
+async def get_me(
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
 ) -> Any:
     """
-    Actualizar perfil del usuario logueado.
+    Devuelve los datos del usuario actualmente logueado.
+
+    Valida el JWT localmente y consulta la DB para retornar el perfil completo.
     """
-    try:
-        user_id = current_user["id"]
-        
-        # Extraer token para usar cliente de usuario (RLS Safe)
-        authorization = request.headers.get("Authorization", "")
-        token = authorization.replace("Bearer ", "")
-        
-        if token:
-            supabase = get_supabase_user_client(token)
-        else:
-            print("[WARNING] No token found in update_profile, using anon client")
-            supabase = get_supabase_client()
+    # 1. Decodificar y validar JWT
+    payload = decode_access_token(token)
+    user_id: Optional[str] = payload.get("sub")
 
-        update_data = user_update.dict(exclude_unset=True)
-        if not update_data:
-            raise HTTPException(status_code=400, detail="No se enviaron datos para actualizar")
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token malformado.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
-        # Actualizar en tabla usuarios
-        response = supabase.table("usuarios").update(update_data).eq("id", user_id).execute()
-        
-        if not response.data:
-            print(f"[ERROR] Update returned no data for user {user_id}. Checking permissions.")
-            raise HTTPException(status_code=404, detail="Error al actualizar perfil o usuario no encontrado")
+    # 2. Cargar usuario desde DB
+    usuario = db.query(Usuario).filter(
+        Usuario.id == user_id,
+        Usuario.is_active == True,
+    ).first()
 
-        return response.data[0]
+    if not usuario:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Usuario no encontrado o inactivo.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
-    except Exception as e:
-        print(f"Error updating profile: {e}")
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Error interno al actualizar perfil: {str(e)}")
+    # 3. Construir respuesta (compatible con el frontend existente)
+    return {
+        "id": usuario.id,
+        "email": usuario.email,
+        "nombre": usuario.nombre,
+        "apellido": usuario.apellido,
+        "negocio_id": usuario.negocio_id,
+        "is_active": usuario.is_active,
+        "is_superuser": usuario.is_superuser,
+        "onboarding_completed": usuario.onboarding_completed,
+        "creado_en": usuario.creado_en.isoformat() if usuario.creado_en else None,
+        "ultimo_acceso": usuario.ultimo_acceso.isoformat() if usuario.ultimo_acceso else None,
+        # Campos legacy para compatibilidad con el frontend existente
+        "activo": usuario.is_active,
+        "rol": "admin" if usuario.is_superuser else "usuario",
+        "permisos": [],
+    }
 
 
-@router.post("/change-password")
-async def change_password(
-    passwords: Dict[str, str] = Body(...),
-    current_user: dict = Depends(deps.get_current_user)
+# ---------------------------------------------------------------------------
+# POST /auth/setup  (FASE 2 — paso 4)
+# ---------------------------------------------------------------------------
+
+@router.post("/setup", response_model=Token, status_code=status.HTTP_201_CREATED)
+async def setup_initial_user(
+    data: SetupRequest,
+    db: Session = Depends(get_db),
 ) -> Any:
     """
-    Cambiar contraseña del usuario logueado.
+    Wizard de primer uso: crea el primer usuario + negocio.
+
+    - Solo funciona si NO existe ningún usuario en la DB.
+    - Crea el negocio con el nombre proporcionado.
+    - Hashea la contraseña con bcrypt.
+    - Devuelve un JWT para que el usuario quede logueado inmediatamente.
     """
-    try:
-        new_password = passwords.get("password")
-        if not new_password:
-            raise HTTPException(status_code=400, detail="Nueva contraseña requerida")
-
-        # Usamos Admin API para actualizar la contraseña sin necesitar el token del usuario
-        attributes = {"password": new_password}
-        user = await supabase_admin.update_user(current_user["id"], attributes)
-        
-        if not user:
-             raise HTTPException(status_code=500, detail="Error al actualizar contraseña en Auth")
-
-        return {"message": "Contraseña actualizada correctamente"}
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Error changing password: {e}")
-        raise HTTPException(status_code=500, detail="Error interno al cambiar contraseña")
-
-
-@router.get("/confirm")
-async def confirm_redirect():
-    """Redirige confirmaciones al frontend"""
-    return RedirectResponse(url=settings.FRONTEND_CONFIRMATION_URL)
-
-
-@router.post("/verify-email")
-async def verify_email(data: Dict[str, str] = Body(...)) -> Any:
-    """
-    Verifica el token_hash del correo (PKCE flow).
-    """
-    try:
-        token_hash = data.get("token_hash")
-        type_ = data.get("type", "email")
-
-        if not token_hash:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Token hash es requerido"
-            )
-
-        supabase = get_supabase_anon_client()
-        
-        # Verificar OTP con Supabase
-        response = supabase.auth.verify_otp({
-            "token_hash": token_hash,
-            "type": type_
-        })
-
-        if not response.session:
-             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Error al verificar el token o sesión no creada."
-            )
-
-        return {
-            "message": "Email verificado correctamente",
-            "access_token": response.session.access_token,
-            "refresh_token": response.session.refresh_token,
-            "user": {
-                "id": response.user.id,
-                "email": response.user.email
-            }
-        }
-
-    except Exception as e:
-        print(f"Error verifying email: {str(e)}")
-        error_msg = str(e).lower()
-        if "expired" in error_msg:
-             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="El enlace ha expirado."
-            )
+    # Protección: si ya existe un usuario, el setup está bloqueado
+    existing = db.query(Usuario).first()
+    if existing:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Error al verificar el email."
+            status_code=status.HTTP_409_CONFLICT,
+            detail="El sistema ya fue configurado. Usá el login normal.",
         )
 
+    # Crear negocio
+    negocio = Negocio(
+        nombre=data.nombre_negocio.strip(),
+    )
+    db.add(negocio)
+    db.flush()  # Necesario para obtener negocio.id antes del commit
 
-@router.get("/check-confirmation/{email}")
-async def check_email_confirmation(email: str) -> Any:
+    # Crear usuario administrador
+    usuario = Usuario(
+        negocio_id=negocio.id,
+        email=data.email.strip().lower(),
+        nombre=data.nombre.strip(),
+        apellido=data.apellido.strip(),
+        hashed_password=get_password_hash(data.password),
+        is_active=True,
+        is_superuser=True,
+        onboarding_completed=False,
+    )
+    db.add(usuario)
+    db.commit()
+    db.refresh(usuario)
+
+    print(f"[setup] Usuario inicial creado: {usuario.email} (negocio: {negocio.nombre})")
+
+    token = create_access_token(user_id=usuario.id, email=usuario.email)
+    return {"access_token": token, "token_type": "bearer"}
+
+
+# ---------------------------------------------------------------------------
+# POST /auth/signup  (Soporte para el registro del Frontend)
+# ---------------------------------------------------------------------------
+
+class SignupRequest(BaseModel):
+    """Cuerpo esperado por el frontend original en Register.jsx (POST /auth/signup)."""
+    email: str
+    password: str
+    nombre: str
+    apellido: str
+
+
+@router.post("/signup", response_model=Token, status_code=status.HTTP_201_CREATED)
+async def signup_fallback_setup(
+    data: SignupRequest,
+    db: Session = Depends(get_db),
+) -> Any:
     """
-    Verificar estado real de confirmación consultando auth.users via Admin API.
+    Endpoint interceptor para el registro del frontend.
+    
+    Permite que la pantalla /register original funcione sin tirar 404.
+    Dado que es una versión desktop de instalación única:
+      - Si ya existe un usuario, bloquea nuevos registros.
+      - Si está vacía, inicializa automáticamente el negocio por defecto
+        ("Mi Negocio Local") y asocia al usuario administrador a él.
     """
-    try:
-        # 1. Obtener ID del usuario desde tabla pública
-        supabase = get_supabase_client()
-        user_query = supabase.table("usuarios").select("id").eq("email", email).execute()
-        
-        if not user_query.data:
-            # Usuario no existe en tabla pública
-            return {"email": email, "is_confirmed": False, "message": "Usuario no encontrado"}
-            
-        user_id = user_query.data[0]["id"]
-        
-        # 2. Consultar estado en auth.users usando Admin API
-        auth_user = await supabase_admin.get_auth_user(user_id)
-        
-        if not auth_user:
-             return {"email": email, "is_confirmed": False, "message": "Error al consultar estado"}
-             
-        email_confirmed_at = auth_user.get("email_confirmed_at")
-        
-        if email_confirmed_at:
-            return {"email": email, "is_confirmed": True, "message": "Confirmado"}
-        else:
-            return {"email": email, "is_confirmed": False, "message": "Pendiente de confirmación"}
-
-    except Exception as e:
-        print(f"Check confirmation error: {e}")
-        # No devolver 500 para no romper el frontend, sino estado desconocido/falso
-        return {"email": email, "is_confirmed": False, "message": "Error verificando estado"}
-
-
-@router.delete("/users/{user_id}")
-async def delete_user_completely(user_id: str, request: Request) -> Any:
-    """Eliminar usuario (Self-deletion o Admin)"""
-    try:
-        current_user = getattr(request.state, "user", None)
-        if not current_user:
-            raise HTTPException(status_code=401, detail="Usuario no autenticado")
-        
-        if current_user.id != user_id:
-             raise HTTPException(status_code=403, detail="No tienes permisos para eliminar este usuario")
-        
-        supabase = get_supabase_client()
-        
-        # Eliminar de tabla pública
-        supabase.table("usuarios").delete().eq("id", user_id).execute()
-        
-        return {"message": "Usuario eliminado correctamente"}
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Error delete user: {str(e)}")
-        raise HTTPException(status_code=500, detail="Error interno al eliminar usuario")
-
-
-@router.post("/complete-onboarding", response_model=dict)
-async def complete_onboarding(request: Request) -> Any:
-    """
-    Marcar el onboarding como completado para el usuario actual.
-    """
-    try:
-        # 1. Extraer y limpiar el token (Manual Auth porque el middleware salta /auth)
-        authorization = request.headers.get("Authorization", "")
-        if not authorization or not authorization.startswith("Bearer "):
-            raise HTTPException(status_code=401, detail="Token requerido")
-        
-        token = authorization.replace("Bearer ", "")
-        
-        # 2. Cliente Supabase con token de usuario
-        supabase = get_supabase_user_client(token)
-        
-        # 3. Validar token
-        auth_response = supabase.auth.get_user(token)
-        if not auth_response or not auth_response.user:
-            raise HTTPException(status_code=401, detail="Token inválido")
-            
-        user = auth_response.user
-        user_id = user.id
-        
-        # 4. Actualizar flag en la base de datos
-        try:
-            response = supabase.table("usuarios").update({"onboarding_completed": True}).eq("id", user_id).execute()
-        except Exception as e:
-            print(f"[WARNING] RLS update failed: {e}. Trying service role...")
-            # Fallback a service client si RLS falla
-            supabase_admin = get_supabase_service_client()
-            response = supabase_admin.table("usuarios").update({"onboarding_completed": True}).eq("id", user_id).execute()
-        
-        if not response.data:
-            # Si aún así falla, puede ser que el usuario no exista en la tabla usuarios
-            raise HTTPException(status_code=404, detail="Usuario no encontrado al actualizar onboarding")
-            
-        return {"message": "Onboarding completado", "onboarding_completed": True}
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Error completing onboarding: {str(e)}")
-        raise HTTPException(status_code=500, detail="Error al completar el onboarding")
-
-
-@router.post("/exchange")
-async def exchange_auth_code(data: Dict[str, str] = Body(...)) -> Any:
-    """
-    Intercambia un código de autorización (PKCE) por una sesión (tokens).
-    Usado para confirmar emails y resetear contraseñas cuando se usa redirect_to.
-    """
-    try:
-        auth_code = data.get("code")
-        if not auth_code:
-             raise HTTPException(status_code=400, detail="Código de autorización requerido")
-
-        print(f"Intercambiando código Auth: {auth_code[:10]}...")
-        
-        supabase = get_supabase_anon_client()
-        
-        # Intercambiar código por sesión
-        response = supabase.auth.exchange_code_for_session({"auth_code": auth_code})
-        
-        if not response.session:
-             raise HTTPException(status_code=400, detail="No se pudo establecer la sesión. El código puede haber expirado.")
-             
-        print("Intercambio de código exitoso.")
-        
-        return {
-            "access_token": response.session.access_token,
-            "refresh_token": response.session.refresh_token,
-             "user": {
-                "id": response.user.id,
-                "email": response.user.email
-            }
-        }
-
-    except Exception as e:
-        print(f"Error exchanging code: {str(e)}")
-        error_msg = str(e).lower()
-        if "pkce" in error_msg or "code" in error_msg:
-             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="El enlace es inválido o ha expirado."
-            )
+    # 1. Verificar si ya fue configurado
+    existing = db.query(Usuario).first()
+    if existing:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Error al procesar el código de verificación."
+            status_code=status.HTTP_409_CONFLICT,
+            detail="La aplicación ya fue inicializada. Por favor ingresá con tu usuario.",
         )
+
+    # 2. Crear negocio por defecto
+    negocio = Negocio(
+        nombre="Mi Negocio Local",
+        descripcion="Inicializado localmente",
+    )
+    db.add(negocio)
+    db.flush()
+
+    # 3. Crear usuario administrador
+    usuario = Usuario(
+        negocio_id=negocio.id,
+        email=data.email.strip().lower(),
+        nombre=data.nombre.strip(),
+        apellido=data.apellido.strip(),
+        hashed_password=get_password_hash(data.password),
+        is_active=True,
+        is_superuser=True,
+        onboarding_completed=True,  # Ya salta el onboarding del cloud
+    )
+    db.add(usuario)
+    db.commit()
+    db.refresh(usuario)
+
+    print(f"[signup-fallback] Negocio creado automáticamente y usuario inicial registrado: {usuario.email}")
+
+    # 4. Generar y devolver token
+    token = create_access_token(user_id=usuario.id, email=usuario.email)
+    return {"access_token": token, "token_type": "bearer"}
+
