@@ -11,7 +11,7 @@ api_router.include_router(ventas.branch_router, prefix="/businesses/{business_id
 api_router.include_router(compras.router, prefix="/businesses/{business_id}/compras", tags=["compras"])
 api_router.include_router(proveedores.router, prefix="/businesses/{business_id}/proveedores", tags=["proveedores"])
 api_router.include_router(stock.router, prefix="/stock", tags=["stock"])
-api_router.include_router(facturacion.router, prefix="/facturacion", tags=["facturacion"])
+api_router.include_router(facturacion.router, prefix="/businesses/{business_id}/facturacion", tags=["facturacion"])
 api_router.include_router(tareas.router, prefix="/businesses/{business_id}/tareas", tags=["tareas"])
 api_router.include_router(comunicacion.router, prefix="/comunicacion", tags=["comunicacion"])
 api_router.include_router(productos.router, prefix="/businesses/{business_id}/products", tags=["productos"])

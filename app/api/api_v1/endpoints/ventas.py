@@ -15,6 +15,7 @@ from app.db.scoped_client import get_scoped_supabase_user_client
 from app.dependencies import PermissionDependency
 from app.api.context import BusinessBranchContextDep
 from app.core.permissions import check_subscription_access
+from app.api.api_v1.endpoints.afip_helper import procesar_facturacion_afip
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +94,7 @@ class VentaRequest(BaseModel):
     cliente_id: Optional[str] = None
     metodo_pago: str  # Mantenemos metodo_pago en la API pero lo mapeamos a medio_pago
     observaciones: Optional[str] = None
+    facturar: bool = False
 
 class VentaResponseSimple(BaseModel):
     id: str
@@ -282,11 +284,20 @@ async def record_sale_branch(
                     }).eq("id", item.id).eq("negocio_id", business_id).execute()
 
         venta_creada = venta_response.data[0]
+        
+        mensaje = "Venta registrada exitosamente (branch-scoped)"
+        if venta_data.facturar:
+            factura = await procesar_facturacion_afip(client, business_id, venta_id, cliente_id, total, items_validados)
+            if factura:
+                mensaje += " y factura AFIP emitida"
+            else:
+                mensaje += " pero hubo un error al enviar factura a AFIP"
+                
         return VentaResponseSimple(
             id=venta_creada["id"],
             total=venta_creada["total"],
             fecha=venta_creada["fecha"],
-            mensaje="Venta registrada exitosamente (branch-scoped)"
+            mensaje=mensaje
         )
 
     except HTTPException:
@@ -454,11 +465,19 @@ async def record_sale(
                         "stock_actual": nuevo_stock
                     }).eq("id", item.id).eq("negocio_id", negocio_id).execute()
         
+        mensaje = "Venta registrada exitosamente"
+        if venta_data.facturar:
+            factura = await procesar_facturacion_afip(client, negocio_id, venta_id, cliente_id, total, items_validados)
+            if factura:
+                mensaje += " y factura AFIP emitida"
+            else:
+                mensaje += " pero hubo un error al enviar factura a AFIP"
+
         return VentaResponseSimple(
             id=venta_creada["id"],
             total=venta_creada["total"],
             fecha=venta_creada["fecha"],
-            mensaje="Venta registrada exitosamente"
+            mensaje=mensaje
         )
         
     except HTTPException:

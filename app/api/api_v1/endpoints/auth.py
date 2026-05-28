@@ -180,7 +180,7 @@ async def signup(user_data: UserSignUp) -> Any:
     Create new user with the given data
     """
     try:
-        print(f"Datos de registro recibidos: {user_data.dict()}")
+        print(f"Datos de registro recibidos: {user_data.model_dump()}")
         
         # 1. Inicializar cliente Supabase (Anon key es suficiente para registro)
         supabase = get_supabase_anon_client()
@@ -194,12 +194,12 @@ async def signup(user_data: UserSignUp) -> Any:
                     "nombre": user_data.nombre,
                     "apellido": user_data.apellido,
                 },
-                "emailRedirectTo": settings.FRONTEND_CONFIRMATION_URL
+                "email_redirect_to": settings.FRONTEND_CONFIRMATION_URL
             }
         }
 
         # 3. Registrar usuario en Supabase Auth
-        auth_response = supabase.auth.sign_up(credentials)
+        auth_response = supabase.auth.sign_up(credentials)  # type: ignore
 
         if not auth_response.user or not auth_response.user.id:
             raise Exception("No se obtuvo ID de usuario al registrar en Supabase")
@@ -359,77 +359,6 @@ async def read_users_me(request: Request) -> Any:
         )
 
 
-<<<<<<< HEAD
-@router.post("/resend-confirmation-email")
-=======
-@router.put("/profile", response_model=dict)
-async def update_profile(profile_data: dict, request: Request) -> Any:
-    try:
-        if not hasattr(request.state, 'user') or not request.state.user:
-            raise HTTPException(status_code=401, detail="Usuario no autenticado")
-        
-        user = request.state.user
-        user_id = user.id
-        
-        allowed_fields = ['nombre', 'apellido', 'telefono']
-        update_data = {k: v for k, v in profile_data.items() if k in allowed_fields and v is not None}
-        
-        if not update_data:
-            raise HTTPException(status_code=400, detail="No hay datos válidos para actualizar")
-        
-        update_data['updated_at'] = datetime.now(timezone.utc).isoformat()
-        
-        supabase = get_supabase_client()
-        response = supabase.table("usuarios").update(update_data).eq("id", user_id).execute()
-        
-        if not response.data:
-            raise HTTPException(status_code=404, detail="Usuario no encontrado")
-        
-        updated_user = response.data[0]
-        updated_user.update({
-            "email": user.email
-        })
-        
-        return updated_user
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Error update profile: {str(e)}")
-        raise HTTPException(status_code=500, detail="Error interno del servidor")
-
-
-@router.put("/change-password", response_model=dict)
-async def change_password(password_data: dict, request: Request) -> Any:
-    try:
-        if not hasattr(request.state, 'user') or not request.state.user:
-            raise HTTPException(status_code=401, detail="Usuario no autenticado")
-        
-        user = request.state.user
-        # current_password = password_data.get('currentPassword')
-        new_password = password_data.get('newPassword')
-        
-        if not new_password or len(new_password) < 6:
-            raise HTTPException(status_code=400, detail="La nueva contraseña debe tener al menos 6 caracteres")
-        
-        supabase = get_supabase_client()
-        token = request.headers.get("Authorization", "").replace("Bearer ", "")
-        
-        try:
-            # Actualizar usuario autenticado
-            supabase.auth.update_user({
-                "password": new_password
-            })
-            return {"message": "Contraseña actualizada correctamente"}
-            
-        except Exception as update_error:
-            print(f"Error al actualizar contraseña: {str(update_error)}")
-            raise HTTPException(status_code=500, detail="Error al actualizar la contraseña")
-        
-    except HTTPException:
-        raise
-
-
 @router.post("/request-password-reset")
 async def request_password_reset(data: Dict[str, str] = Body(...)) -> Any:
     """
@@ -466,8 +395,7 @@ async def request_password_reset(data: Dict[str, str] = Body(...)) -> Any:
         raise HTTPException(status_code=500, detail="Error interno al procesar solicitud")
 
 
-@router.post("/resend-confirmation")
->>>>>>> 9ae699143c0b25007219338caeb3c6b10ef167d9
+@router.post("/resend-confirmation-email")
 async def resend_confirmation_email(email_data: Dict[str, str] = Body(...)) -> Any:
     """
     Reenviar correo de confirmación (usando Magic Link / OTP).
@@ -548,7 +476,7 @@ async def update_profile(
             print("[WARNING] No token found in update_profile, using anon client")
             supabase = get_supabase_client()
 
-        update_data = user_update.dict(exclude_unset=True)
+        update_data = user_update.model_dump(exclude_unset=True)
         if not update_data:
             raise HTTPException(status_code=400, detail="No se enviaron datos para actualizar")
 
@@ -620,10 +548,11 @@ async def verify_email(data: Dict[str, str] = Body(...)) -> Any:
         supabase = get_supabase_anon_client()
         
         # Verificar OTP con Supabase
-        response = supabase.auth.verify_otp({
+        params: Any = {
             "token_hash": token_hash,
             "type": type_
-        })
+        }
+        response = supabase.auth.verify_otp(params)
 
         if not response.session:
              raise HTTPException(
@@ -636,8 +565,8 @@ async def verify_email(data: Dict[str, str] = Body(...)) -> Any:
             "access_token": response.session.access_token,
             "refresh_token": response.session.refresh_token,
             "user": {
-                "id": response.user.id,
-                "email": response.user.email
+                "id": response.user.id if response.user else None,
+                "email": response.user.email if response.user else None
             }
         }
 
@@ -788,8 +717,8 @@ async def exchange_auth_code(data: Dict[str, str] = Body(...)) -> Any:
             "access_token": response.session.access_token,
             "refresh_token": response.session.refresh_token,
              "user": {
-                "id": response.user.id,
-                "email": response.user.email
+                "id": response.user.id if response.user else None,
+                "email": response.user.email if response.user else None
             }
         }
 
