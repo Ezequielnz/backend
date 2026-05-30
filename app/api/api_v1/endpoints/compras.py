@@ -49,10 +49,16 @@ async def read_purchases(
     if not authorization:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token requerido")
 
+    from app.api.context import BusinessBranchContextDep
+    context = await BusinessBranchContextDep(request, business_id)
+
     client = get_scoped_supabase_user_client(authorization, business_id)
 
     try:
         query = client.table("compras").select("*").eq("negocio_id", business_id)
+        if context.branch_id:
+            query = query.eq("sucursal_id", context.branch_id)
+
         if desde:
             query = query.gte("fecha_compra", desde)
         if hasta:
@@ -87,18 +93,17 @@ async def read_purchase(
     if not authorization:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token requerido")
 
+    from app.api.context import BusinessBranchContextDep
+    context = await BusinessBranchContextDep(request, business_id)
+
     client = get_scoped_supabase_user_client(authorization, business_id)
 
     try:
-        compra_resp = (
-            client
-            .table("compras")
-            .select("*")
-            .eq("id", compra_id)
-            .eq("negocio_id", business_id)
-            .single()
-            .execute()
-        )
+        query = client.table("compras").select("*").eq("id", compra_id).eq("negocio_id", business_id)
+        if context.branch_id:
+            query = query.eq("sucursal_id", context.branch_id)
+        
+        compra_resp = query.single().execute()
         compra = compra_resp.data
         if not compra:
             raise HTTPException(status_code=404, detail="Compra no encontrada")
@@ -142,25 +147,15 @@ async def create_purchase(
     if not authorization:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token requerido")
 
+    from app.api.context import BusinessBranchContextDep
+    context = await BusinessBranchContextDep(request, business_id)
+
     client = get_scoped_supabase_user_client(authorization, business_id)
 
     try:
-        user_id = _get_user_id_from_token(authorization)
+        user_id = context.user_id
+        usuario_negocio_id = context.usuario_negocio_id
 
-        # Obtener usuario_negocio_id para este business
-        un_resp = (
-            client
-            .table("usuarios_negocios")
-            .select("id")
-            .eq("usuario_id", user_id)
-            .eq("negocio_id", business_id)
-            .eq("estado", "aceptado")
-            .limit(1)
-            .execute()
-        )
-        if not un_resp.data:
-            raise HTTPException(status_code=403, detail="No tienes acceso a este negocio")
-        usuario_negocio_id = un_resp.data[0]["id"]
 
         # Validar proveedor si viene
         proveedor_nombre: Optional[str] = getattr(compra_in, "proveedor_nombre", None)
@@ -230,6 +225,7 @@ async def create_purchase(
         compra_data = {
             "id": compra_id,
             "negocio_id": business_id,
+            "sucursal_id": context.branch_id,
             "usuario_negocio_id": usuario_negocio_id,
             "proveedor_id": compra_in.proveedor_id,
             # Nota: la columna en DB es 'fecha_compra'
@@ -385,16 +381,14 @@ async def update_purchase(
             _norm = update_data["estado"].strip().lower().replace(" ", "_").replace("-", "_")
             update_data["estado"] = _norm if _norm in {"entregado", "no_entregado"} else "no_entregado"
 
-        # Leer estado actual de la compra
-        current_resp = (
-            client
-            .table("compras")
-            .select("id, estado")
-            .eq("id", compra_id)
-            .eq("negocio_id", business_id)
-            .single()
-            .execute()
-        )
+        from app.api.context import BusinessBranchContextDep
+        context = await BusinessBranchContextDep(request, business_id)
+        
+        query = client.table("compras").select("id, estado").eq("id", compra_id).eq("negocio_id", business_id)
+        if context.branch_id:
+            query = query.eq("sucursal_id", context.branch_id)
+            
+        current_resp = query.single().execute()
         if not current_resp.data:
             raise HTTPException(status_code=404, detail="Compra no encontrada")
         current_estado = current_resp.data.get("estado")
@@ -462,14 +456,10 @@ async def update_purchase(
             if not prov_resp.data:
                 raise HTTPException(status_code=404, detail="Proveedor no encontrado o no pertenece a este negocio")
 
-        resp = (
-            client
-            .table("compras")
-            .update(update_data)
-            .eq("id", compra_id)
-            .eq("negocio_id", business_id)
-            .execute()
-        )
+        update_query = client.table("compras").update(update_data).eq("id", compra_id).eq("negocio_id", business_id)
+        if context.branch_id:
+            update_query = update_query.eq("sucursal_id", context.branch_id)
+        resp = update_query.execute()
         if not resp.data:
             raise HTTPException(status_code=404, detail="Compra no encontrada o sin cambios")
         updated = resp.data[0]
@@ -500,16 +490,14 @@ async def delete_purchase(
     client = get_scoped_supabase_user_client(authorization, business_id)
 
     try:
-        # Obtener cabecera y detalle antes de eliminar
-        header_sel = (
-            client
-            .table("compras")
-            .select("id, estado")
-            .eq("id", compra_id)
-            .eq("negocio_id", business_id)
-            .single()
-            .execute()
-        )
+        from app.api.context import BusinessBranchContextDep
+        context = await BusinessBranchContextDep(request, business_id)
+        
+        query = client.table("compras").select("id, estado").eq("id", compra_id).eq("negocio_id", business_id)
+        if context.branch_id:
+            query = query.eq("sucursal_id", context.branch_id)
+            
+        header_sel = query.single().execute()
         if not header_sel.data:
             raise HTTPException(status_code=404, detail="Compra no encontrada")
         estado_actual = header_sel.data.get("estado")
@@ -526,7 +514,10 @@ async def delete_purchase(
         # Eliminar detalle primero
         client.table("compras_detalle").delete().eq("compra_id", compra_id).execute()
         # Eliminar cabecera
-        header_resp = client.table("compras").delete().eq("id", compra_id).eq("negocio_id", business_id).execute()
+        delete_query = client.table("compras").delete().eq("id", compra_id).eq("negocio_id", business_id)
+        if context.branch_id:
+            delete_query = delete_query.eq("sucursal_id", context.branch_id)
+        header_resp = delete_query.execute()
         if not header_resp.data:
             raise HTTPException(status_code=404, detail="Compra no encontrada")
 
