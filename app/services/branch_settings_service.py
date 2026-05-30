@@ -56,9 +56,12 @@ class BranchSettingsService:
             "metadata": {},
         }
         try:
-            self._client.table("negocio_configuracion").insert(defaults).execute()
-        except Exception:
+            from app.db.supabase_client import get_supabase_service_client
+            svc_client = get_supabase_service_client()
+            svc_client.table("negocio_configuracion").insert(defaults).execute()
+        except Exception as e:
             # Ignore errors that indicate the record already exists or RLS rejected duplicates.
+            print(f"Error inserting default config: {e}")
             pass
 
     def _hydrate(self, payload: Optional[Dict[str, Any]]) -> Optional[BranchSettings]:
@@ -122,7 +125,9 @@ class BranchSettingsService:
 
         update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
 
-        self._client.table("negocio_configuracion").update(update_data).eq(
+        from app.db.supabase_client import get_supabase_service_client
+        svc_client = get_supabase_service_client()
+        svc_client.table("negocio_configuracion").update(update_data).eq(
             "negocio_id", self._business_id
         ).execute()
 
