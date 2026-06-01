@@ -251,12 +251,15 @@ async def parse_ticket_response(response: str) -> Dict[str, str]:
         print(f"Error parsing ticket response: {e}")
         return {}
 
-async def check_ticket_validity(service: str, cuit: str) -> Optional[Dict[str, str]]:
+async def check_ticket_validity(service: str, cuit: str, client: Any = None, negocio_id: Optional[str] = None) -> Optional[Dict[str, str]]:
     """
     Check if a valid ticket exists for the specified service.
     
     Args:
         service: Service ID (e.g., 'wsfe')
+        cuit: CUIT number
+        client: Supabase client (optional)
+        negocio_id: Business ID (optional)
         
     Returns:
         Dictionary with token and sign or None if no valid ticket exists
@@ -269,8 +272,31 @@ async def check_ticket_validity(service: str, cuit: str) -> Optional[Dict[str, s
         
         if expiration > now:
             return ticket
+            
+    # Check in database if client is provided
+    if client and negocio_id:
+        try:
+            config_resp = client.table("configuracion_fiscal").select("wsaa_token, wsaa_sign, wsaa_expiration, wsaa_generation").eq("negocio_id", negocio_id).execute()
+            if config_resp.data and config_resp.data[0].get("wsaa_token") and config_resp.data[0].get("wsaa_expiration"):
+                config = config_resp.data[0]
+                expiration_str = config["wsaa_expiration"]
+                # Postgres timestamp with time zone is returned as string
+                expiration = datetime.datetime.fromisoformat(expiration_str.replace("Z", "+00:00"))
+                now = datetime.datetime.now(datetime.timezone.utc)
+                
+                if expiration > now:
+                    ticket_data = {
+                        "token": config["wsaa_token"],
+                        "sign": config["wsaa_sign"],
+                        "expiration": expiration_str,
+                        "generation": config.get("wsaa_generation", "")
+                    }
+                    ticket_cache[f"{service}_{cuit}"] = ticket_data
+                    return ticket_data
+        except Exception as e:
+            print(f"Error checking ticket in database: {e}")
     
-    # Check for saved ticket files
+    # Check for saved ticket files (Fallback)
     try:
         ticket_dir = Path("app/services/tickets")
         if not ticket_dir.exists():
@@ -304,10 +330,10 @@ async def check_ticket_validity(service: str, cuit: str) -> Optional[Dict[str, s
             
         return None
     except Exception as e:
-        print(f"Error checking ticket validity: {e}")
+        print(f"Error checking ticket validity fallback: {e}")
         return None
 
-async def get_access_ticket(service: str, cert_path: Path, key_path: Path, wsaa_wsdl: str, cuit: str) -> Optional[Dict[str, str]]:
+async def get_access_ticket(service: str, cert_path: Path, key_path: Path, wsaa_wsdl: str, cuit: str, client: Any = None, negocio_id: Optional[str] = None) -> Optional[Dict[str, str]]:
     """
     Get a valid access ticket for the specified AFIP service.
     If no valid ticket exists, create a new one.
@@ -315,12 +341,14 @@ async def get_access_ticket(service: str, cert_path: Path, key_path: Path, wsaa_
     Args:
         service: Service ID (e.g., 'wsfe')
         cuit: CUIT number (optional, can be set in the environment)
+        client: Supabase client (optional)
+        negocio_id: Business ID (optional)
         
     Returns:
         Dictionary with token, sign and cuit or None if there was an error
     """
     # Check if a valid ticket exists
-    ticket = await check_ticket_validity(service, cuit)
+    ticket = await check_ticket_validity(service, cuit, client, negocio_id)
     if ticket:
         # Add CUIT to ticket data
         if cuit:
@@ -350,6 +378,18 @@ async def get_access_ticket(service: str, cert_path: Path, key_path: Path, wsaa_
         
         # Add to cache
         ticket_cache[f"{service}_{cuit}"] = ticket_data
+        
+        # Save to database if client is provided
+        if client and negocio_id and "token" in ticket_data and "expiration" in ticket_data:
+            try:
+                client.table("configuracion_fiscal").update({
+                    "wsaa_token": ticket_data["token"],
+                    "wsaa_sign": ticket_data["sign"],
+                    "wsaa_expiration": ticket_data["expiration"],
+                    "wsaa_generation": ticket_data.get("generation")
+                }).eq("negocio_id", negocio_id).execute()
+            except Exception as db_err:
+                print(f"Error saving ticket to database: {db_err}")
         
         # Add CUIT to ticket data
         if cuit:

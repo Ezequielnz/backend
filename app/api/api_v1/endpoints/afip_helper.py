@@ -1,10 +1,10 @@
 import tempfile
 from pathlib import Path
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Any
 from app.services.afip.afip_client import create_invoice, get_last_voucher_number
 
-async def procesar_facturacion_afip(client, negocio_id: str, venta_id: str, cliente_id: Optional[str], total: float, items: list):
+async def procesar_facturacion_afip(client: Any, negocio_id: str, venta_id: str, cliente_id: Optional[str], total: float, items: list):
     """
     Procesa la facturación AFIP para una venta.
     Devuelve los datos de la factura si fue exitosa, o None.
@@ -75,7 +75,7 @@ async def procesar_facturacion_afip(client, negocio_id: str, venta_id: str, clie
             with open(key_path, "wb") as f: f.write(key_bytes)
             
             # Obtener ultimo comprobante
-            ult_cbte = await get_last_voucher_number(pto_vta, cbte_tipo, cert_path, key_path, wsaa_wsdl, wsfe_wsdl, cuit)
+            ult_cbte = await get_last_voucher_number(pto_vta, cbte_tipo, cert_path, key_path, wsaa_wsdl, wsfe_wsdl, cuit, "wsfe", client, negocio_id)
             siguiente = ult_cbte + 1
             
             # Preparar invoice_data
@@ -89,8 +89,8 @@ async def procesar_facturacion_afip(client, negocio_id: str, venta_id: str, clie
                 'cbte_desde': siguiente,
                 'cbte_hasta': siguiente,
                 'cbte_fecha': datetime.now().strftime('%Y%m%d'),
-                'imp_total': float(imp_total),
-                'imp_neto': float(imp_total),
+                'imp_total': imp_total,
+                'imp_neto': imp_total,
                 'imp_iva': 0.0,
                 'imp_tot_conc': 0.0,
                 'imp_op_ex': 0.0,
@@ -114,7 +114,7 @@ async def procesar_facturacion_afip(client, negocio_id: str, venta_id: str, clie
                 invoice_data['fch_vto_pago'] = invoice_data['cbte_fecha']
                 
             # Llamar AFIP
-            res = await create_invoice(invoice_data, cert_path, key_path, wsaa_wsdl, wsfe_wsdl, cuit)
+            res = await create_invoice(invoice_data, cert_path, key_path, wsaa_wsdl, wsfe_wsdl, cuit, "wsfe", client, negocio_id)
             
             # Guardar factura
             cae = res.get("FeDetResp", {}).get("FECAEDetResponse", [{}])[0].get("CAE", "")

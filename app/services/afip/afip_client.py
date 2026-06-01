@@ -305,7 +305,7 @@ class AfipError(Exception):
         self.code = code
         super().__init__(self.message)
 
-async def get_client(service: str, cert_path: Path, key_path: Path, wsaa_wsdl: str, wsfe_wsdl: str, cuit: str) -> Tuple[Client, Dict[str, str]]:
+async def get_client(service: str, cert_path: Path, key_path: Path, wsaa_wsdl: str, wsfe_wsdl: str, cuit: str, supabase_client: Any = None, negocio_id: Optional[str] = None) -> Tuple[Client, Dict[str, str]]:
     """
     Get a configured SOAP client for the specified AFIP service.
     
@@ -319,7 +319,7 @@ async def get_client(service: str, cert_path: Path, key_path: Path, wsaa_wsdl: s
         AfipError: If authentication fails or service is unsupported
     """
     # Get authentication ticket
-    ticket_data = await get_access_ticket(service, cert_path, key_path, wsaa_wsdl, cuit)
+    ticket_data = await get_access_ticket(service, cert_path, key_path, wsaa_wsdl, cuit, supabase_client, negocio_id)
     
     if not ticket_data:
         raise AfipError("Failed to obtain AFIP authentication ticket")
@@ -439,7 +439,7 @@ async def get_client(service: str, cert_path: Path, key_path: Path, wsaa_wsdl: s
             
         raise AfipError(f"Failed to create SOAP client: {str(e)}")
 
-async def get_server_status(cert_path: Path, key_path: Path, wsaa_wsdl: str, wsfe_wsdl: str, cuit: str, service: str = "wsfe") -> Dict[str, str]:
+async def get_server_status(cert_path: Path, key_path: Path, wsaa_wsdl: str, wsfe_wsdl: str, cuit: str, service: str = "wsfe", supabase_client: Any = None, negocio_id: Optional[str] = None) -> Dict[str, str]:
     """
     Check the status of the AFIP service.
     
@@ -450,7 +450,7 @@ async def get_server_status(cert_path: Path, key_path: Path, wsaa_wsdl: str, wsf
         Dictionary with status information
     """
     try:
-        client, _ = await get_client(service, cert_path, key_path, wsaa_wsdl, wsfe_wsdl, cuit)
+        client, _ = await get_client(service, cert_path, key_path, wsaa_wsdl, wsfe_wsdl, cuit, supabase_client, negocio_id)
         result = client.service.FEDummy()
         return {
             "appserver": getattr(result, "AppServer", "Unknown"),
@@ -468,7 +468,9 @@ async def get_last_voucher_number(
     wsaa_wsdl: str,
     wsfe_wsdl: str,
     cuit: str,
-    service: str = "wsfe"
+    service: str = "wsfe",
+    supabase_client: Any = None,
+    negocio_id: Optional[str] = None
 ) -> int:
     """
     Get the last voucher number for the specified sales point and voucher type.
@@ -482,7 +484,7 @@ async def get_last_voucher_number(
         Last voucher number
     """
     try:
-        client, auth = await get_client(service, cert_path, key_path, wsaa_wsdl, wsfe_wsdl, cuit)
+        client, auth = await get_client(service, cert_path, key_path, wsaa_wsdl, wsfe_wsdl, cuit, supabase_client, negocio_id)
         result = client.service.FECompUltimoAutorizado(
             Auth=auth,
             PtoVta=punto_venta,
@@ -638,7 +640,9 @@ async def create_invoice(
     wsaa_wsdl: str,
     wsfe_wsdl: str,
     cuit: str,
-    service: str = "wsfe"
+    service: str = "wsfe",
+    supabase_client: Any = None,
+    negocio_id: Optional[str] = None
 ) -> Any:
     """
     Create an electronic invoice through AFIP.
@@ -662,7 +666,7 @@ async def create_invoice(
                 print("Using raw SOAP request fallback for FECAESolicitar")
                 
                 # Prepare authentication data
-                ticket_data = await get_access_ticket(service, cert_path, key_path, wsaa_wsdl, cuit)
+                ticket_data = await get_access_ticket(service, cert_path, key_path, wsaa_wsdl, cuit, supabase_client, negocio_id)
                 if not ticket_data:
                     raise AfipError("Failed to obtain AFIP authentication ticket")
                 
@@ -851,7 +855,7 @@ async def create_invoice(
                     raise AfipError(f"Error parsing AFIP response: {str(xml_error)}")
             else:
                 # Try with the Zeep client first
-                client, auth = await get_client(service, cert_path, key_path, wsaa_wsdl, wsfe_wsdl, cuit)
+                client, auth = await get_client(service, cert_path, key_path, wsaa_wsdl, wsfe_wsdl, cuit, supabase_client, negocio_id)
                 
                 # Update SOAPAction header specifically for this operation
                 if hasattr(client.transport, 'session'):
@@ -954,7 +958,7 @@ async def create_invoice(
                 
                 # Log request XML for debugging
                 if hasattr(client.transport, 'session'):
-                    client.settings.strict = False
+                    client.settings.strict = False  # type: ignore
                     _original_post = client.transport.session.post
                     
                     def _capturing_post(*args, **kwargs):
