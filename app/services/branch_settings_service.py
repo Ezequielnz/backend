@@ -90,17 +90,16 @@ class BranchSettingsService:
 
     def update(self, payload: BranchSettingsUpdate) -> BranchSettings:
         current = self.fetch(ensure_exists=True)
-        if current is None:
-            raise RuntimeError("Unable to retrieve branch settings before applying updates.")
+        is_new = current is None
 
-        if not payload.has_updates():
+        if not is_new and not payload.has_updates():
             return current
 
         update_data: Dict[str, Any] = payload.model_dump(exclude_unset=True)
 
         metadata_payload = update_data.get("metadata")
         if metadata_payload is None:
-            metadata_payload = dict(current.metadata or {})
+            metadata_payload = dict(current.metadata if current and current.metadata else {})
         elif metadata_payload is None:
             metadata_payload = {}
 
@@ -108,7 +107,8 @@ class BranchSettingsService:
             metadata_payload = {}
 
         if (
-            "inventario_modo" in update_data
+            current is not None
+            and "inventario_modo" in update_data
             and update_data["inventario_modo"] != current.inventario_modo
         ):
             metadata_payload = dict(metadata_payload)
@@ -126,12 +126,34 @@ class BranchSettingsService:
         update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
 
         from app.db.supabase_client import get_supabase_service_client
-        svc_client = get_supabase_service_client()
-        svc_client.table("negocio_configuracion").update(update_data).eq(
-            "negocio_id", self._business_id
-        ).execute()
+        
+        if is_new:
+            update_data["negocio_id"] = self._business_id
+            update_data["created_at"] = update_data["updated_at"]
+            if "inventario_modo" not in update_data:
+                update_data["inventario_modo"] = "por_sucursal"
+            if "servicios_modo" not in update_data:
+                update_data["servicios_modo"] = "por_sucursal"
+            if "catalogo_producto_modo" not in update_data:
+                update_data["catalogo_producto_modo"] = "por_sucursal"
+            if "permite_transferencias" not in update_data:
+                update_data["permite_transferencias"] = True
+            if "transferencia_auto_confirma" not in update_data:
+                update_data["transferencia_auto_confirma"] = False
+            
+            try:
+                svc_client = get_supabase_service_client()
+                svc_client.table("negocio_configuracion").insert(update_data).execute()
+            except Exception as e:
+                # Fallback to scoped client
+                self._client.table("negocio_configuracion").insert(update_data).execute()
+        else:
+            svc_client = get_supabase_service_client()
+            svc_client.table("negocio_configuracion").update(update_data).eq(
+                "negocio_id", self._business_id
+            ).execute()
 
-        updated = self.fetch(ensure_exists=True)
+        updated = self.fetch(ensure_exists=False)
         if updated is None:
             raise RuntimeError("Branch settings update executed but record could not be reloaded.")
 

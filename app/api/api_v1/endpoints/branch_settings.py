@@ -31,9 +31,18 @@ async def get_branch_settings(scoped: ScopedClientContext = Depends(BusinessScop
     service = BranchSettingsService(scoped.client, scoped.context.business_id)
     settings = service.fetch(ensure_exists=True)
     if settings is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No branch settings found for this business.",
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        return BranchSettings(
+            negocio_id=scoped.context.business_id,
+            inventario_modo="por_sucursal",
+            servicios_modo="por_sucursal",
+            catalogo_producto_modo="por_sucursal",
+            permite_transferencias=True,
+            transferencia_auto_confirma=False,
+            metadata={},
+            created_at=now,
+            updated_at=now,
         )
     return settings
 
