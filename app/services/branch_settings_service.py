@@ -95,7 +95,7 @@ class BranchSettingsService:
         if not is_new and not payload.has_updates():
             return current
 
-        update_data: Dict[str, Any] = payload.model_dump(exclude_unset=True)
+        update_data: Dict[str, Any] = payload.model_dump(mode='json', exclude_unset=True)
 
         metadata_payload = update_data.get("metadata")
         if metadata_payload is None:
@@ -148,10 +148,16 @@ class BranchSettingsService:
                 # Fallback to scoped client
                 self._client.table("negocio_configuracion").insert(update_data).execute()
         else:
-            svc_client = get_supabase_service_client()
-            svc_client.table("negocio_configuracion").update(update_data).eq(
-                "negocio_id", self._business_id
-            ).execute()
+            try:
+                svc_client = get_supabase_service_client()
+                svc_client.table("negocio_configuracion").update(update_data).eq(
+                    "negocio_id", self._business_id
+                ).execute()
+            except Exception as e:
+                # Fallback to scoped client
+                self._client.table("negocio_configuracion").update(update_data).eq(
+                    "negocio_id", self._business_id
+                ).execute()
 
         updated = self.fetch(ensure_exists=False)
         if updated is None:
