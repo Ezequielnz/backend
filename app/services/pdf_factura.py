@@ -10,7 +10,7 @@ from app.db.supabase_client import get_supabase_service_client
 
 def get_letra_factura(tipo_cbte: int) -> str:
     """
-    Retorna la letra de la factura según el código de tipo de comprobante AFIP.
+    Retorna la letra de la factura según el código de tipo de comprobante ARCA.
     """
     if tipo_cbte == 1:
         return "A"
@@ -22,14 +22,14 @@ def get_letra_factura(tipo_cbte: int) -> str:
 
 def generar_y_subir_pdf_factura(factura_data: dict, venta_data: dict, config_fiscal: dict) -> str | None:
     """
-    Genera un PDF de la factura con los datos de AFIP y lo sube al bucket 'facturas_pdf'.
+    Genera un PDF de la factura con los datos de ARCA y lo sube al bucket 'facturas_pdf'.
     Retorna la ruta del archivo dentro del bucket (file_path) que se usará como pdf_url.
     """
     try:
         factura_id = str(factura_data.get("id"))
         negocio_id = str(config_fiscal.get("negocio_id"))
         
-        # 1. Preparar datos para el QR de AFIP
+        # 1. Preparar datos para el QR de ARCA
         cuit_str = str(factura_data.get("cliente_cuit_dni", ""))
         tipo_doc_rec = 99 # Consumidor Final por defecto
         if cuit_str:
@@ -101,7 +101,7 @@ def generar_y_subir_pdf_factura(factura_data: dict, venta_data: dict, config_fis
         c.setFont("Helvetica-Bold", 12)
         c.drawString(2 * cm, height - 7.5 * cm, f"Total: $ {factura_data.get('imp_total', 0)}")
         
-        # Datos AFIP al pie
+        # Datos ARCA al pie
         c.setFont("Helvetica", 9)
         c.drawString(12 * cm, 4 * cm, f"CAE N°: {factura_data.get('cae', '')}")
         c.drawString(12 * cm, 3.5 * cm, f"Fecha Vto. CAE: {factura_data.get('cae_vencimiento', '')}")

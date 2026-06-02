@@ -101,6 +101,7 @@ class VentaResponseSimple(BaseModel):
     total: float
     fecha: str  # Supabase devuelve fecha como string
     mensaje: str
+    factura_pdf_url: Optional[str] = None
 
 class DashboardStatsPeriod(BaseModel):
     total_sales: float
@@ -286,18 +287,32 @@ async def record_sale_branch(
         venta_creada = venta_response.data[0]
         
         mensaje = "Venta registrada exitosamente (branch-scoped)"
+        factura_pdf_url = None
         if venta_data.facturar:
             factura = await procesar_facturacion_afip(client, business_id, venta_id, cliente_id, total, items_validados)
             if factura:
-                mensaje += " y factura AFIP emitida"
+                mensaje += " y factura ARCA emitida"
+                pdf_path = factura.get("pdf_url")
+                if pdf_path:
+                    try:
+                        from app.db.supabase_client import get_supabase_service_client
+                        supa = get_supabase_service_client()
+                        signed_url_resp = supa.storage.from_("facturas_pdf").create_signed_url(pdf_path, 86400) # 24 horas
+                        if isinstance(signed_url_resp, dict) and "signedURL" in signed_url_resp:
+                            factura_pdf_url = signed_url_resp["signedURL"]
+                        elif isinstance(signed_url_resp, str):
+                            factura_pdf_url = signed_url_resp
+                    except Exception as e:
+                        print(f"Error al generar signed url para PDF: {e}")
             else:
-                mensaje += " pero hubo un error al enviar factura a AFIP"
+                mensaje += " pero hubo un error al enviar factura a ARCA"
                 
         return VentaResponseSimple(
             id=venta_creada["id"],
             total=venta_creada["total"],
             fecha=venta_creada["fecha"],
-            mensaje=mensaje
+            mensaje=mensaje,
+            factura_pdf_url=factura_pdf_url
         )
 
     except HTTPException:

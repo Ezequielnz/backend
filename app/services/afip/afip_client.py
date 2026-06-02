@@ -1,5 +1,5 @@
 """
-Client service for interacting with AFIP Web Services.
+Client service for interacting with ARCA Web Services.
 """
 from datetime import datetime, timedelta
 import os
@@ -24,7 +24,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 def generate_afip_soap_xml(operation: str, params: Dict[str, Any]) -> str:
     """
-    Generate a properly formatted SOAP XML request for AFIP web services.
+    Generate a properly formatted SOAP XML request for ARCA web services.
     
     Args:
         operation: SOAP operation name (e.g., 'FECAESolicitar')
@@ -33,7 +33,7 @@ def generate_afip_soap_xml(operation: str, params: Dict[str, Any]) -> str:
     Returns:
         XML string for SOAP request
     """
-    # AFIP SOAP namespaces
+    # ARCA SOAP namespaces
     namespaces = {
         'soap': 'http://schemas.xmlsoap.org/soap/envelope/',
         'afip': 'http://ar.gov.afip.dif.FEV1/'
@@ -76,7 +76,7 @@ def generate_afip_soap_xml(operation: str, params: Dict[str, Any]) -> str:
 
 def parse_afip_error(response_xml: str) -> Dict[str, str]:
     """
-    Parse AFIP error messages from SOAP response XML.
+    Parse ARCA error messages from SOAP response XML.
     
     Args:
         response_xml: SOAP response XML string
@@ -101,10 +101,10 @@ def parse_afip_error(response_xml: str) -> Dict[str, str]:
                     "message": fault_string.text or ""
                 }
         
-        # Check for AFIP specific errors
+        # Check for ARCA specific errors
         errors = []
         
-        # Different paths where errors might be found in AFIP responses
+        # Different paths where errors might be found in ARCA responses
         error_paths = [
             './/Errors',
             './/Errores',
@@ -127,7 +127,7 @@ def parse_afip_error(response_xml: str) -> Dict[str, str]:
         
         if errors:
             return {
-                "code": "AFIP-ERROR",
+                "code": "ARCA-ERROR",
                 "message": " | ".join(errors)
             }
         
@@ -135,8 +135,8 @@ def parse_afip_error(response_xml: str) -> Dict[str, str]:
         result_elem = root.find('.//Resultado')
         if result_elem is not None and result_elem.text == "R":
             return {
-                "code": "AFIP-REJECTED",
-                "message": "AFIP rejected the request with no specific error details."
+                "code": "ARCA-REJECTED",
+                "message": "ARCA rejected the request with no specific error details."
             }
         
         # If no specific error is found
@@ -152,7 +152,7 @@ def parse_afip_error(response_xml: str) -> Dict[str, str]:
 
 async def send_raw_soap_request(wsdl_url: str, operation: str, params: Dict[str, Any]) -> Optional[str]:
     """
-    Send a raw SOAP request to AFIP web services as a fallback when Zeep client fails.
+    Send a raw SOAP request to ARCA web services as a fallback when Zeep client fails.
     
     Args:
         wsdl_url: WSDL URL for the service
@@ -177,7 +177,7 @@ async def send_raw_soap_request(wsdl_url: str, operation: str, params: Dict[str,
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
         
-        # Ignore SSL verification for AFIP's problematic certificates
+        # Ignore SSL verification for ARCA's problematic certificates
         session.verify = False
         
         # Service URL from WSDL
@@ -214,10 +214,10 @@ async def send_raw_soap_request(wsdl_url: str, operation: str, params: Dict[str,
             print(error_msg)
             raise AfipError(error_msg, error_info['code'])
         
-        # Check for AFIP errors in the response
+        # Check for ARCA errors in the response
         if "<Errors>" in response.text or "<Err>" in response.text or "faultstring" in response.text:
             error_info = parse_afip_error(response.text)
-            error_msg = f"AFIP error: {error_info['message']}"
+            error_msg = f"ARCA error: {error_info['message']}"
             print(error_msg)
             raise AfipError(error_msg, error_info['code'])
         
@@ -299,7 +299,7 @@ async def send_raw_soap_request(wsdl_url: str, operation: str, params: Dict[str,
         raise AfipError(f"Failed to send SOAP request: {str(e)}")
 
 class AfipError(Exception):
-    """Custom exception for AFIP service errors."""
+    """Custom exception for ARCA service errors."""
     def __init__(self, message: str, code: Optional[str] = None):
         self.message = message
         self.code = code
@@ -307,7 +307,7 @@ class AfipError(Exception):
 
 async def get_client(service: str, cert_path: Path, key_path: Path, wsaa_wsdl: str, wsfe_wsdl: str, cuit: str, supabase_client: Any = None, negocio_id: Optional[str] = None) -> Tuple[Client, Dict[str, str]]:
     """
-    Get a configured SOAP client for the specified AFIP service.
+    Get a configured SOAP client for the specified ARCA service.
     
     Args:
         service: Service ID (e.g., 'wsfe')
@@ -322,7 +322,7 @@ async def get_client(service: str, cert_path: Path, key_path: Path, wsaa_wsdl: s
     ticket_data = await get_access_ticket(service, cert_path, key_path, wsaa_wsdl, cuit, supabase_client, negocio_id)
     
     if not ticket_data:
-        raise AfipError("Failed to obtain AFIP authentication ticket")
+        raise AfipError("Failed to obtain ARCA authentication ticket")
     
     # Select the appropriate WSDL based on service
     wsdl_url = None
@@ -349,7 +349,7 @@ async def get_client(service: str, cert_path: Path, key_path: Path, wsaa_wsdl: s
         # Apply context to HTTPS requests
         session.verify = False
         
-        # Set specific headers required by AFIP
+        # Set specific headers required by ARCA
         headers = {
             'Cache-Control': 'no-cache',
             'Content-Type': 'text/xml; charset=utf-8',
@@ -384,7 +384,7 @@ async def get_client(service: str, cert_path: Path, key_path: Path, wsaa_wsdl: s
     except Exception as e:
         # En modo desarrollo, crear un cliente simulado
         if settings.ENVIRONMENT == "dev" and ("MOCKTOKEN" in ticket_data.get("token", "") or "Failed to create SOAP client" in str(e)):
-            print(f"DEV MODE: Using mock AFIP client")
+            print(f"DEV MODE: Using mock ARCA client")
             # Devolver un cliente simulado para pruebas
             from types import SimpleNamespace
             mock_client = SimpleNamespace()
@@ -441,7 +441,7 @@ async def get_client(service: str, cert_path: Path, key_path: Path, wsaa_wsdl: s
 
 async def get_server_status(cert_path: Path, key_path: Path, wsaa_wsdl: str, wsfe_wsdl: str, cuit: str, service: str = "wsfe", supabase_client: Any = None, negocio_id: Optional[str] = None) -> Dict[str, str]:
     """
-    Check the status of the AFIP service.
+    Check the status of the ARCA service.
     
     Args:
         service: Service ID to check
@@ -493,7 +493,7 @@ async def get_last_voucher_number(
         
         if hasattr(result, "Errors") and result.Errors:
             error_msg = ", ".join(f"{error.Code}: {error.Msg}" for error in result.Errors)
-            raise AfipError(f"AFIP error: {error_msg}")
+            raise AfipError(f"ARCA error: {error_msg}")
             
         return result.CbteNro
     except Fault as fault:
@@ -503,7 +503,7 @@ async def get_last_voucher_number(
 
 async def get_invoice_types(cert_path: Path, key_path: Path, wsaa_wsdl: str, wsfe_wsdl: str, cuit: str, service: str = "wsfe") -> Dict[str, Any]:
     """
-    Get available invoice types from AFIP.
+    Get available invoice types from ARCA.
     
     Args:
         service: Service ID
@@ -517,7 +517,7 @@ async def get_invoice_types(cert_path: Path, key_path: Path, wsaa_wsdl: str, wsf
         
         if hasattr(result, "Errors") and result.Errors:
             error_msg = ", ".join(f"{error.Code}: {error.Msg}" for error in result.Errors)
-            raise AfipError(f"AFIP error: {error_msg}")
+            raise AfipError(f"ARCA error: {error_msg}")
             
         return result
     except Exception as e:
@@ -525,7 +525,7 @@ async def get_invoice_types(cert_path: Path, key_path: Path, wsaa_wsdl: str, wsf
 
 async def get_concept_types(cert_path: Path, key_path: Path, wsaa_wsdl: str, wsfe_wsdl: str, cuit: str, service: str = "wsfe") -> Dict[str, Any]:
     """
-    Get available concept types from AFIP.
+    Get available concept types from ARCA.
     
     Args:
         service: Service ID
@@ -539,7 +539,7 @@ async def get_concept_types(cert_path: Path, key_path: Path, wsaa_wsdl: str, wsf
         
         if hasattr(result, "Errors") and result.Errors:
             error_msg = ", ".join(f"{error.Code}: {error.Msg}" for error in result.Errors)
-            raise AfipError(f"AFIP error: {error_msg}")
+            raise AfipError(f"ARCA error: {error_msg}")
             
         return result
     except Exception as e:
@@ -547,7 +547,7 @@ async def get_concept_types(cert_path: Path, key_path: Path, wsaa_wsdl: str, wsf
 
 async def get_document_types(cert_path: Path, key_path: Path, wsaa_wsdl: str, wsfe_wsdl: str, cuit: str, service: str = "wsfe") -> Dict[str, Any]:
     """
-    Get available document types from AFIP.
+    Get available document types from ARCA.
     
     Args:
         service: Service ID
@@ -561,7 +561,7 @@ async def get_document_types(cert_path: Path, key_path: Path, wsaa_wsdl: str, ws
         
         if hasattr(result, "Errors") and result.Errors:
             error_msg = ", ".join(f"{error.Code}: {error.Msg}" for error in result.Errors)
-            raise AfipError(f"AFIP error: {error_msg}")
+            raise AfipError(f"ARCA error: {error_msg}")
             
         return result
     except Exception as e:
@@ -569,7 +569,7 @@ async def get_document_types(cert_path: Path, key_path: Path, wsaa_wsdl: str, ws
 
 async def get_tax_types(cert_path: Path, key_path: Path, wsaa_wsdl: str, wsfe_wsdl: str, cuit: str, service: str = "wsfe") -> Dict[str, Any]:
     """
-    Get available tax types from AFIP.
+    Get available tax types from ARCA.
     
     Args:
         service: Service ID
@@ -583,7 +583,7 @@ async def get_tax_types(cert_path: Path, key_path: Path, wsaa_wsdl: str, wsfe_ws
         
         if hasattr(result, "Errors") and result.Errors:
             error_msg = ", ".join(f"{error.Code}: {error.Msg}" for error in result.Errors)
-            raise AfipError(f"AFIP error: {error_msg}")
+            raise AfipError(f"ARCA error: {error_msg}")
             
         return result
     except Exception as e:
@@ -591,7 +591,7 @@ async def get_tax_types(cert_path: Path, key_path: Path, wsaa_wsdl: str, wsfe_ws
 
 async def get_currency_types(cert_path: Path, key_path: Path, wsaa_wsdl: str, wsfe_wsdl: str, cuit: str, service: str = "wsfe") -> Dict[str, Any]:
     """
-    Get available currency types from AFIP.
+    Get available currency types from ARCA.
     
     Args:
         service: Service ID
@@ -605,7 +605,7 @@ async def get_currency_types(cert_path: Path, key_path: Path, wsaa_wsdl: str, ws
         
         if hasattr(result, "Errors") and result.Errors:
             error_msg = ", ".join(f"{error.Code}: {error.Msg}" for error in result.Errors)
-            raise AfipError(f"AFIP error: {error_msg}")
+            raise AfipError(f"ARCA error: {error_msg}")
             
         return result
     except Exception as e:
@@ -613,7 +613,7 @@ async def get_currency_types(cert_path: Path, key_path: Path, wsaa_wsdl: str, ws
 
 async def get_optional_types(cert_path: Path, key_path: Path, wsaa_wsdl: str, wsfe_wsdl: str, cuit: str, service: str = "wsfe") -> Dict[str, Any]:
     """
-    Get available optional data types from AFIP.
+    Get available optional data types from ARCA.
     
     Args:
         service: Service ID
@@ -627,7 +627,7 @@ async def get_optional_types(cert_path: Path, key_path: Path, wsaa_wsdl: str, ws
         
         if hasattr(result, "Errors") and result.Errors:
             error_msg = ", ".join(f"{error.Code}: {error.Msg}" for error in result.Errors)
-            raise AfipError(f"AFIP error: {error_msg}")
+            raise AfipError(f"ARCA error: {error_msg}")
             
         return result
     except Exception as e:
@@ -645,14 +645,14 @@ async def create_invoice(
     negocio_id: Optional[str] = None
 ) -> Any:
     """
-    Create an electronic invoice through AFIP.
+    Create an electronic invoice through ARCA.
     
     Args:
         invoice_data: Dictionary containing invoice data
         service: Service ID
         
     Returns:
-        Dictionary with AFIP response
+        Dictionary with ARCA response
     """
     max_retries = 3
     retry_count = 0
@@ -668,7 +668,7 @@ async def create_invoice(
                 # Prepare authentication data
                 ticket_data = await get_access_ticket(service, cert_path, key_path, wsaa_wsdl, cuit, supabase_client, negocio_id)
                 if not ticket_data:
-                    raise AfipError("Failed to obtain AFIP authentication ticket")
+                    raise AfipError("Failed to obtain ARCA authentication ticket")
                 
                 auth = {
                     "Token": ticket_data["token"],
@@ -769,7 +769,7 @@ async def create_invoice(
                 # Send the raw SOAP request
                 xml_response = await send_raw_soap_request(wsfe_wsdl, "FECAESolicitar", req)
                 if not xml_response:
-                    raise AfipError("Failed to get response from AFIP")
+                    raise AfipError("Failed to get response from ARCA")
                 
                 # Parse the response XML
                 try:
@@ -784,7 +784,7 @@ async def create_invoice(
                     result_elem = root.find(response_path, namespaces)
                     
                     if result_elem is None:
-                        raise AfipError("Invalid AFIP response format")
+                        raise AfipError("Invalid ARCA response format")
                     
                     # Create a response object similar to the Zeep client response
                     from types import SimpleNamespace
@@ -847,12 +847,12 @@ async def create_invoice(
                     )
                     
                     # Log the response
-                    print(f"Parsed AFIP response: CAE={cae}, Resultado={resultado_det}")
+                    print(f"Parsed ARCA response: CAE={cae}, Resultado={resultado_det}")
                     
                     return result
                 except Exception as xml_error:
-                    print(f"Error parsing AFIP response XML: {str(xml_error)}")
-                    raise AfipError(f"Error parsing AFIP response: {str(xml_error)}")
+                    print(f"Error parsing ARCA response XML: {str(xml_error)}")
+                    raise AfipError(f"Error parsing ARCA response: {str(xml_error)}")
             else:
                 # Try with the Zeep client first
                 client, auth = await get_client(service, cert_path, key_path, wsaa_wsdl, wsfe_wsdl, cuit, supabase_client, negocio_id)
@@ -863,7 +863,7 @@ async def create_invoice(
                         'SOAPAction': 'http://ar.gov.afip.dif.FEV1/FECAESolicitar'
                     })
                 
-                # Estructura exacta según documentación de AFIP
+                # Estructura exacta según documentación de ARCA
                 req = {
                     'Auth': auth,
                     'FeCAEReq': {
@@ -898,7 +898,7 @@ async def create_invoice(
                 
                 # Agregar información de IVA si está presente
                 if 'iva' in invoice_data and invoice_data['iva']:
-                    # Formatear los datos de IVA según el formato requerido por AFIP
+                    # Formatear los datos de IVA según el formato requerido por ARCA
                     alicuotas_iva = []
                     for item in invoice_data['iva']:
                         alicuotas_iva.append({
@@ -954,7 +954,7 @@ async def create_invoice(
                         'CbteAsoc': cbtes_asoc
                     }
                     
-                print(f"Enviando solicitud de factura a AFIP: {req}")
+                print(f"Enviando solicitud de factura a ARCA: {req}")
                 
                 # Log request XML for debugging
                 if hasattr(client.transport, 'session'):
@@ -969,7 +969,7 @@ async def create_invoice(
                     
                     client.transport.session.post = _capturing_post  # type: ignore[assignment]
                     
-                # Llamar al servicio web de AFIP
+                # Llamar al servicio web de ARCA
                 result = client.service.FECAESolicitar(**req)
                 
                 # Restore original post method
@@ -978,10 +978,10 @@ async def create_invoice(
                 
                 if hasattr(result, "Errors") and result.Errors:
                     error_msg = ", ".join(f"{error.Code}: {error.Msg}" for error in result.Errors)
-                    raise AfipError(f"AFIP error: {error_msg}")
+                    raise AfipError(f"ARCA error: {error_msg}")
                     
                 # Log response for debugging
-                print(f"Respuesta de AFIP: CAE={getattr(result.FeDetResp.FECAEDetResponse[0], 'CAE', 'No CAE')}, " 
+                print(f"Respuesta de ARCA: CAE={getattr(result.FeDetResp.FECAEDetResponse[0], 'CAE', 'No CAE')}, " 
                       f"Resultado={getattr(result.FeDetResp.FECAEDetResponse[0], 'Resultado', 'Desconocido')}")
                     
                 return result
@@ -1055,7 +1055,7 @@ async def get_invoice_info(
         
         if hasattr(result, "Errors") and result.Errors:
             error_msg = ", ".join(f"{error.Code}: {error.Msg}" for error in result.Errors)
-            raise AfipError(f"AFIP error: {error_msg}")
+            raise AfipError(f"ARCA error: {error_msg}")
             
         return result
     except Fault as fault:
@@ -1063,4 +1063,4 @@ async def get_invoice_info(
     except Exception as e:
         raise AfipError(f"Failed to get invoice information: {str(e)}")
 
-# Add more AFIP Web Services functions as needed 
+# Add more ARCA Web Services functions as needed 

@@ -4,7 +4,7 @@ from app.db.supabase_client import get_supabase_user_client
 from app.core.permissions import check_subscription_access
 from app.schemas.facturacion import ConfiguracionFiscalResponse, AfipStatusResponse
 
-# Import AFIP client
+# Import ARCA client
 from app.services.afip import get_server_status, get_last_voucher_number
 
 router = APIRouter()
@@ -122,7 +122,7 @@ async def check_afip_status(
     subscription_check: bool = Depends(check_subscription_access)
 ):
     """
-    Check connection to AFIP using the uploaded certificates.
+    Check connection to ARCA using the uploaded certificates.
     Downloads certs from Storage to a temporary directory just for the check.
     """
     client = get_supabase_user_client(authorization)
@@ -203,4 +203,4 @@ async def check_afip_status(
             return res
             
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error validando conexión con AFIP: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Error validando conexión con ARCA: {str(e)}")

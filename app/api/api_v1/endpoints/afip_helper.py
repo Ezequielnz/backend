@@ -6,7 +6,7 @@ from app.services.afip.afip_client import create_invoice, get_last_voucher_numbe
 
 async def procesar_facturacion_afip(client: Any, negocio_id: str, venta_id: str, cliente_id: Optional[str], total: float, items: list):
     """
-    Procesa la facturación AFIP para una venta.
+    Procesa la facturación ARCA para una venta.
     Devuelve los datos de la factura si fue exitosa, o None.
     """
     # Obtener config
@@ -113,7 +113,7 @@ async def procesar_facturacion_afip(client: Any, negocio_id: str, venta_id: str,
                 invoice_data['fch_serv_hasta'] = invoice_data['cbte_fecha']
                 invoice_data['fch_vto_pago'] = invoice_data['cbte_fecha']
                 
-            # Llamar AFIP
+            # Llamar ARCA
             res = await create_invoice(invoice_data, cert_path, key_path, wsaa_wsdl, wsfe_wsdl, cuit, "wsfe", client, negocio_id)
             
             # Guardar factura
@@ -130,10 +130,27 @@ async def procesar_facturacion_afip(client: Any, negocio_id: str, venta_id: str,
                 "cae": cae,
                 "vencimiento_cae": datetime.strptime(cae_fch_vto, '%Y%m%d').date().isoformat() if cae_fch_vto else None
             }
-            client.table("facturas").insert(factura_data).execute()
+            factura_resp = client.table("facturas").insert(factura_data).execute()
+            
+            if factura_resp.data:
+                factura_id = factura_resp.data[0]["id"]
+                factura_data["id"] = factura_id
+                
+                # Import PDF Generator
+                from app.services.pdf_factura import generar_y_subir_pdf_factura
+                
+                # Extra fields needed by the generator
+                factura_data["imp_total"] = imp_total
+                factura_data["cliente_cuit_dni"] = doc_nro if doc_nro > 0 else None
+                factura_data["cae_vencimiento"] = datetime.strptime(cae_fch_vto, '%Y%m%d').date().isoformat() if cae_fch_vto else None
+                
+                pdf_path = generar_y_subir_pdf_factura(factura_data, {}, config)
+                if pdf_path:
+                    client.table("facturas").update({"pdf_url": pdf_path}).eq("id", factura_id).execute()
+                    factura_data["pdf_url"] = pdf_path
             
             return factura_data
             
         except Exception as e:
-            print(f"Error procesando factura AFIP: {e}")
+            print(f"Error procesando factura ARCA: {e}")
             return None
