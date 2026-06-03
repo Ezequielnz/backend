@@ -21,7 +21,7 @@ def _ensure_feature_enabled() -> None:
         )
 
 
-@router.get("/", response_model=BranchSettings)
+@router.get("", response_model=BranchSettings)
 async def get_branch_settings(scoped: ScopedClientContext = Depends(BusinessScopedClientDep)) -> BranchSettings:
     """
     Retrieve the branch configuration (negocio_configuracion) for the given business.
@@ -47,7 +47,7 @@ async def get_branch_settings(scoped: ScopedClientContext = Depends(BusinessScop
     return settings
 
 
-@router.put("/", response_model=BranchSettings)
+@router.put("", response_model=BranchSettings)
 async def update_branch_settings(
     payload: BranchSettingsUpdate,
     scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
