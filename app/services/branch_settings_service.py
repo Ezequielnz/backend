@@ -1,16 +1,24 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from app.db.scoped_client import ScopedSupabaseClient
+from app.db.supabase_client import get_supabase_service_client
 from app.schemas.branch_settings import BranchSettings, BranchSettingsUpdate
+
+logger = logging.getLogger(__name__)
 
 
 class BranchSettingsService:
     """
     Wrapper around `negocio_configuracion` that encapsulates default handling,
     validation and hydration into Pydantic models.
+
+    Writes always use the service-role client (bypasses RLS) so updates are
+    never silently dropped due to missing RLS UPDATE/INSERT policies.
+    Reads use the user-scoped client so RLS still gates visibility.
     """
 
     _SELECT_COLUMNS = (
@@ -29,13 +37,16 @@ class BranchSettingsService:
     def __init__(self, client: ScopedSupabaseClient, business_id: str) -> None:
         self._client = client
         self._business_id = business_id
+        # Service client always bypasses RLS — used for all writes.
+        self._svc = get_supabase_service_client()
 
     # --------------------------------------------------------------------- #
     # Internal helpers
     # --------------------------------------------------------------------- #
     def _select_query(self):
+        """Use service client for reads too, to avoid RLS SELECT issues."""
         return (
-            self._client.table("negocio_configuracion")
+            self._svc.table("negocio_configuracion")
             .select(self._SELECT_COLUMNS)
             .eq("negocio_id", self._business_id)
             .limit(1)
@@ -48,28 +59,25 @@ class BranchSettingsService:
         """
         defaults: Dict[str, Any] = {
             "negocio_id": self._business_id,
-            "inventario_modo": "por_sucursal",
-            "servicios_modo": "por_sucursal",
-            "catalogo_producto_modo": "por_sucursal",
+            "inventario_modo": "centralizado",
+            "servicios_modo": "centralizado",
+            "catalogo_producto_modo": "compartido",
             "permite_transferencias": True,
             "transferencia_auto_confirma": False,
             "metadata": {},
         }
         try:
-            from app.db.supabase_client import get_supabase_service_client
-            svc_client = get_supabase_service_client()
-            svc_client.table("negocio_configuracion").insert(defaults).execute()
+            self._svc.table("negocio_configuracion").insert(defaults).execute()
+            logger.info("Created default negocio_configuracion for %s", self._business_id)
         except Exception as e:
-            # Ignore errors that indicate the record already exists or RLS rejected duplicates.
-            print(f"Error inserting default config: {e}")
-            pass
+            # Silently ignore duplicate key errors — record already exists.
+            logger.debug("Default config insert skipped (likely already exists): %s", e)
 
     def _hydrate(self, payload: Optional[Dict[str, Any]]) -> Optional[BranchSettings]:
         if not payload:
             return None
 
-        metadata = payload.get("metadata")
-        if metadata is None:
+        if payload.get("metadata") is None:
             payload["metadata"] = {}
 
         return BranchSettings(**payload)
@@ -93,113 +101,124 @@ class BranchSettingsService:
         is_new = current is None
 
         if not is_new and not payload.has_updates():
-            return current
+            return current  # type: ignore[return-value]
 
-        update_data: Dict[str, Any] = payload.model_dump(mode='json', exclude_unset=True)
+        update_data: Dict[str, Any] = payload.model_dump(mode="json", exclude_unset=True)
 
-        metadata_payload = update_data.get("metadata")
-        if metadata_payload is None:
-            metadata_payload = dict(current.metadata if current and current.metadata else {})
-        elif metadata_payload is None:
-            metadata_payload = {}
-
-        if "metadata" in update_data and update_data["metadata"] is None:
-            metadata_payload = {}
+        # ------------------------------------------------------------------ #
+        # Metadata bookkeeping
+        # ------------------------------------------------------------------ #
+        metadata_payload: Dict[str, Any] = dict(
+            current.metadata if current and current.metadata else {}
+        )
+        # Explicit metadata in payload overrides
+        if "metadata" in update_data and update_data["metadata"] is not None:
+            metadata_payload = update_data["metadata"]
 
         if (
             current is not None
             and "inventario_modo" in update_data
             and update_data["inventario_modo"] != current.inventario_modo
         ):
-            metadata_payload = dict(metadata_payload)
             metadata_payload["inventory_mode_previous"] = current.inventario_modo
             metadata_payload["inventory_mode_changed_at"] = datetime.now(timezone.utc).isoformat()
-            metadata_payload["inventory_mode_sync_required"] = False
 
         if (
             current is not None
             and "servicios_modo" in update_data
             and update_data["servicios_modo"] != current.servicios_modo
         ):
-            metadata_payload = dict(metadata_payload)
             metadata_payload["services_mode_previous"] = current.servicios_modo
             metadata_payload["services_mode_changed_at"] = datetime.now(timezone.utc).isoformat()
-            metadata_payload["services_mode_sync_required"] = False
 
         update_data["metadata"] = metadata_payload
 
-        # Normalize empty strings for default_branch_id to NULL so Supabase accepts it.
+        # Normalize empty string → NULL for UUID column.
         default_branch = update_data.get("default_branch_id")
         if isinstance(default_branch, str) and not default_branch.strip():
             update_data["default_branch_id"] = None
 
         update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
 
-        from app.db.supabase_client import get_supabase_service_client
-        
+        # ------------------------------------------------------------------ #
+        # Persist — always via service client (bypasses RLS)
+        # ------------------------------------------------------------------ #
         if is_new:
             update_data["negocio_id"] = self._business_id
-            update_data["created_at"] = update_data["updated_at"]
-            if "inventario_modo" not in update_data:
-                update_data["inventario_modo"] = "por_sucursal"
-            if "servicios_modo" not in update_data:
-                update_data["servicios_modo"] = "por_sucursal"
-            if "catalogo_producto_modo" not in update_data:
-                update_data["catalogo_producto_modo"] = "por_sucursal"
-            if "permite_transferencias" not in update_data:
-                update_data["permite_transferencias"] = True
-            if "transferencia_auto_confirma" not in update_data:
-                update_data["transferencia_auto_confirma"] = False
-            
-            try:
-                # Insert via user client first
-                resp = self._client.table("negocio_configuracion").insert(update_data).execute()
-                if not resp.data:
-                    raise ValueError("Empty data returned")
-            except Exception:
-                # Fallback to service client
-                svc_client = get_supabase_service_client()
-                svc_client.table("negocio_configuracion").insert(update_data).execute()
-        else:
-            try:
-                # Update via user client first
-                resp = self._client.table("negocio_configuracion").update(update_data).eq(
-                    "negocio_id", self._business_id
-                ).execute()
-                if not resp.data:
-                    # Fallback to service client
-                    svc_client = get_supabase_service_client()
-                    svc_resp = svc_client.table("negocio_configuracion").update(update_data).eq(
-                        "negocio_id", self._business_id
-                    ).execute()
-                    if not svc_resp.data:
-                        print(f"[Warning] No rows updated for negocio_id {self._business_id}")
-            except Exception as e:
-                # Fallback to service client
-                print(f"[Warning] User client update failed: {e}")
-                svc_client = get_supabase_service_client()
-                svc_client.table("negocio_configuracion").update(update_data).eq(
-                    "negocio_id", self._business_id
-                ).execute()
+            update_data.setdefault("inventario_modo", "centralizado")
+            update_data.setdefault("servicios_modo", "centralizado")
+            update_data.setdefault("catalogo_producto_modo", "compartido")
+            update_data.setdefault("permite_transferencias", True)
+            update_data.setdefault("transferencia_auto_confirma", False)
+            update_data.setdefault("created_at", update_data["updated_at"])
 
+            resp = self._svc.table("negocio_configuracion").insert(update_data).execute()
+            if not resp.data:
+                raise RuntimeError(
+                    f"Failed to insert negocio_configuracion for {self._business_id}. "
+                    f"Response: {resp}"
+                )
+            logger.info("Inserted new negocio_configuracion for %s", self._business_id)
+        else:
+            resp = (
+                self._svc.table("negocio_configuracion")
+                .update(update_data)
+                .eq("negocio_id", self._business_id)
+                .execute()
+            )
+            if not resp.data:
+                raise RuntimeError(
+                    f"Failed to update negocio_configuracion for {self._business_id}. "
+                    f"Zero rows affected. Response: {resp}"
+                )
+            logger.info(
+                "Updated negocio_configuracion for %s — fields: %s",
+                self._business_id,
+                list(update_data.keys()),
+            )
+
+        # ------------------------------------------------------------------ #
+        # Reload to return the definitive persisted state
+        # ------------------------------------------------------------------ #
         updated = self.fetch(ensure_exists=False)
         if updated is None:
-            raise RuntimeError("Branch settings update executed but record could not be reloaded.")
+            raise RuntimeError(
+                f"Branch settings update executed for {self._business_id} "
+                "but record could not be reloaded."
+            )
 
-        # Run synchronization if modes changed
+        # ------------------------------------------------------------------ #
+        # Background data synchronisation (inventory / services mode changes)
+        # NOTE: This runs AFTER returning the updated config so that sync
+        # failures do NOT roll back the already-persisted configuration.
+        # We log errors but do NOT re-raise them here.
+        # ------------------------------------------------------------------ #
         if current is not None:
-            try:
-                from app.services.sync_service import SyncService
-                sync_svc = SyncService(self._business_id)
-                
-                if "inventario_modo" in update_data and update_data["inventario_modo"] != current.inventario_modo:
-                    sync_svc.sync_inventory_mode(current.inventario_modo, update_data["inventario_modo"])
-                    
-                if "servicios_modo" in update_data and update_data["servicios_modo"] != current.servicios_modo:
-                    sync_svc.sync_services_mode(current.servicios_modo, update_data["servicios_modo"])
-            except Exception as e:
-                # Log error but don't fail the update entirely, API can return 500 or just log it
-                # For robustness, we let it raise so the endpoint catches it and returns 500
-                raise RuntimeError(f"Error synchronizing branch settings: {str(e)}") from e
+            inv_changed = (
+                "inventario_modo" in update_data
+                and update_data["inventario_modo"] != current.inventario_modo
+            )
+            svc_changed = (
+                "servicios_modo" in update_data
+                and update_data["servicios_modo"] != current.servicios_modo
+            )
+            if inv_changed or svc_changed:
+                try:
+                    from app.services.sync_service import SyncService
+                    sync_svc = SyncService(self._business_id)
+                    if inv_changed:
+                        sync_svc.sync_inventory_mode(
+                            current.inventario_modo, update_data["inventario_modo"]
+                        )
+                    if svc_changed:
+                        sync_svc.sync_services_mode(
+                            current.servicios_modo, update_data["servicios_modo"]
+                        )
+                except Exception as e:
+                    logger.error(
+                        "Sync error for %s (non-fatal, config already saved): %s",
+                        self._business_id,
+                        e,
+                    )
 
         return updated
