@@ -257,14 +257,15 @@ async def create_purchase(
 
         # Actualizar stock de productos SOLO si la compra está entregada
         if estado_value == "entregado":
+            svc = get_supabase_service_client()
             settings = context.branch_settings or {}
             inventario_modo = settings.get("inventario_modo", "centralizado")
             for it in items_preparados:
                 if inventario_modo == "por_sucursal":
                     inv_resp2 = (
-                        client
+                        svc
                         .table("inventario_sucursal")
-                        .select("stock_actual")
+                        .select("id, stock_actual")
                         .eq("producto_id", it["producto_id"])
                         .eq("sucursal_id", context.branch_id)
                         .eq("negocio_id", business_id)
@@ -272,17 +273,25 @@ async def create_purchase(
                     )
                     actual = inv_resp2.data[0].get("stock_actual", 0) if inv_resp2.data else 0
                     nuevo = int(actual) + int(it["cantidad"])
-                    client.table("inventario_sucursal").update({
-                        "stock_actual": nuevo
-                    }).eq("producto_id", it["producto_id"]).eq("sucursal_id", context.branch_id).execute()
-                    client.table("productos").update({
+                    if inv_resp2.data:
+                        svc.table("inventario_sucursal").update({
+                            "stock_actual": nuevo
+                        }).eq("id", inv_resp2.data[0]["id"]).execute()
+                    else:
+                        svc.table("inventario_sucursal").insert({
+                            "negocio_id": business_id,
+                            "sucursal_id": context.branch_id,
+                            "producto_id": it["producto_id"],
+                            "stock_actual": nuevo,
+                        }).execute()
+                    svc.table("productos").update({
                         "precio_compra": float(it["precio_unitario"]) if it.get("precio_unitario") is not None else None,
-                    }).eq("id", it["producto_id"]).eq("negocio_id", business_id).execute()
+                    }).eq("id", it["producto_id"]).execute()
                 else:
                     prod_resp2 = (
-                        client
+                        svc
                         .table("productos")
-                        .select("stock_actual")
+                        .select("id, stock_actual")
                         .eq("id", it["producto_id"])
                         .eq("negocio_id", business_id)
                         .execute()
@@ -290,11 +299,11 @@ async def create_purchase(
                     if prod_resp2.data:
                         actual = prod_resp2.data[0].get("stock_actual", 0) or 0
                         nuevo = int(actual) + int(it["cantidad"])
-                        client.table("productos").update({
+                        svc.table("productos").update({
                             "stock_actual": nuevo,
                             "precio_compra": float(it["precio_unitario"]) if it.get("precio_unitario") is not None else None,
-                        }).eq("id", it["producto_id"]).eq("negocio_id", business_id).execute()
-                        client.table("inventario_negocio").update({
+                        }).eq("id", it["producto_id"]).execute()
+                        svc.table("inventario_negocio").update({
                             "stock_total": nuevo
                         }).eq("producto_id", it["producto_id"]).eq("negocio_id", business_id).execute()
 

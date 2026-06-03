@@ -589,151 +589,137 @@ async def get_resumen_financiero(
 ) -> Any:
     """Get financial summary for a business."""
     
-    # Log de entrada para debugging
     logger.info(f"🔍 Iniciando get_resumen_financiero para business_id: {business_id}")
     
     try:
         supabase = scoped.client
-        
-        
-    
+
+        # Use current month/year if not provided (based on Argentina timezone)
         try:
-            # Use current month/year if not provided
+            import pytz
+            tz_arg = pytz.timezone("America/Argentina/Buenos_Aires")
+            now = datetime.now(tz_arg)
+        except Exception:
             now = datetime.now()
-            target_mes = mes if mes is not None else now.month
-            target_anio = anio if anio is not None else now.year
-            
-            logger.info(f"📊 Consultando datos financieros para {target_mes}/{target_anio}")
-            
-            # Calculate date ranges
-            start_date = datetime(target_anio, target_mes, 1)
-            if target_mes == 12:
-                end_date = datetime(target_anio + 1, 1, 1) - timedelta(days=1)
-            else:
-                end_date = datetime(target_anio, target_mes + 1, 1) - timedelta(days=1)
-            
-            # Previous month for comparison
-            if target_mes == 1:
-                prev_mes = 12
-                prev_anio = target_anio - 1
-            else:
-                prev_mes = target_mes - 1
-                prev_anio = target_anio
-            
-            prev_start_date = datetime(prev_anio, prev_mes, 1)
-            if prev_mes == 12:
-                prev_end_date = datetime(prev_anio + 1, 1, 1) - timedelta(days=1)
-            else:
-                prev_end_date = datetime(prev_anio, prev_mes + 1, 1) - timedelta(days=1)
+        
+        target_mes = mes if mes is not None else now.month
+        target_anio = anio if anio is not None else now.year
+        
+        logger.info(f"📊 Consultando datos financieros para {target_mes}/{target_anio}")
+        
+        # Date ranges using date-only strings for consistent comparisons
+        import calendar as _cal
+        start_str = f"{target_anio}-{target_mes:02d}-01"
+        last_day = _cal.monthrange(target_anio, target_mes)[1]
+        end_str = f"{target_anio}-{target_mes:02d}-{last_day:02d}"
+        
+        # Previous month
+        if target_mes == 1:
+            prev_mes = 12
+            prev_anio = target_anio - 1
+        else:
+            prev_mes = target_mes - 1
+            prev_anio = target_anio
+        prev_start_str = f"{prev_anio}-{prev_mes:02d}-01"
+        prev_last_day = _cal.monthrange(prev_anio, prev_mes)[1]
+        prev_end_str = f"{prev_anio}-{prev_mes:02d}-{prev_last_day:02d}"
 
-            # Query current month movements
-            query_mov = supabase.table("movimientos_financieros") \
-                .select("tipo, monto") \
-                .eq("negocio_id", business_id) \
-                .gte("fecha", start_date.isoformat()) \
-                .lte("fecha", end_date.isoformat())
-            if scoped.context.branch_id:
-                query_mov = query_mov.eq("sucursal_id", scoped.context.branch_id)
-            movimientos_response = query_mov.execute()
+        logger.info(f"📅 Rango actual: {start_str} → {end_str}")
 
-            # Query previous month movements
-            query_mov_prev = supabase.table("movimientos_financieros") \
-                .select("tipo, monto") \
-                .eq("negocio_id", business_id) \
-                .gte("fecha", prev_start_date.isoformat()) \
-                .lte("fecha", prev_end_date.isoformat())
-            if scoped.context.branch_id:
-                query_mov_prev = query_mov_prev.eq("sucursal_id", scoped.context.branch_id)
-            movimientos_prev_response = query_mov_prev.execute()
-            
-            # Query current month sales (ventas)
-            query_ven = supabase.table("ventas") \
-                .select("total") \
-                .eq("negocio_id", business_id) \
-                .gte("fecha", start_date.isoformat()) \
-                .lte("fecha", end_date.isoformat())
-            if scoped.context.branch_id:
-                query_ven = query_ven.eq("sucursal_id", scoped.context.branch_id)
-            ventas_response = query_ven.execute()
-            
-            # Query previous month sales (ventas)
-            query_ven_prev = supabase.table("ventas") \
-                .select("total") \
-                .eq("negocio_id", business_id) \
-                .gte("fecha", prev_start_date.isoformat()) \
-                .lte("fecha", prev_end_date.isoformat())
-            if scoped.context.branch_id:
-                query_ven_prev = query_ven_prev.eq("sucursal_id", scoped.context.branch_id)
-            ventas_prev_response = query_ven_prev.execute()
+        # Query current month manual movements (fecha is a DATE column)
+        query_mov = supabase.table("movimientos_financieros") \
+            .select("tipo, monto") \
+            .eq("negocio_id", business_id) \
+            .gte("fecha", start_str) \
+            .lte("fecha", end_str)
+        if scoped.context.branch_id:
+            query_mov = query_mov.eq("sucursal_id", scoped.context.branch_id)
+        movimientos_response = query_mov.execute()
 
-            logger.info(f"📊 Movimientos actuales: {len(movimientos_response.data)}")
-            logger.info(f"📊 Movimientos previos: {len(movimientos_prev_response.data)}")
-            logger.info(f"💰 Ventas actuales: {len(ventas_response.data)}")
-            logger.info(f"💰 Ventas previas: {len(ventas_prev_response.data)}")
+        # Query previous month manual movements
+        query_mov_prev = supabase.table("movimientos_financieros") \
+            .select("tipo, monto") \
+            .eq("negocio_id", business_id) \
+            .gte("fecha", prev_start_str) \
+            .lte("fecha", prev_end_str)
+        if scoped.context.branch_id:
+            query_mov_prev = query_mov_prev.eq("sucursal_id", scoped.context.branch_id)
+        movimientos_prev_response = query_mov_prev.execute()
+        
+        # Query current month sales (ventas.fecha is a TIMESTAMP — use full end-of-day)
+        query_ven = supabase.table("ventas") \
+            .select("total") \
+            .eq("negocio_id", business_id) \
+            .gte("fecha", start_str) \
+            .lte("fecha", end_str + "T23:59:59+00:00")
+        if scoped.context.branch_id:
+            query_ven = query_ven.eq("sucursal_id", scoped.context.branch_id)
+        ventas_response = query_ven.execute()
+        
+        # Query previous month sales
+        query_ven_prev = supabase.table("ventas") \
+            .select("total") \
+            .eq("negocio_id", business_id) \
+            .gte("fecha", prev_start_str) \
+            .lte("fecha", prev_end_str + "T23:59:59+00:00")
+        if scoped.context.branch_id:
+            query_ven_prev = query_ven_prev.eq("sucursal_id", scoped.context.branch_id)
+        ventas_prev_response = query_ven_prev.execute()
 
-            # Calculate totals for current month
-            ingresos_movimientos = sum(
-                float(mov["monto"]) for mov in movimientos_response.data 
-                if mov["tipo"] == "ingreso"
-            )
-            ingresos_ventas = sum(
-                float(venta["total"]) for venta in ventas_response.data
-            )
-            ingresos_mes = ingresos_movimientos + ingresos_ventas
-            
-            egresos_mes = sum(
-                float(mov["monto"]) for mov in movimientos_response.data 
-                if mov["tipo"] == "egreso"
-            )
+        logger.info(f"📊 Movimientos actuales: {len(movimientos_response.data or [])}")
+        logger.info(f"💰 Ventas actuales: {len(ventas_response.data or [])}")
 
-            # Calculate totals for previous month
-            ingresos_movimientos_anterior = sum(
-                float(mov["monto"]) for mov in movimientos_prev_response.data 
-                if mov["tipo"] == "ingreso"
-            )
-            ingresos_ventas_anterior = sum(
-                float(venta["total"]) for venta in ventas_prev_response.data
-            )
-            ingresos_mes_anterior = ingresos_movimientos_anterior + ingresos_ventas_anterior
-            
-            egresos_mes_anterior = sum(
-                float(mov["monto"]) for mov in movimientos_prev_response.data 
-                if mov["tipo"] == "egreso"
-            )
+        # Calculate totals for current month
+        ingresos_movimientos = sum(
+            float(mov["monto"]) for mov in (movimientos_response.data or [])
+            if mov["tipo"] == "ingreso"
+        )
+        ingresos_ventas = sum(
+            float(venta["total"]) for venta in (ventas_response.data or [])
+        )
+        ingresos_mes = ingresos_movimientos + ingresos_ventas
+        
+        egresos_mes = sum(
+            float(mov["monto"]) for mov in (movimientos_response.data or [])
+            if mov["tipo"] == "egreso"
+        )
 
-            # Calculate current balance (simplified - you might want to calculate from all movements)
-            saldo_actual = ingresos_mes - egresos_mes
+        # Calculate totals for previous month
+        ingresos_movimientos_anterior = sum(
+            float(mov["monto"]) for mov in (movimientos_prev_response.data or [])
+            if mov["tipo"] == "ingreso"
+        )
+        ingresos_ventas_anterior = sum(
+            float(venta["total"]) for venta in (ventas_prev_response.data or [])
+        )
+        ingresos_mes_anterior = ingresos_movimientos_anterior + ingresos_ventas_anterior
+        
+        egresos_mes_anterior = sum(
+            float(mov["monto"]) for mov in (movimientos_prev_response.data or [])
+            if mov["tipo"] == "egreso"
+        )
 
-            logger.info(f"💰 Resumen calculado - Ingresos: {ingresos_mes}, Egresos: {egresos_mes}, Saldo: {saldo_actual}")
+        saldo_actual = ingresos_mes - egresos_mes
 
-            resumen_data = {
-                "ingresos_mes": float(ingresos_mes),
-                "egresos_mes": float(egresos_mes),
-                "saldo_actual": float(saldo_actual),
-                "ingresos_mes_anterior": float(ingresos_mes_anterior),
-                "egresos_mes_anterior": float(egresos_mes_anterior)
-            }
-            
-            return JSONResponse(status_code=200, content=resumen_data)
+        logger.info(f"💰 Resumen: Ingresos={ingresos_mes}, Egresos={egresos_mes}, Saldo={saldo_actual}")
 
-        except Exception as e:
-            logger.error(f"❌ Error consultando datos financieros: {str(e)}")
-            return JSONResponse(
-                status_code=500,
-                content={
-                    "detail": "Error consultando datos financieros",
-                    "error": "DATA_QUERY_ERROR",
-                    "message": str(e)
-                }
-            )
+        resumen_data = {
+            "ingresos_mes": float(ingresos_mes),
+            "egresos_mes": float(egresos_mes),
+            "saldo_actual": float(saldo_actual),
+            "ingresos_mes_anterior": float(ingresos_mes_anterior),
+            "egresos_mes_anterior": float(egresos_mes_anterior)
+        }
+        
+        return JSONResponse(status_code=200, content=resumen_data)
 
     except Exception as e:
-        logger.error(f"❌ Error general en get_resumen_financiero: {str(e)}")
+        logger.error(f"❌ Error en get_resumen_financiero: {str(e)}")
         return JSONResponse(
             status_code=500,
             content={
-                "detail": "Error interno del servidor",
-                "error": "INTERNAL_SERVER_ERROR",
+                "detail": "Error consultando datos financieros",
+                "error": "DATA_QUERY_ERROR",
                 "message": str(e)
             }
         )

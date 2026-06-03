@@ -1,7 +1,7 @@
 import logging
 from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Header, Query
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 import calendar
 from pydantic import BaseModel, Field
 import uuid
@@ -262,7 +262,7 @@ async def record_sale_branch(
             "usuario_negocio_id": usuario_negocio_id,
             "total": total,
             "medio_pago": venta_data.metodo_pago,
-            "fecha": datetime.now().isoformat(),
+            "fecha": datetime.now(timezone.utc).isoformat(),
             "observaciones": venta_data.observaciones
         }
 
@@ -281,16 +281,20 @@ async def record_sale_branch(
             raise HTTPException(status_code=500, detail="Error al crear los detalles de venta")
 
         # Actualizar stock de productos según configuración
+        # Use service_client to bypass RLS for stock updates (owner may not have RLS update permission)
+        from app.db.supabase_client import get_supabase_service_client
+        svc_client = get_supabase_service_client()
+        
         settings = context.branch_settings or {}
         inventario_modo = settings.get("inventario_modo", "centralizado")
         
         for item in venta_data.items:
             if item.tipo == "producto":
                 if inventario_modo == "por_sucursal":
-                    # Actualizar en inventario_sucursal
+                    # Actualizar en inventario_sucursal usando service_client
                     inv_resp = (
-                        client.table("inventario_sucursal")
-                        .select("stock_actual")
+                        svc_client.table("inventario_sucursal")
+                        .select("id, stock_actual")
                         .eq("producto_id", item.id)
                         .eq("sucursal_id", branch_id)
                         .eq("negocio_id", business_id)
@@ -298,28 +302,36 @@ async def record_sale_branch(
                     )
                     if inv_resp.data:
                         stock_actual = inv_resp.data[0].get("stock_actual", 0)
-                        nuevo_stock = stock_actual - item.cantidad
-                        client.table("inventario_sucursal").update({
+                        nuevo_stock = max(0, stock_actual - item.cantidad)
+                        svc_client.table("inventario_sucursal").update({
                             "stock_actual": nuevo_stock
-                        }).eq("producto_id", item.id).eq("sucursal_id", branch_id).execute()
+                        }).eq("id", inv_resp.data[0]["id"]).execute()
+                    else:
+                        # Record doesn't exist yet, create it with negative stock avoided
+                        svc_client.table("inventario_sucursal").insert({
+                            "negocio_id": business_id,
+                            "sucursal_id": branch_id,
+                            "producto_id": item.id,
+                            "stock_actual": 0,
+                        }).execute()
                 else:
-                    # Actualizar global
+                    # Modo centralizado: actualizar productos.stock_actual
                     producto_response = (
-                        client.table("productos")
-                        .select("stock_actual")
+                        svc_client.table("productos")
+                        .select("id, stock_actual")
                         .eq("id", item.id)
                         .eq("negocio_id", business_id)
                         .execute()
                     )
                     if producto_response.data:
                         stock_actual = producto_response.data[0].get("stock_actual", 0)
-                        nuevo_stock = stock_actual - item.cantidad
-                        client.table("productos").update({
+                        nuevo_stock = max(0, stock_actual - item.cantidad)
+                        svc_client.table("productos").update({
                             "stock_actual": nuevo_stock
-                        }).eq("id", item.id).eq("negocio_id", business_id).execute()
+                        }).eq("id", item.id).execute()
                         
-                        # Intentar actualizar también en inventario_negocio para mantener sincronía
-                        client.table("inventario_negocio").update({
+                        # Mantener inventario_negocio sincronizado
+                        svc_client.table("inventario_negocio").update({
                             "stock_total": nuevo_stock
                         }).eq("producto_id", item.id).eq("negocio_id", business_id).execute()
 

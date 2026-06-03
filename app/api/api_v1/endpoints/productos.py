@@ -538,18 +538,3 @@ async def bulk_upsert_products(
         "errors": errors
     } 
 
-@router.post("/bulk-price-update", status_code=status.HTTP_200_OK,
-    dependencies=[Depends(PermissionDependency("puede_editar_productos"))]
-)
-async def bulk_price_update(
-    business_id: str,
-    update_data: ImportacionMasiva, # Re-using Import name? No, I need to import BulkPriceUpdate
-    request: Request,
-    subscription_check: bool = Depends(check_subscription_access),
-) -> Any:
-    """
-    Massive update of product prices.
-    """
-    # This signature is wrong because I haven't imported BulkPriceUpdate yet.
-    # I should fix the imports first.
-    pass
