@@ -80,7 +80,9 @@ async def read_services(
                         item['actualizado_en'] = datetime.datetime.now()
                 
                 # Ensure required fields have default values
-                if item.get('activo') is None:
+                if item.get('estado') is not None:
+                    item['activo'] = (item['estado'] == 'activo')
+                elif item.get('activo') is None:
                     item['activo'] = True
                 
                 validated_service = Servicio(**item)
@@ -140,6 +142,10 @@ async def create_service(
         
         if servicios_modo == "por_sucursal" and context.branch_id:
             service_data["sucursal_id"] = context.branch_id
+            
+        # Map activo to estado if we are writing to servicio_sucursal
+        if "activo" in service_data and table_name == "servicio_sucursal":
+            service_data["estado"] = "activo" if service_data.pop("activo") else "inactivo"
 
         response = supabase.table(table_name).insert(service_data).execute()
 
@@ -231,6 +237,10 @@ async def update_service(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="Nueva categoría especificada no encontrada o no pertenece a este negocio.",
                  )
+
+        # Map activo to estado if we are writing to servicio_sucursal
+        if "activo" in update_data and table_name == "servicio_sucursal":
+            update_data["estado"] = "activo" if update_data.pop("activo") else "inactivo"
 
         # Update the service, ensuring it belongs to the correct business
         query = supabase.table(table_name).update(update_data).eq("id", service_id).eq("negocio_id", business_id)
