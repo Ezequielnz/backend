@@ -111,7 +111,6 @@ class SyncService:
             
         if new_mode == "por_sucursal":
             # centralizado -> por_sucursal
-            # Copy all servicios to servicio_sucursal for all branches
             branches_resp = self._client.table("sucursales").select("id").eq("negocio_id", self._business_id).eq("activo", True).execute()
             branches = [b["id"] for b in branches_resp.data or []]
             
@@ -122,44 +121,39 @@ class SyncService:
             
             for branch_id in branches:
                 for svc in servicios_resp.data or []:
-                    payload = dict(svc)
-                    payload.pop("id", None) # Remove PK to auto-generate
-                    payload.pop("creado_en", None)
-                    payload.pop("actualizado_en", None)
-                    payload["sucursal_id"] = branch_id
-                    
-                    if "activo" in payload:
-                        payload["estado"] = "activo" if payload.pop("activo") else "inactivo"
+                    payload = {
+                        "negocio_id": self._business_id,
+                        "sucursal_id": branch_id,
+                        "servicio_id": svc["id"],
+                        "precio": svc.get("precio"),
+                        "estado": "activo" if svc.get("activo") else "inactivo"
+                    }
                     
                     try:
-                        self._client.table("servicio_sucursal").insert(payload).execute()
+                        self._client.table("servicio_sucursal").upsert(payload, on_conflict="servicio_id,sucursal_id").execute()
                     except Exception as e:
                         logger.error(f"Error copying service {svc.get('nombre')} to branch {branch_id}: {e}")
                         
         elif new_mode == "centralizado":
             # por_sucursal -> centralizado
-            # Copy services from main branch back to central, then delete all
             main_branch_id = self._get_main_branch_id()
             if main_branch_id:
                 serv_suc_resp = self._client.table("servicio_sucursal").select("*").eq("negocio_id", self._business_id).eq("sucursal_id", main_branch_id).execute()
                 
-                # Delete existing central services first to keep it clean.
-                self._client.table("servicios").delete().eq("negocio_id", self._business_id).execute()
-                
+                # We do NOT delete from "servicios" since it holds the master catalog.
+                # We just update "precio" and "activo" based on main branch settings.
                 for svc in serv_suc_resp.data or []:
-                    payload = dict(svc)
-                    payload.pop("id", None)
-                    payload.pop("sucursal_id", None)
-                    payload.pop("creado_en", None)
-                    payload.pop("actualizado_en", None)
-                    
-                    if "estado" in payload:
-                        payload["activo"] = (payload.pop("estado") == "activo")
+                    update_payload = {}
+                    if "precio" in svc:
+                        update_payload["precio"] = svc["precio"]
+                    if "estado" in svc:
+                        update_payload["activo"] = (svc["estado"] == "activo")
                         
-                    try:
-                        self._client.table("servicios").insert(payload).execute()
-                    except Exception as e:
-                        logger.error(f"Error copying service {svc.get('nombre')} to central: {e}")
+                    if update_payload:
+                        try:
+                            self._client.table("servicios").update(update_payload).eq("id", svc["servicio_id"]).execute()
+                        except Exception as e:
+                            logger.error(f"Error copying service config back to central: {e}")
                         
             # Delete all servicio_sucursal
             self._client.table("servicio_sucursal").delete().eq("negocio_id", self._business_id).execute()

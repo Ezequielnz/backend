@@ -152,20 +152,33 @@ class BranchSettingsService:
                 update_data["transferencia_auto_confirma"] = False
             
             try:
+                # Insert via user client first
+                resp = self._client.table("negocio_configuracion").insert(update_data).execute()
+                if not resp.data:
+                    raise ValueError("Empty data returned")
+            except Exception:
+                # Fallback to service client
                 svc_client = get_supabase_service_client()
                 svc_client.table("negocio_configuracion").insert(update_data).execute()
-            except Exception as e:
-                # Fallback to scoped client
-                self._client.table("negocio_configuracion").insert(update_data).execute()
         else:
             try:
-                svc_client = get_supabase_service_client()
-                svc_client.table("negocio_configuracion").update(update_data).eq(
+                # Update via user client first
+                resp = self._client.table("negocio_configuracion").update(update_data).eq(
                     "negocio_id", self._business_id
                 ).execute()
+                if not resp.data:
+                    # Fallback to service client
+                    svc_client = get_supabase_service_client()
+                    svc_resp = svc_client.table("negocio_configuracion").update(update_data).eq(
+                        "negocio_id", self._business_id
+                    ).execute()
+                    if not svc_resp.data:
+                        print(f"[Warning] No rows updated for negocio_id {self._business_id}")
             except Exception as e:
-                # Fallback to scoped client
-                self._client.table("negocio_configuracion").update(update_data).eq(
+                # Fallback to service client
+                print(f"[Warning] User client update failed: {e}")
+                svc_client = get_supabase_service_client()
+                svc_client.table("negocio_configuracion").update(update_data).eq(
                     "negocio_id", self._business_id
                 ).execute()
 
