@@ -128,7 +128,13 @@ async def procesar_facturacion_afip(client: Any, negocio_id: str, venta_id: str,
                 "numero": siguiente,
                 "fecha": datetime.now().date().isoformat(),
                 "cae": cae,
-                "vencimiento_cae": datetime.strptime(cae_fch_vto, '%Y%m%d').date().isoformat() if cae_fch_vto else None
+                "cae_vencimiento": datetime.strptime(cae_fch_vto, '%Y%m%d').date().isoformat() if cae_fch_vto else None,
+                "imp_total": imp_total,
+                "imp_neto": invoice_data.get('imp_neto', imp_total),
+                "imp_iva": invoice_data.get('imp_iva', 0.0),
+                "cliente_cuit_dni": str(doc_nro) if doc_nro > 0 else None,
+                "estado": "emitida" if cae else "error",
+                "error_detalle": None if cae else "Error al generar factura en AFIP"
             }
             factura_resp = client.table("facturas").insert(factura_data).execute()
             
@@ -138,11 +144,6 @@ async def procesar_facturacion_afip(client: Any, negocio_id: str, venta_id: str,
                 
                 # Import PDF Generator
                 from app.services.pdf_factura import generar_y_subir_pdf_factura
-                
-                # Extra fields needed by the generator
-                factura_data["imp_total"] = imp_total
-                factura_data["cliente_cuit_dni"] = doc_nro if doc_nro > 0 else None
-                factura_data["cae_vencimiento"] = datetime.strptime(cae_fch_vto, '%Y%m%d').date().isoformat() if cae_fch_vto else None
                 
                 pdf_path = generar_y_subir_pdf_factura(factura_data, {}, config)
                 if pdf_path:
