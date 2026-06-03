@@ -114,7 +114,17 @@ class BranchSettingsService:
             metadata_payload = dict(metadata_payload)
             metadata_payload["inventory_mode_previous"] = current.inventario_modo
             metadata_payload["inventory_mode_changed_at"] = datetime.now(timezone.utc).isoformat()
-            metadata_payload["inventory_mode_sync_required"] = True
+            metadata_payload["inventory_mode_sync_required"] = False
+
+        if (
+            current is not None
+            and "servicios_modo" in update_data
+            and update_data["servicios_modo"] != current.servicios_modo
+        ):
+            metadata_payload = dict(metadata_payload)
+            metadata_payload["services_mode_previous"] = current.servicios_modo
+            metadata_payload["services_mode_changed_at"] = datetime.now(timezone.utc).isoformat()
+            metadata_payload["services_mode_sync_required"] = False
 
         update_data["metadata"] = metadata_payload
 
@@ -162,5 +172,21 @@ class BranchSettingsService:
         updated = self.fetch(ensure_exists=False)
         if updated is None:
             raise RuntimeError("Branch settings update executed but record could not be reloaded.")
+
+        # Run synchronization if modes changed
+        if current is not None:
+            try:
+                from app.services.sync_service import SyncService
+                sync_svc = SyncService(self._business_id)
+                
+                if "inventario_modo" in update_data and update_data["inventario_modo"] != current.inventario_modo:
+                    sync_svc.sync_inventory_mode(current.inventario_modo, update_data["inventario_modo"])
+                    
+                if "servicios_modo" in update_data and update_data["servicios_modo"] != current.servicios_modo:
+                    sync_svc.sync_services_mode(current.servicios_modo, update_data["servicios_modo"])
+            except Exception as e:
+                # Log error but don't fail the update entirely, API can return 500 or just log it
+                # For robustness, we let it raise so the endpoint catches it and returns 500
+                raise RuntimeError(f"Error synchronizing branch settings: {str(e)}") from e
 
         return updated
