@@ -247,6 +247,8 @@ async def get_movimientos_financieros(
             categorias_financieras!inner(nombre),
             clientes(nombre, apellido)
         """).eq("negocio_id", business_id)
+        if scoped.context.branch_id:
+            query_movimientos = query_movimientos.eq("sucursal_id", scoped.context.branch_id)
         
         # Apply filters to manual movements
         if tipo and tipo != "ingreso":  # Solo aplicar filtro si no es ingreso (para incluir ventas)
@@ -268,6 +270,8 @@ async def get_movimientos_financieros(
                 id, total, fecha, observaciones,
                 clientes(nombre, apellido)
             """).eq("negocio_id", business_id)
+            if scoped.context.branch_id:
+                query_ventas = query_ventas.eq("sucursal_id", scoped.context.branch_id)
             
             # Apply date filters to sales
             if fecha_desde:
@@ -426,6 +430,7 @@ async def create_movimiento_financiero(
         movimiento_data = movimiento_in.dict()
         movimiento_data["negocio_id"] = business_id
         movimiento_data["creado_por"] = current_user.id
+        movimiento_data["sucursal_id"] = scoped.context.branch_id
         
         # Convert Decimal to float and date to string for JSON serialization
         if isinstance(movimiento_data.get('monto'), Decimal):
@@ -475,7 +480,10 @@ async def update_movimiento_financiero(business_id: str,
     
     try:
         # Verify movement exists and belongs to business
-        existing = supabase.table("movimientos_financieros").select("*").eq("id", movimiento_id).eq("negocio_id", business_id).execute()
+        query = supabase.table("movimientos_financieros").select("*").eq("id", movimiento_id).eq("negocio_id", business_id)
+        if scoped.context.branch_id:
+            query = query.eq("sucursal_id", scoped.context.branch_id)
+        existing = query.execute()
         if not existing.data:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -495,14 +503,16 @@ async def update_movimiento_financiero(business_id: str,
                     detail="Categoría no encontrada o no pertenece a este negocio"
                 )
         
-        response = (
+        update_query = (
             supabase
             .table("movimientos_financieros")
             .update(update_data)
             .eq("id", movimiento_id)
             .eq("negocio_id", business_id)
-            .execute()
         )
+        if scoped.context.branch_id:
+            update_query = update_query.eq("sucursal_id", scoped.context.branch_id)
+        response = update_query.execute()
         
         if not response.data:
             raise HTTPException(
@@ -531,21 +541,26 @@ async def delete_movimiento_financiero(business_id: str,
     
     try:
         # Verify movement exists and belongs to business
-        existing = supabase.table("movimientos_financieros").select("id").eq("id", movimiento_id).eq("negocio_id", business_id).execute()
+        query = supabase.table("movimientos_financieros").select("id").eq("id", movimiento_id).eq("negocio_id", business_id)
+        if scoped.context.branch_id:
+            query = query.eq("sucursal_id", scoped.context.branch_id)
+        existing = query.execute()
         if not existing.data:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Movimiento financiero no encontrado"
             )
         
-        response = (
+        delete_query = (
             supabase
             .table("movimientos_financieros")
             .delete()
             .eq("id", movimiento_id)
             .eq("negocio_id", business_id)
-            .execute()
         )
+        if scoped.context.branch_id:
+            delete_query = delete_query.eq("sucursal_id", scoped.context.branch_id)
+        response = delete_query.execute()
         
         return {"message": "Movimiento financiero eliminado exitosamente"}
         
@@ -612,36 +627,44 @@ async def get_resumen_financiero(
                 prev_end_date = datetime(prev_anio, prev_mes + 1, 1) - timedelta(days=1)
 
             # Query current month movements
-            movimientos_response = supabase.table("movimientos_financieros") \
+            query_mov = supabase.table("movimientos_financieros") \
                 .select("tipo, monto") \
                 .eq("negocio_id", business_id) \
                 .gte("fecha", start_date.isoformat()) \
-                .lte("fecha", end_date.isoformat()) \
-                .execute()
+                .lte("fecha", end_date.isoformat())
+            if scoped.context.branch_id:
+                query_mov = query_mov.eq("sucursal_id", scoped.context.branch_id)
+            movimientos_response = query_mov.execute()
 
             # Query previous month movements
-            movimientos_prev_response = supabase.table("movimientos_financieros") \
+            query_mov_prev = supabase.table("movimientos_financieros") \
                 .select("tipo, monto") \
                 .eq("negocio_id", business_id) \
                 .gte("fecha", prev_start_date.isoformat()) \
-                .lte("fecha", prev_end_date.isoformat()) \
-                .execute()
+                .lte("fecha", prev_end_date.isoformat())
+            if scoped.context.branch_id:
+                query_mov_prev = query_mov_prev.eq("sucursal_id", scoped.context.branch_id)
+            movimientos_prev_response = query_mov_prev.execute()
             
             # Query current month sales (ventas)
-            ventas_response = supabase.table("ventas") \
+            query_ven = supabase.table("ventas") \
                 .select("total") \
                 .eq("negocio_id", business_id) \
                 .gte("fecha", start_date.isoformat()) \
-                .lte("fecha", end_date.isoformat()) \
-                .execute()
+                .lte("fecha", end_date.isoformat())
+            if scoped.context.branch_id:
+                query_ven = query_ven.eq("sucursal_id", scoped.context.branch_id)
+            ventas_response = query_ven.execute()
             
             # Query previous month sales (ventas)
-            ventas_prev_response = supabase.table("ventas") \
+            query_ven_prev = supabase.table("ventas") \
                 .select("total") \
                 .eq("negocio_id", business_id) \
                 .gte("fecha", prev_start_date.isoformat()) \
-                .lte("fecha", prev_end_date.isoformat()) \
-                .execute()
+                .lte("fecha", prev_end_date.isoformat())
+            if scoped.context.branch_id:
+                query_ven_prev = query_ven_prev.eq("sucursal_id", scoped.context.branch_id)
+            ventas_prev_response = query_ven_prev.execute()
 
             logger.info(f"📊 Movimientos actuales: {len(movimientos_response.data)}")
             logger.info(f"📊 Movimientos previos: {len(movimientos_prev_response.data)}")
@@ -733,10 +756,16 @@ async def get_flujo_caja_mensual(
         month_end = date(anio, mes, calendar.monthrange(anio, mes)[1])
         
         # Get all movements for the month
-        movements = supabase.table("movimientos_financieros").select("fecha, tipo, monto").eq("negocio_id", business_id).gte("fecha", month_start.isoformat()).lte("fecha", month_end.isoformat()).order("fecha").execute()
+        query_movs = supabase.table("movimientos_financieros").select("fecha, tipo, monto").eq("negocio_id", business_id).gte("fecha", month_start.isoformat()).lte("fecha", month_end.isoformat()).order("fecha")
+        if scoped.context.branch_id:
+            query_movs = query_movs.eq("sucursal_id", scoped.context.branch_id)
+        movements = query_movs.execute()
         
         # Get all sales for the month
-        ventas = supabase.table("ventas").select("fecha, total").eq("negocio_id", business_id).gte("fecha", month_start.isoformat()).lte("fecha", month_end.isoformat()).order("fecha").execute()
+        query_ventas = supabase.table("ventas").select("fecha, total").eq("negocio_id", business_id).gte("fecha", month_start.isoformat()).lte("fecha", month_end.isoformat()).order("fecha")
+        if scoped.context.branch_id:
+            query_ventas = query_ventas.eq("sucursal_id", scoped.context.branch_id)
+        ventas = query_ventas.execute()
         
         # Group by date and calculate daily totals
         daily_data = {}

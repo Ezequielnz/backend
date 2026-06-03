@@ -193,10 +193,23 @@ async def record_sale_branch(
                     )
 
                 producto = producto_response.data[0]
-                if producto["stock_actual"] < item.cantidad:
+                
+                # Validar stock según modo de inventario
+                settings = context.branch_settings or {}
+                inventario_modo = settings.get("inventario_modo", "centralizado")
+                
+                stock_disponible = producto["stock_actual"]
+                if inventario_modo == "por_sucursal":
+                    inv_resp = client.table("inventario_sucursal").select("stock_actual").eq("producto_id", item.id).eq("sucursal_id", branch_id).execute()
+                    if inv_resp.data:
+                        stock_disponible = inv_resp.data[0].get("stock_actual", 0)
+                    else:
+                        stock_disponible = 0
+                        
+                if stock_disponible < item.cantidad:
                     raise HTTPException(
                         status_code=400,
-                        detail=f"Stock insuficiente para {producto['nombre']}. Stock disponible: {producto['stock_actual']}"
+                        detail=f"Stock insuficiente para {producto['nombre']}. Stock disponible: {stock_disponible}"
                     )
 
                 subtotal = item.cantidad * item.precio
@@ -267,29 +280,63 @@ async def record_sale_branch(
             client.table("ventas").delete().eq("id", venta_id).execute()
             raise HTTPException(status_code=500, detail="Error al crear los detalles de venta")
 
-        # Actualizar stock global de productos (modelo actual, inventario por sucursal vendrá luego)
+        # Actualizar stock de productos según configuración
+        settings = context.branch_settings or {}
+        inventario_modo = settings.get("inventario_modo", "centralizado")
+        
         for item in venta_data.items:
             if item.tipo == "producto":
-                producto_response = (
-                    client.table("productos")
-                    .select("stock_actual")
-                    .eq("id", item.id)
-                    .eq("negocio_id", business_id)
-                    .execute()
-                )
-                if producto_response.data:
-                    stock_actual = producto_response.data[0]["stock_actual"]
-                    nuevo_stock = stock_actual - item.cantidad
-                    client.table("productos").update({
-                        "stock_actual": nuevo_stock
-                    }).eq("id", item.id).eq("negocio_id", business_id).execute()
+                if inventario_modo == "por_sucursal":
+                    # Actualizar en inventario_sucursal
+                    inv_resp = (
+                        client.table("inventario_sucursal")
+                        .select("stock_actual")
+                        .eq("producto_id", item.id)
+                        .eq("sucursal_id", branch_id)
+                        .eq("negocio_id", business_id)
+                        .execute()
+                    )
+                    if inv_resp.data:
+                        stock_actual = inv_resp.data[0].get("stock_actual", 0)
+                        nuevo_stock = stock_actual - item.cantidad
+                        client.table("inventario_sucursal").update({
+                            "stock_actual": nuevo_stock
+                        }).eq("producto_id", item.id).eq("sucursal_id", branch_id).execute()
+                else:
+                    # Actualizar global
+                    producto_response = (
+                        client.table("productos")
+                        .select("stock_actual")
+                        .eq("id", item.id)
+                        .eq("negocio_id", business_id)
+                        .execute()
+                    )
+                    if producto_response.data:
+                        stock_actual = producto_response.data[0].get("stock_actual", 0)
+                        nuevo_stock = stock_actual - item.cantidad
+                        client.table("productos").update({
+                            "stock_actual": nuevo_stock
+                        }).eq("id", item.id).eq("negocio_id", business_id).execute()
+                        
+                        # Intentar actualizar también en inventario_negocio para mantener sincronía
+                        client.table("inventario_negocio").update({
+                            "stock_total": nuevo_stock
+                        }).eq("producto_id", item.id).eq("negocio_id", business_id).execute()
 
         venta_creada = venta_response.data[0]
         
         mensaje = "Venta registrada exitosamente (branch-scoped)"
         factura_pdf_url = None
         if venta_data.facturar:
-            factura = await procesar_facturacion_afip(client, business_id, venta_id, cliente_id, total, items_validados)
+            factura = await procesar_facturacion_afip(
+                client, 
+                business_id, 
+                venta_id, 
+                cliente_id, 
+                total, 
+                items_validados, 
+                sucursal_id=branch_id
+            )
             if factura:
                 mensaje += " y factura ARCA emitida"
                 pdf_path = factura.get("pdf_url")

@@ -1,3 +1,4 @@
+from app.api.context import ScopedClientContext
 from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
 from pydantic import ValidationError
@@ -14,21 +15,30 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 @router.get("/", response_model=List[Servicio],
-    dependencies=[Depends(PermissionDependency("puede_ver_productos")), Depends(BusinessScopedClientDep)]
+    dependencies=[Depends(PermissionDependency("puede_ver_productos"))]
 )
 async def read_services(
     business_id: str,
     request: Request,
     category_id: Optional[str] = Query(None, description="Optional category ID to filter services"),
+    scoped: ScopedClientContext = Depends(BusinessScopedClientDep)
 ) -> Any:
     """
     Retrieve services for a specific business, optionally filtered by category (requires puede_ver_productos).
     """
-    supabase = scoped_client_from_request(request)
+    supabase = scoped.client
+    context = scoped.context
+    
+    settings = context.branch_settings or {}
+    servicios_modo = settings.get("servicios_modo", "centralizado")
+    table_name = "servicio_sucursal" if servicios_modo == "por_sucursal" else "servicios"
     
     try:
-        query = supabase.table("servicios").select("*").eq("negocio_id", business_id)
+        query = supabase.table(table_name).select("*").eq("negocio_id", business_id)
         
+        if servicios_modo == "por_sucursal" and context.branch_id:
+            query = query.eq("sucursal_id", context.branch_id)
+            
         if category_id:
             # Verify the category belongs to the business
             category_response = supabase.table("categorias").select("id").eq("id", category_id).eq("negocio_id", business_id).execute()
@@ -97,17 +107,23 @@ async def read_services(
         )
 
 @router.post("/", response_model=Servicio, status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(PermissionDependency("puede_editar_productos")), Depends(BusinessScopedClientDep)]
+    dependencies=[Depends(PermissionDependency("puede_editar_productos"))]
 )
 async def create_service(
     business_id: str,
     service_in: ServicioCreate,
     request: Request,
+    scoped: ScopedClientContext = Depends(BusinessScopedClientDep)
 ) -> Any:
     """
     Create a new service for a specific business (requires puede_editar_productos).
     """
-    supabase = scoped_client_from_request(request)
+    supabase = scoped.client
+    context = scoped.context
+
+    settings = context.branch_settings or {}
+    servicios_modo = settings.get("servicios_modo", "centralizado")
+    table_name = "servicio_sucursal" if servicios_modo == "por_sucursal" else "servicios"
 
     try:
         # Verify that the category exists and belongs to the business (only if categoria_id is provided)
@@ -121,8 +137,11 @@ async def create_service(
 
         service_data = service_in.model_dump()
         service_data["negocio_id"] = business_id
+        
+        if servicios_modo == "por_sucursal" and context.branch_id:
+            service_data["sucursal_id"] = context.branch_id
 
-        response = supabase.table("servicios").insert(service_data).execute()
+        response = supabase.table(table_name).insert(service_data).execute()
 
         if not response.data:
              raise HTTPException(
@@ -142,20 +161,30 @@ async def create_service(
         )
 
 @router.get("/{service_id}", response_model=Servicio,
-    dependencies=[Depends(PermissionDependency("puede_ver_productos")), Depends(BusinessScopedClientDep)]
+    dependencies=[Depends(PermissionDependency("puede_ver_productos"))]
 )
 async def read_service(
     business_id: str,
     service_id: str,
     request: Request,
+    scoped: ScopedClientContext = Depends(BusinessScopedClientDep)
 ) -> Any:
     """
     Get a specific service by ID for a business (requires puede_ver_productos).
     """
-    supabase = scoped_client_from_request(request)
+    supabase = scoped.client
+    context = scoped.context
+
+    settings = context.branch_settings or {}
+    servicios_modo = settings.get("servicios_modo", "centralizado")
+    table_name = "servicio_sucursal" if servicios_modo == "por_sucursal" else "servicios"
 
     try:
-        response = supabase.table("servicios").select("*").eq("id", service_id).eq("negocio_id", business_id).single().execute()
+        query = supabase.table(table_name).select("*").eq("id", service_id).eq("negocio_id", business_id)
+        if servicios_modo == "por_sucursal" and context.branch_id:
+            query = query.eq("sucursal_id", context.branch_id)
+            
+        response = query.single().execute()
 
         return Servicio(**response.data)
 
@@ -172,18 +201,24 @@ async def read_service(
         )
 
 @router.put("/{service_id}", response_model=Servicio,
-    dependencies=[Depends(PermissionDependency("puede_editar_productos")), Depends(BusinessScopedClientDep)]
+    dependencies=[Depends(PermissionDependency("puede_editar_productos"))]
 )
 async def update_service(
     business_id: str,
     service_id: str,
     service_update: ServicioUpdate,
     request: Request,
+    scoped: ScopedClientContext = Depends(BusinessScopedClientDep)
 ) -> Any:
     """
     Update a service by ID for a business (requires puede_editar_productos).
     """
-    supabase = scoped_client_from_request(request)
+    supabase = scoped.client
+    context = scoped.context
+
+    settings = context.branch_settings or {}
+    servicios_modo = settings.get("servicios_modo", "centralizado")
+    table_name = "servicio_sucursal" if servicios_modo == "por_sucursal" else "servicios"
 
     try:
         update_data = service_update.model_dump(exclude_unset=True)
@@ -198,11 +233,19 @@ async def update_service(
                  )
 
         # Update the service, ensuring it belongs to the correct business
-        response = supabase.table("servicios").update(update_data).eq("id", service_id).eq("negocio_id", business_id).execute()
+        query = supabase.table(table_name).update(update_data).eq("id", service_id).eq("negocio_id", business_id)
+        if servicios_modo == "por_sucursal" and context.branch_id:
+            query = query.eq("sucursal_id", context.branch_id)
+            
+        response = query.execute()
 
         if not response.data:
              # Check if service exists but doesn't belong to business, or doesn't exist at all
-             existing_service = supabase.table("servicios").select("id").eq("id", service_id).execute()
+             existing_query = supabase.table(table_name).select("id").eq("id", service_id)
+             if servicios_modo == "por_sucursal" and context.branch_id:
+                 existing_query = existing_query.eq("sucursal_id", context.branch_id)
+             existing_service = existing_query.execute()
+             
              if existing_service.data:
                   raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
@@ -215,7 +258,10 @@ async def update_service(
                  )
         
         # Fetch the updated service to return
-        updated_service_response = supabase.table("servicios").select("*").eq("id", service_id).single().execute()
+        updated_query = supabase.table(table_name).select("*").eq("id", service_id)
+        if servicios_modo == "por_sucursal" and context.branch_id:
+            updated_query = updated_query.eq("sucursal_id", context.branch_id)
+        updated_service_response = updated_query.single().execute()
         return Servicio(**updated_service_response.data)
 
     except HTTPException:
@@ -228,21 +274,32 @@ async def update_service(
         )
 
 @router.delete("/{service_id}",
-    dependencies=[Depends(PermissionDependency("puede_editar_productos")), Depends(BusinessScopedClientDep)]
+    dependencies=[Depends(PermissionDependency("puede_editar_productos"))]
 )
 async def delete_service(
     business_id: str,
     service_id: str,
     request: Request,
+    scoped: ScopedClientContext = Depends(BusinessScopedClientDep)
 ):
     """
     Delete a service by ID for a business (requires puede_editar_productos).
     """
-    supabase = scoped_client_from_request(request)
+    supabase = scoped.client
+    context = scoped.context
+
+    settings = context.branch_settings or {}
+    servicios_modo = settings.get("servicios_modo", "centralizado")
+    table_name = "servicio_sucursal" if servicios_modo == "por_sucursal" else "servicios"
 
     try:
         # Check if service exists and belongs to the business
-        existing_service = supabase.table("servicios").select("id").eq("id", service_id).eq("negocio_id", business_id).execute()
+        existing_query = supabase.table(table_name).select("id").eq("id", service_id).eq("negocio_id", business_id)
+        if servicios_modo == "por_sucursal" and context.branch_id:
+            existing_query = existing_query.eq("sucursal_id", context.branch_id)
+            
+        existing_service = existing_query.execute()
+        
         if not existing_service.data:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -250,7 +307,11 @@ async def delete_service(
             )
 
         # Delete the service
-        response = supabase.table("servicios").delete().eq("id", service_id).eq("negocio_id", business_id).execute()
+        delete_query = supabase.table(table_name).delete().eq("id", service_id).eq("negocio_id", business_id)
+        if servicios_modo == "por_sucursal" and context.branch_id:
+            delete_query = delete_query.eq("sucursal_id", context.branch_id)
+            
+        response = delete_query.execute()
 
         if not response.data:
             raise HTTPException(

@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Optional, Any
 from app.services.afip.afip_client import create_invoice, get_last_voucher_number
 
-async def procesar_facturacion_afip(client: Any, negocio_id: str, venta_id: str, cliente_id: Optional[str], total: float, items: list):
+async def procesar_facturacion_afip(client: Any, negocio_id: str, venta_id: str, cliente_id: Optional[str], total: float, items: list, sucursal_id: Optional[str] = None):
     """
     Procesa la facturación ARCA para una venta.
     Devuelve los datos de la factura si fue exitosa, o None.
@@ -136,6 +136,9 @@ async def procesar_facturacion_afip(client: Any, negocio_id: str, venta_id: str,
                 "estado": "emitida" if cae else "error",
                 "error_detalle": None if cae else "Error al generar factura en AFIP"
             }
+            if sucursal_id:
+                factura_data["sucursal_id"] = sucursal_id
+                
             factura_resp = client.table("facturas").insert(factura_data).execute()
             
             if factura_resp.data:
