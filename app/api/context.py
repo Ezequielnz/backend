@@ -63,25 +63,29 @@ async def BusinessBranchContextDep(request: Request, business_id: str, branch_id
 
     # If branch specified, verify assignment
     if branch_id:
-        user_branch = (
-            client.table("usuarios_sucursales")
-            .select("id")
-            .eq("usuario_id", user_id)
-            .eq("negocio_id", business_id)
-            .eq("sucursal_id", branch_id)
-            .eq("activo", True)
-            .limit(1)
-            .execute()
-        )
-        if not user_branch.data:
-            # If the branch came from the header and is invalid, we ignore it
-            # instead of raising 403. This prevents stale headers from breaking
-            # business-level endpoints.
-            if from_header:
-                print(f"⚠️ Warning: User {user_id} sent invalid branch header {branch_id}. Ignoring.")
-                branch_id = None
-            else:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User not assigned to this branch")
+        if user_role in ("admin", "owner"):
+            # Admins and owners inherently have access to all branches within the business
+            pass
+        else:
+            user_branch = (
+                client.table("usuarios_sucursales")
+                .select("id")
+                .eq("usuario_id", user_id)
+                .eq("negocio_id", business_id)
+                .eq("sucursal_id", branch_id)
+                .eq("activo", True)
+                .limit(1)
+                .execute()
+            )
+            if not user_branch.data:
+                # If the branch came from the header and is invalid, we ignore it
+                # instead of raising 403. This prevents stale headers from breaking
+                # business-level endpoints.
+                if from_header:
+                    print(f"⚠️ Warning: User {user_id} sent invalid branch header {branch_id}. Ignoring.")
+                    branch_id = None
+                else:
+                    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User not assigned to this branch")
 
     # Retrieve branch settings (negocio_configuracion)
     settings_response = (
