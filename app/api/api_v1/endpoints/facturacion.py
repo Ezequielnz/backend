@@ -2,8 +2,13 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request, Header, 
 from typing import Optional
 from app.db.supabase_client import get_supabase_user_client
 from app.core.permissions import check_subscription_access
-from app.schemas.facturacion import ConfiguracionFiscalResponse, AfipStatusResponse
+from app.schemas.facturacion import ConfiguracionFiscalResponse, AfipStatusResponse, CsrRequest, CsrResponse
 
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography import x509
+from cryptography.x509.oid import NameOID
+from cryptography.hazmat.primitives import hashes
 # Import ARCA client
 from app.services.afip import get_server_status, get_last_voucher_number
 
@@ -204,3 +209,75 @@ async def check_afip_status(
             
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Error validando conexión con ARCA: {str(e)}")
+
+@router.post("/generar-csr", response_model=CsrResponse)
+async def generar_csr(
+    request: Request,
+    business_id: str,
+    csr_req: CsrRequest,
+    authorization: str = Header(..., description="Bearer token"),
+    subscription_check: bool = Depends(check_subscription_access)
+):
+    """
+    Generates a private key and a CSR for AFIP.
+    Stores the private key in Supabase and updates the fiscal config.
+    Returns the CSR content for the user to download.
+    """
+    client = get_supabase_user_client(authorization)
+    
+    # 1. Generate private key
+    private_key = rsa.generate_private_key(
+        public_exponent=65537,
+        key_size=2048,
+    )
+    
+    # Serialize private key to PEM format required by OpenSSL
+    key_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption()
+    )
+    
+    # 2. Save private key to Supabase Storage
+    key_filename = f"{business_id}/clave_privada.key"
+    try:
+        client.storage.from_("certificados_afip").upload(
+            file=key_pem, 
+            path=key_filename, 
+            file_options={"upsert": "true", "content-type": "application/pkcs8"}  # type: ignore
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al guardar la clave privada en Storage: {str(e)}")
+        
+    # 3. Update configuracion_fiscal
+    existing = client.table("configuracion_fiscal").select("*").eq("negocio_id", business_id).execute()
+    if existing.data and len(existing.data) > 0:
+        # Update existing
+        client.table("configuracion_fiscal").update({"key_path": key_filename, "cuit": csr_req.cuit, "razon_social": csr_req.razon_social}).eq("negocio_id", business_id).execute()
+    else:
+        # Insert basic config
+        client.table("configuracion_fiscal").insert({
+            "negocio_id": business_id,
+            "cuit": csr_req.cuit,
+            "razon_social": csr_req.razon_social,
+            "key_path": key_filename,
+            "punto_venta": 1,
+            "condicion_fiscal": "responsable_inscripto", # default
+            "ambiente": "homologacion",
+            "habilitada": False
+        }).execute()
+
+    # 4. Generate CSR
+    try:
+        builder = x509.CertificateSigningRequestBuilder()
+        builder = builder.subject_name(x509.Name([
+            x509.NameAttribute(NameOID.COMMON_NAME, csr_req.razon_social),
+            x509.NameAttribute(NameOID.SERIAL_NUMBER, f"CUIT {csr_req.cuit}")
+        ]))
+        
+        csr = builder.sign(private_key, hashes.SHA256())
+        csr_pem = csr.public_bytes(serialization.Encoding.PEM).decode("utf-8")
+        
+        return CsrResponse(csr_content=csr_pem, message="CSR y Clave Privada generados exitosamente.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al generar el CSR: {str(e)}")

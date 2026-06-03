@@ -40,3 +40,11 @@ class AfipStatusResponse(BaseModel):
     ultimo_comprobante_a: Optional[int] = None
     ultimo_comprobante_b: Optional[int] = None
     ultimo_comprobante_c: Optional[int] = None
+
+class CsrRequest(BaseModel):
+    cuit: constr(min_length=11, max_length=11) # type: ignore
+    razon_social: str
+
+class CsrResponse(BaseModel):
+    csr_content: str
+    message: str
