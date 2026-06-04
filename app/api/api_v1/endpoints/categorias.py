@@ -191,13 +191,8 @@ async def delete_categoria(
                 detail="Categoría no encontrada o no pertenece a este negocio.",
             )
 
-        # Check if there are products associated with this category within this business
-        products_response = supabase.table("productos").select("id").eq("categoria_id", categoria_id).eq("negocio_id", business_id).execute()
-        if products_response.data and len(products_response.data) > 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No se puede eliminar la categoría porque tiene productos asociados a este negocio."
-            )
+        # Update associated products to remove the category reference instead of blocking deletion
+        supabase.table("productos").update({"categoria_id": None}).eq("categoria_id", categoria_id).eq("negocio_id", business_id).execute()
             
         # Delete the category
         supabase.table("categorias").delete().eq("id", categoria_id).eq("negocio_id", business_id).execute()
