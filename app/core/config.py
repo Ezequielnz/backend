@@ -27,6 +27,8 @@ class Settings(BaseSettings):
         "http://localhost:5173",  # Frontend Vite
         "http://localhost:3000",  # Frontend alternativo (por si se usa otro puerto)
         "http://localhost:8080",  # Frontend alternativo (por si se usa otro puerto)
+        "https://www.operixml.com", # Production Frontend
+        "https://operixml.com",     # Production Frontend without www
     ]
     FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:5173")
     FRONTEND_CONFIRMATION_PATH: str = os.getenv("FRONTEND_CONFIRMATION_PATH", "")
