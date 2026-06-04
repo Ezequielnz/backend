@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, Dict
 from datetime import datetime
 
 class ProductoBase(BaseModel):
@@ -49,6 +49,7 @@ class Producto(ProductoBase):
     activo: bool = Field(default=True, description="Indica si el producto está activo")
     creado_en: datetime
     actualizado_en: datetime
+    stock_por_sucursal: Optional[Dict[str, float]] = Field(default_factory=dict, description="Stock desglosado por sucursal")
 
     class Config:
         from_attributes = True

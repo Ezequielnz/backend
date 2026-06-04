@@ -17,7 +17,9 @@ def _normalize_branch_settings(raw: Any) -> Dict[str, Any]:
         return raw
     model_dump = getattr(raw, "model_dump", None)
     if callable(model_dump):
-        return model_dump()
+        result = model_dump()
+        if isinstance(result, dict):
+            return result
     return {}
 
 
@@ -204,6 +206,7 @@ async def get_productos(
 
     stock_map: Dict[str, float] = {}
     catalog_map: Dict[str, Dict[str, Any]] = {}
+    stock_por_sucursal_map: Dict[str, Dict[str, float]] = {}
 
     try:
         if inventory_mode == "centralizado":
@@ -228,6 +231,23 @@ async def get_productos(
             for row in stock_resp.data or []:
                 producto_id = str(row.get("producto_id"))
                 stock_map[producto_id] = float(row.get("stock_actual") or 0.0)
+
+            # Sincronizamos el stock global de la base de datos (todas las sucursales)
+            # Para permitir operaciones como las transferencias entre sucursales
+            all_stock_resp = (
+                supabase.table("inventario_sucursal")
+                .select("producto_id, sucursal_id, stock_actual")
+                .eq("negocio_id", business_id)
+                .in_("producto_id", producto_ids)
+                .execute()
+            )
+            for row in all_stock_resp.data or []:
+                pid = str(row.get("producto_id"))
+                bid = str(row.get("sucursal_id"))
+                stock_val = float(row.get("stock_actual") or 0.0)
+                if pid not in stock_por_sucursal_map:
+                    stock_por_sucursal_map[pid] = {}
+                stock_por_sucursal_map[pid][bid] = stock_val
 
             catalog_resp = (
                 supabase.table("producto_sucursal")
@@ -269,6 +289,12 @@ async def get_productos(
             producto["stock_actual"] = stock_map[producto_id]
         else:
             producto.setdefault("stock_actual", 0)
+
+        # Añadimos el stock desglosado por sucursal
+        if producto_id in stock_por_sucursal_map:
+            producto["stock_por_sucursal"] = stock_por_sucursal_map[producto_id]
+        else:
+            producto["stock_por_sucursal"] = {}
 
         catalog_entry = catalog_map.get(producto_id)
         if catalog_entry:
