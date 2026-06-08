@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 from app.db.scoped_client import ScopedSupabaseClient
 from app.db.supabase_client import get_supabase_service_client
 from app.schemas.branch_settings import BranchSettings, BranchSettingsUpdate
+from app.services.config_cache import invalidate_negocio_config
 
 logger = logging.getLogger(__name__)
 
@@ -251,5 +252,7 @@ class BranchSettingsService:
                         logger.critical("CRITICAL: Failed to rollback branch settings for %s: %s", self._business_id, rollback_err)
                         
                     raise RuntimeError("Sincronización fallida. Se han revertido los cambios para mantener la consistencia.") from e
+        # Invalidate the cache for this business
+        invalidate_negocio_config(self._business_id)
 
         return updated
