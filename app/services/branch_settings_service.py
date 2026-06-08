@@ -131,6 +131,14 @@ class BranchSettingsService:
             metadata_payload["services_mode_previous"] = current.servicios_modo
             metadata_payload["services_mode_changed_at"] = datetime.now(timezone.utc).isoformat()
 
+        if (
+            current is not None
+            and "catalogo_producto_modo" in update_data
+            and update_data["catalogo_producto_modo"] != current.catalogo_producto_modo
+        ):
+            metadata_payload["product_catalog_mode_previous"] = current.catalogo_producto_modo
+            metadata_payload["product_catalog_mode_changed_at"] = datetime.now(timezone.utc).isoformat()
+
         update_data["metadata"] = metadata_payload
 
         # Normalize empty string → NULL for UUID column.
@@ -189,9 +197,8 @@ class BranchSettingsService:
 
         # ------------------------------------------------------------------ #
         # Background data synchronisation (inventory / services mode changes)
-        # NOTE: This runs AFTER returning the updated config so that sync
-        # failures do NOT roll back the already-persisted configuration.
-        # We log errors but do NOT re-raise them here.
+        # NOTE: This runs AFTER returning the updated config, but if sync fails,
+        # we manually roll back the configuration to prevent an inconsistent state.
         # ------------------------------------------------------------------ #
         if current is not None:
             inv_changed = (
@@ -202,7 +209,12 @@ class BranchSettingsService:
                 "servicios_modo" in update_data
                 and update_data["servicios_modo"] != current.servicios_modo
             )
-            if inv_changed or svc_changed:
+            cat_changed = (
+                "catalogo_producto_modo" in update_data
+                and update_data["catalogo_producto_modo"] != current.catalogo_producto_modo
+            )
+            
+            if inv_changed or svc_changed or cat_changed:
                 try:
                     from app.services.sync_service import SyncService
                     sync_svc = SyncService(self._business_id)
@@ -214,11 +226,30 @@ class BranchSettingsService:
                         sync_svc.sync_services_mode(
                             current.servicios_modo, update_data["servicios_modo"]
                         )
+                    if cat_changed:
+                        sync_svc.sync_product_catalog_mode(
+                            current.catalogo_producto_modo, update_data["catalogo_producto_modo"]
+                        )
                 except Exception as e:
                     logger.error(
-                        "Sync error for %s (non-fatal, config already saved): %s",
+                        "Sync error for %s. Rolling back configuration to prevent inconsistent state: %s",
                         self._business_id,
                         e,
                     )
+                    # Rollback the configuration to its previous state
+                    rollback_data = {}
+                    if inv_changed:
+                        rollback_data["inventario_modo"] = current.inventario_modo
+                    if svc_changed:
+                        rollback_data["servicios_modo"] = current.servicios_modo
+                    if cat_changed:
+                        rollback_data["catalogo_producto_modo"] = current.catalogo_producto_modo
+                    
+                    try:
+                        self._svc.table("negocio_configuracion").update(rollback_data).eq("negocio_id", self._business_id).execute()
+                    except Exception as rollback_err:
+                        logger.critical("CRITICAL: Failed to rollback branch settings for %s: %s", self._business_id, rollback_err)
+                        
+                    raise RuntimeError("Sincronización fallida. Se han revertido los cambios para mantener la consistencia.") from e
 
         return updated

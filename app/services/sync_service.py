@@ -235,3 +235,81 @@ class SyncService:
             # Delete all servicio_sucursal records
             self._client.table("servicio_sucursal").delete().eq("negocio_id", self._business_id).execute()
             logger.info(f"Cleared servicio_sucursal for {self._business_id}")
+
+    def sync_product_catalog_mode(self, old_mode: str, new_mode: str) -> None:
+        if old_mode == new_mode:
+            return
+            
+        logger.info(f"Syncing product catalog mode for {self._business_id} from {old_mode} to {new_mode}")
+            
+        if new_mode == "por_sucursal":
+            # compartido → por_sucursal
+            branches_resp = (
+                self._client.table("sucursales")
+                .select("id")
+                .eq("negocio_id", self._business_id)
+                .eq("activo", True)
+                .execute()
+            )
+            branches = [b["id"] for b in branches_resp.data or []]
+            
+            if not branches:
+                return
+                
+            productos_resp = (
+                self._client.table("productos")
+                .select("id, precio_venta, codigo, activo")
+                .eq("negocio_id", self._business_id)
+                .execute()
+            )
+            
+            for branch_id in branches:
+                for prod in productos_resp.data or []:
+                    payload = {
+                        "negocio_id": self._business_id,
+                        "sucursal_id": branch_id,
+                        "producto_id": prod["id"],
+                        "precio": prod.get("precio_venta"),
+                        "sku_local": prod.get("codigo"),
+                        "estado": "activo" if prod.get("activo") else "inactivo",
+                        "visibilidad": True
+                    }
+                    try:
+                        self._client.table("producto_sucursal").upsert(
+                            payload, on_conflict="producto_id,sucursal_id"
+                        ).execute()
+                    except Exception as e:
+                        logger.error(f"Error copying product {prod.get('id')} to branch {branch_id}: {e}")
+                        
+        elif new_mode == "compartido":
+            # por_sucursal → compartido
+            # Update productos from main branch data, but DO NOT delete from productos
+            main_branch_id = self._get_main_branch_id()
+            if main_branch_id:
+                prod_suc_resp = (
+                    self._client.table("producto_sucursal")
+                    .select("producto_id, precio, sku_local, estado")
+                    .eq("negocio_id", self._business_id)
+                    .eq("sucursal_id", main_branch_id)
+                    .execute()
+                )
+                
+                for prod in prod_suc_resp.data or []:
+                    update_payload = {}
+                    if "precio" in prod and prod["precio"] is not None:
+                        update_payload["precio_venta"] = prod["precio"]
+                    if "sku_local" in prod and prod["sku_local"] is not None:
+                        update_payload["codigo"] = prod["sku_local"]
+                    if "estado" in prod:
+                        update_payload["activo"] = (prod["estado"] == "activo")
+                        
+                    if update_payload:
+                        try:
+                            self._client.table("productos").update(update_payload).eq("id", prod["producto_id"]).execute()
+                        except Exception as e:
+                            logger.error(f"Error updating product {prod.get('producto_id')} from branch data: {e}")
+                        
+            # Delete all producto_sucursal records
+            self._client.table("producto_sucursal").delete().eq("negocio_id", self._business_id).execute()
+            logger.info(f"Cleared producto_sucursal for {self._business_id}")
+

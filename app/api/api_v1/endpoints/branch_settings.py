@@ -67,6 +67,12 @@ async def update_branch_settings(
 
     try:
         return service.update(payload)
+    except RuntimeError as r_err:
+        logger.exception("Synchronization failed for negocio %s", scoped.context.business_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(r_err),
+        ) from r_err
     except Exception as exc:  # pragma: no cover - Supabase client raises generic exceptions
         logger.exception("Failed to update branch settings for negocio %s", scoped.context.business_id)
         raise HTTPException(
