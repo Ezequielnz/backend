@@ -8,6 +8,7 @@ from app.db.scoped_client import get_scoped_supabase_user_client
 from app.schemas.producto import ProductoCreate, ProductoUpdate, Producto
 from app.dependencies import PermissionDependency
 from app.core.permissions import check_subscription_access
+from app.services.config_cache import get_negocio_config
 import logging
 import datetime
 
@@ -37,9 +38,8 @@ async def read_products(
     )
     
     try:
-        # Check config modes
-        config_resp = supabase.table("negocio_configuracion").select("catalogo_producto_modo, inventario_modo").eq("negocio_id", business_id).single().execute()
-        config_data = config_resp.data or {}
+        # Check config modes — use cache to avoid extra DB round-trip on every request
+        config_data = get_negocio_config(business_id, supabase)
         catalog_mode = config_data.get("catalogo_producto_modo", "compartido")
         inventario_modo = config_data.get("inventario_modo", "centralizado")
 
@@ -191,6 +191,17 @@ async def create_product(
         product_data = product_in.model_dump()
         product_data["negocio_id"] = business_id
 
+        # Check config — use cache
+        config_data = get_negocio_config(business_id, supabase)
+        catalog_mode = config_data.get("catalogo_producto_modo", "compartido")
+        inventario_modo = config_data.get("inventario_modo", "centralizado")
+
+        # When inventory is per-branch, the stock lives in inventario_sucursal.
+        # Keep productos.stock_actual at 0 so it is not used as the source of truth.
+        initial_stock = product_data.get("stock_actual", 0)
+        if inventario_modo == "por_sucursal":
+            product_data["stock_actual"] = 0
+
         response = supabase.table("productos").insert(product_data).execute()
 
         if not response.data:
@@ -201,14 +212,8 @@ async def create_product(
 
         new_product = response.data[0]
 
-        # Check config
-        config_resp = supabase.table("negocio_configuracion").select("catalogo_producto_modo, inventario_modo").eq("negocio_id", business_id).single().execute()
-        config_data = config_resp.data or {}
-        catalog_mode = config_data.get("catalogo_producto_modo", "compartido")
-        inventario_modo = config_data.get("inventario_modo", "centralizado")
-
         if catalog_mode == "por_sucursal" and branch_id:
-            # Insert into producto_sucursal
+            # Create the branch-specific catalog entry (precio, sku, estado)
             ps_data = {
                 "producto_id": new_product["id"],
                 "sucursal_id": branch_id,
@@ -221,13 +226,16 @@ async def create_product(
             supabase.table("producto_sucursal").insert(ps_data).execute()
 
         if inventario_modo == "por_sucursal" and branch_id:
+            # Save the real initial stock into the branch inventory table
             inv_data = {
                 "producto_id": new_product["id"],
                 "sucursal_id": branch_id,
                 "negocio_id": business_id,
-                "stock_actual": new_product.get("stock_actual", 0)
+                "stock_actual": initial_stock
             }
             supabase.table("inventario_sucursal").insert(inv_data).execute()
+            # Reflect the initial stock in the response even though productos.stock_actual=0
+            new_product["stock_actual"] = initial_stock
 
         return Producto(**new_product)
 
@@ -298,31 +306,31 @@ async def update_product(
 
     try:
         update_data = product_update.model_dump(exclude_unset=True)
-        
-        # Check config modes
-        config_resp = supabase.table("negocio_configuracion").select("catalogo_producto_modo, inventario_modo").eq("negocio_id", business_id).single().execute()
-        config_data = config_resp.data or {}
+
+        # Check config modes — use cache to avoid extra DB round-trip
+        config_data = get_negocio_config(business_id, supabase)
         catalog_mode = config_data.get("catalogo_producto_modo", "compartido")
         inventario_modo = config_data.get("inventario_modo", "centralizado")
 
-        # If category_id is being updated, verify it exists and belongs to the business
-        if "categoria_id" in update_data and update_data["categoria_id"] is not None:
-             category_response = supabase.table("categorias").select("id").eq("id", update_data["categoria_id"]).eq("negocio_id", business_id).execute()
-             if not category_response.data:
-                  raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Nueva categoría especificada no encontrada o no pertenece a este negocio.",
-                 )
+        # ---------------------------------------------------------------
+        # Separate the incoming payload into three buckets:
+        #   meta_update  → always goes to tabla 'productos' (shared data)
+        #   ps_update    → goes to 'producto_sucursal' (branch catalog overrides)
+        #   inv_update   → goes to 'inventario_sucursal' (branch stock)
+        # ---------------------------------------------------------------
+        CAMPOS_META = {
+            "nombre", "descripcion", "precio_venta", "precio_compra",
+            "categoria_id", "codigo", "unidades", "activo", "imagen_url",
+        }
+        CAMPOS_STOCK = {"stock_actual"}
 
-        # Handle empty code as None
-        if "codigo" in update_data and update_data["codigo"] == "":
-            update_data["codigo"] = None
+        ps_update_data: dict = {}
+        inv_update_data: dict = {}
 
-        # Duplicate code check removed as per user request
-
-        ps_update_data = {}
+        # ── Catalog-mode routing ──────────────────────────────────────
+        # In 'por_sucursal' mode with a branch, redirect price/sku/activo
+        # to producto_sucursal instead of the master productos table.
         if catalog_mode == "por_sucursal" and branch_id:
-            # Extract branch-specific fields
             if "precio_venta" in update_data:
                 ps_update_data["precio"] = update_data.pop("precio_venta")
             if "codigo" in update_data:
@@ -330,31 +338,56 @@ async def update_product(
             if "activo" in update_data:
                 ps_update_data["estado"] = "activo" if update_data.pop("activo") else "inactivo"
 
-        inv_update_data = {}
+        # ── Inventory-mode routing ───────────────────────────────────
+        # In 'por_sucursal' mode (regardless of catalog mode), stock goes
+        # ONLY to inventario_sucursal, never to the master productos table.
         if inventario_modo == "por_sucursal" and branch_id:
             if "stock_actual" in update_data:
                 inv_update_data["stock_actual"] = update_data.pop("stock_actual")
+        # In centralized mode, stock_actual stays in update_data → goes to productos
 
-        # Update the product base data, if there's anything left to update
-        if update_data:
-            response = supabase.table("productos").update(update_data).eq("id", product_id).eq("negocio_id", business_id).execute()
+        # If category_id is being updated, verify it belongs to the business
+        if "categoria_id" in update_data and update_data["categoria_id"] is not None:
+            category_response = supabase.table("categorias").select("id").eq("id", update_data["categoria_id"]).eq("negocio_id", business_id).execute()
+            if not category_response.data:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Nueva categoría especificada no encontrada o no pertenece a este negocio.",
+                )
 
+        # Normalize empty code to None
+        if "codigo" in update_data and update_data["codigo"] == "":
+            update_data["codigo"] = None
+
+        # ── 1. Update master product metadata ────────────────────────
+        # Only send fields that are relevant to the productos table
+        meta_to_write = {k: v for k, v in update_data.items() if k in CAMPOS_META or k not in CAMPOS_STOCK}
+        if meta_to_write:
+            response = supabase.table("productos").update(meta_to_write).eq("id", product_id).eq("negocio_id", business_id).execute()
             if not response.data:
-                 # Check if product exists but doesn't belong to business, or doesn't exist at all
-                 existing_product = supabase.table("productos").select("id").eq("id", product_id).execute()
-                 if existing_product.data:
-                      raise HTTPException(
+                existing_product = supabase.table("productos").select("id").eq("id", product_id).execute()
+                if existing_product.data:
+                    raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,
                         detail="Producto no pertenece a este negocio.",
-                     )
-                 else:
-                      raise HTTPException(
+                    )
+                else:
+                    raise HTTPException(
                         status_code=status.HTTP_404_NOT_FOUND,
                         detail="Producto no encontrado.",
-                     )
-        
-        # Update or insert branch overrides
-        if ps_update_data:
+                    )
+
+        # ── 2. In centralizado mode, write stock to productos directly ─
+        # (stock_actual stays in update_data if inventario_modo != por_sucursal)
+        if inventario_modo == "centralizado" and "stock_actual" in update_data:
+            stock_val = update_data["stock_actual"]
+            from app.db.supabase_client import get_supabase_service_client
+            svc = get_supabase_service_client()
+            svc.table("productos").update({"stock_actual": stock_val}).eq("id", product_id).eq("negocio_id", business_id).execute()
+            svc.table("inventario_negocio").update({"stock_total": stock_val}).eq("producto_id", product_id).eq("negocio_id", business_id).execute()
+
+        # ── 3. Upsert branch catalog overrides (producto_sucursal) ────
+        if ps_update_data and branch_id:
             existing_ps = supabase.table("producto_sucursal").select("id").eq("producto_id", product_id).eq("sucursal_id", branch_id).execute()
             if existing_ps.data:
                 supabase.table("producto_sucursal").update(ps_update_data).eq("producto_id", product_id).eq("sucursal_id", branch_id).execute()
@@ -365,8 +398,8 @@ async def update_product(
                 ps_update_data["visibilidad"] = True
                 supabase.table("producto_sucursal").insert(ps_update_data).execute()
 
-        # Update or insert branch inventory overrides
-        if inv_update_data:
+        # ── 4. Upsert branch inventory (inventario_sucursal) ─────────
+        if inv_update_data and branch_id:
             existing_inv = supabase.table("inventario_sucursal").select("id").eq("producto_id", product_id).eq("sucursal_id", branch_id).execute()
             if existing_inv.data:
                 supabase.table("inventario_sucursal").update(inv_update_data).eq("producto_id", product_id).eq("sucursal_id", branch_id).execute()
@@ -376,32 +409,30 @@ async def update_product(
                 inv_update_data["negocio_id"] = business_id
                 supabase.table("inventario_sucursal").insert(inv_update_data).execute()
 
-        # Fetch the updated product to return
+        # ── 5. Build response: fetch base + merge branch overrides ────
         updated_product_response = supabase.table("productos").select("*").eq("id", product_id).single().execute()
         updated_product_data = updated_product_response.data
-        
-        # Merge back the overrides for the response
+
         if catalog_mode == "por_sucursal" and branch_id:
             ps_resp = supabase.table("producto_sucursal").select("*").eq("producto_id", product_id).eq("sucursal_id", branch_id).single().execute()
             if ps_resp.data:
-                if ps_resp.data.get('precio') is not None:
-                    updated_product_data['precio_venta'] = ps_resp.data['precio']
-                if ps_resp.data.get('sku_local') is not None:
-                    updated_product_data['codigo'] = ps_resp.data['sku_local']
-                if ps_resp.data.get('estado') is not None:
-                    updated_product_data['activo'] = (ps_resp.data['estado'] == 'activo')
-        
+                if ps_resp.data.get("precio") is not None:
+                    updated_product_data["precio_venta"] = ps_resp.data["precio"]
+                if ps_resp.data.get("sku_local") is not None:
+                    updated_product_data["codigo"] = ps_resp.data["sku_local"]
+                if ps_resp.data.get("estado") is not None:
+                    updated_product_data["activo"] = (ps_resp.data["estado"] == "activo")
+
         if inventario_modo == "por_sucursal" and branch_id:
             inv_resp = supabase.table("inventario_sucursal").select("stock_actual").eq("producto_id", product_id).eq("sucursal_id", branch_id).execute()
-            if inv_resp.data:
-                updated_product_data['stock_actual'] = inv_resp.data[0].get('stock_actual', 0)
+            updated_product_data["stock_actual"] = inv_resp.data[0].get("stock_actual", 0) if inv_resp.data else 0
 
         return Producto(**updated_product_data)
 
     except HTTPException:
-         raise
+        raise
     except Exception as e:
-        print(f"Error updating product: {str(e)}")
+        logger.error(f"Error updating product {product_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error al actualizar producto: {str(e)}",
