@@ -24,6 +24,7 @@ async def read_products(
     business_id: str,
     request: Request,
     category_id: Optional[str] = Query(None, description="Optional category ID to filter products"),
+    branch_id: Optional[str] = Query(None),
 ) -> Any:
     """
     Retrieve products for a specific business, optionally filtered by category (requires puede_ver_productos).
@@ -36,6 +37,10 @@ async def read_products(
     )
     
     try:
+        # Check catalog mode
+        config_resp = supabase.table("negocio_configuracion").select("catalogo_producto_modo").eq("negocio_id", business_id).single().execute()
+        catalog_mode = config_resp.data.get("catalogo_producto_modo", "compartido") if config_resp.data else "compartido"
+
         query = supabase.table("productos").select("*").eq("negocio_id", business_id)
         
         if category_id:
@@ -51,10 +56,35 @@ async def read_products(
         response = query.execute()
         products_data = response.data if response.data is not None else []
         
+        # If branch_id is provided and mode is por_sucursal, fetch branch overrides
+        branch_overrides = {}
+        if catalog_mode == "por_sucursal" and branch_id:
+            suc_resp = supabase.table("producto_sucursal").select("*").eq("negocio_id", business_id).eq("sucursal_id", branch_id).execute()
+            for ps in suc_resp.data or []:
+                branch_overrides[ps["producto_id"]] = ps
+
         # Validate and serialize each product individually to catch validation errors
         validated_products = []
         for item in products_data:
             try:
+                # Apply branch overrides if applicable
+                if catalog_mode == "por_sucursal" and branch_id:
+                    override = branch_overrides.get(item.get('id'))
+                    if override:
+                        if not override.get('visibilidad', True):
+                            continue # Skip products hidden for this branch
+                        if override.get('precio') is not None:
+                            item['precio_venta'] = override['precio']
+                        if override.get('sku_local') is not None:
+                            item['codigo'] = override['sku_local']
+                        if override.get('estado') is not None:
+                            item['activo'] = (override['estado'] == 'activo')
+                    else:
+                        # If por_sucursal and no override exists, we still show the product but it lacks configuration,
+                        # however, the requirement was that it is available to all branches that have it. 
+                        # We will skip it since it isn't configured for this branch.
+                        continue
+
                 # Ensure required fields are present and handle None values
                 if not item.get('id'):
                     logger.warning(f"Skipping product without ID: {item}")
@@ -113,6 +143,7 @@ async def create_product(
     business_id: str,
     product_in: ProductoCreate,
     request: Request,
+    branch_id: Optional[str] = Query(None),
     subscription_check: bool = Depends(check_subscription_access),
 ) -> Any:
     """
@@ -152,7 +183,26 @@ async def create_product(
                 detail="Error al crear el producto.",
             )
 
-        return Producto(**response.data[0])
+        new_product = response.data[0]
+
+        # Check catalog mode
+        config_resp = supabase.table("negocio_configuracion").select("catalogo_producto_modo").eq("negocio_id", business_id).single().execute()
+        catalog_mode = config_resp.data.get("catalogo_producto_modo", "compartido") if config_resp.data else "compartido"
+
+        if catalog_mode == "por_sucursal" and branch_id:
+            # Insert into producto_sucursal
+            ps_data = {
+                "producto_id": new_product["id"],
+                "sucursal_id": branch_id,
+                "negocio_id": business_id,
+                "precio": new_product.get("precio_venta"),
+                "sku_local": new_product.get("codigo"),
+                "estado": "activo" if new_product.get("activo", True) else "inactivo",
+                "visibilidad": True
+            }
+            supabase.table("producto_sucursal").insert(ps_data).execute()
+
+        return Producto(**new_product)
 
     except HTTPException:
          raise
@@ -206,6 +256,7 @@ async def update_product(
     product_id: str,
     product_update: ProductoUpdate,
     request: Request,
+    branch_id: Optional[str] = Query(None),
     subscription_check: bool = Depends(check_subscription_access),
 ) -> Any:
     """
@@ -221,6 +272,10 @@ async def update_product(
     try:
         update_data = product_update.model_dump(exclude_unset=True)
         
+        # Check catalog mode
+        config_resp = supabase.table("negocio_configuracion").select("catalogo_producto_modo").eq("negocio_id", business_id).single().execute()
+        catalog_mode = config_resp.data.get("catalogo_producto_modo", "compartido") if config_resp.data else "compartido"
+
         # If category_id is being updated, verify it exists and belongs to the business
         if "categoria_id" in update_data and update_data["categoria_id"] is not None:
              category_response = supabase.table("categorias").select("id").eq("id", update_data["categoria_id"]).eq("negocio_id", business_id).execute()
@@ -236,26 +291,62 @@ async def update_product(
 
         # Duplicate code check removed as per user request
 
-        # Update the product, ensuring it belongs to the correct business
-        response = supabase.table("productos").update(update_data).eq("id", product_id).eq("negocio_id", business_id).execute()
+        ps_update_data = {}
+        if catalog_mode == "por_sucursal" and branch_id:
+            # Extract branch-specific fields
+            if "precio_venta" in update_data:
+                ps_update_data["precio"] = update_data.pop("precio_venta")
+            if "codigo" in update_data:
+                ps_update_data["sku_local"] = update_data.pop("codigo")
+            if "activo" in update_data:
+                ps_update_data["estado"] = "activo" if update_data.pop("activo") else "inactivo"
 
-        if not response.data:
-             # Check if product exists but doesn't belong to business, or doesn't exist at all
-             existing_product = supabase.table("productos").select("id").eq("id", product_id).execute()
-             if existing_product.data:
-                  raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Producto no pertenece a este negocio.",
-                 )
-             else:
-                  raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Producto no encontrado.",
-                 )
+        # Update the product base data, if there's anything left to update
+        if update_data:
+            response = supabase.table("productos").update(update_data).eq("id", product_id).eq("negocio_id", business_id).execute()
+
+            if not response.data:
+                 # Check if product exists but doesn't belong to business, or doesn't exist at all
+                 existing_product = supabase.table("productos").select("id").eq("id", product_id).execute()
+                 if existing_product.data:
+                      raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="Producto no pertenece a este negocio.",
+                     )
+                 else:
+                      raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail="Producto no encontrado.",
+                     )
         
+        # Update or insert branch overrides
+        if ps_update_data:
+            existing_ps = supabase.table("producto_sucursal").select("id").eq("producto_id", product_id).eq("sucursal_id", branch_id).execute()
+            if existing_ps.data:
+                supabase.table("producto_sucursal").update(ps_update_data).eq("producto_id", product_id).eq("sucursal_id", branch_id).execute()
+            else:
+                ps_update_data["producto_id"] = product_id
+                ps_update_data["sucursal_id"] = branch_id
+                ps_update_data["negocio_id"] = business_id
+                ps_update_data["visibilidad"] = True
+                supabase.table("producto_sucursal").insert(ps_update_data).execute()
+
         # Fetch the updated product to return
         updated_product_response = supabase.table("productos").select("*").eq("id", product_id).single().execute()
-        return Producto(**updated_product_response.data)
+        updated_product_data = updated_product_response.data
+        
+        # Merge back the overrides for the response
+        if catalog_mode == "por_sucursal" and branch_id:
+            ps_resp = supabase.table("producto_sucursal").select("*").eq("producto_id", product_id).eq("sucursal_id", branch_id).single().execute()
+            if ps_resp.data:
+                if ps_resp.data.get('precio') is not None:
+                    updated_product_data['precio_venta'] = ps_resp.data['precio']
+                if ps_resp.data.get('sku_local') is not None:
+                    updated_product_data['codigo'] = ps_resp.data['sku_local']
+                if ps_resp.data.get('estado') is not None:
+                    updated_product_data['activo'] = (ps_resp.data['estado'] == 'activo')
+
+        return Producto(**updated_product_data)
 
     except HTTPException:
          raise
@@ -392,8 +483,8 @@ from app.services.pdf_parser import parse_pdf_catalog
 )
 async def upload_catalog(
     business_id: str,
+    request: Request,
     file: UploadFile = File(...),
-    request: Request = None,
     subscription_check: bool = Depends(check_subscription_access),
 ) -> Any:
     """
@@ -406,7 +497,7 @@ async def upload_catalog(
     
     The user is expected to review this data on the frontend before confirming the import.
     """
-    if not file.filename.lower().endswith('.pdf'):
+    if not file.filename or not file.filename.lower().endswith('.pdf'):
         raise HTTPException(status_code=400, detail="El archivo debe ser un PDF.")
     
     try:
