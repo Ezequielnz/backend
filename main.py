@@ -57,17 +57,7 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# 1. PRIMERO: CORS (Debe ser el middleware más externo para manejar headers incluso en errores)
-# Usamos settings.BACKEND_CORS_ORIGINS que ya procesa correctamente la variable de entorno
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.BACKEND_CORS_ORIGINS, 
-    allow_credentials=True,
-    allow_methods=["*"], # Permitir todos los métodos para evitar bloqueos de preflight
-    allow_headers=["*"], # Permitir todos los headers
-)
-
-# 2. SEGUNDO: Middleware de Timeout (para evitar 502 de Render por esperas eternas)
+# 1. PRIMERO: Middleware de Timeout (para evitar 502 de Render por esperas eternas)
 @app.middleware("http")
 async def timeout_middleware(request: Request, call_next):
     try:
@@ -83,8 +73,18 @@ async def timeout_middleware(request: Request, call_next):
         # Dejar pasar otras excepciones para que las maneje el error handler
         raise e
 
-# 3. TERCERO: Error Handling
+# 2. SEGUNDO: Error Handling
 app.add_middleware(JSONErrorMiddleware)
+
+# 3. TERCERO: CORS (Debe ser el middleware más externo para manejar headers incluso en errores, así que debe añadirse AL FINAL)
+# Usamos settings.BACKEND_CORS_ORIGINS que ya procesa correctamente la variable de entorno
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.BACKEND_CORS_ORIGINS, 
+    allow_credentials=True,
+    allow_methods=["*"], # Permitir todos los métodos para evitar bloqueos de preflight
+    allow_headers=["*"], # Permitir todos los headers
+)
 
 # 4. CUARTO: Auth Middleware (Lógica de negocio)
 @app.middleware("http")
