@@ -46,15 +46,23 @@ async def BusinessBranchContextDep(request: Request, business_id: str, branch_id
             from_header = True
 
     # Verify business membership
-    user_business = (
-        client.table("usuarios_negocios")
-        .select("id, negocio_id, estado, rol")
-        .eq("usuario_id", user_id)
-        .eq("negocio_id", business_id)
-        .eq("estado", "aceptado")
-        .limit(1)
-        .execute()
-    )
+    try:
+        user_business = (
+            client.table("usuarios_negocios")
+            .select("id, negocio_id, estado, rol")
+            .eq("usuario_id", user_id)
+            .eq("negocio_id", business_id)
+            .eq("estado", "aceptado")
+            .limit(1)
+            .execute()
+        )
+    except Exception as e:
+        # If Supabase rejects the token (e.g. expired), it raises an APIError
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail=f"Error validating token with Supabase: {str(e)}"
+        )
+        
     if not user_business.data:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User not a member of this business")
     business_record = user_business.data[0]
