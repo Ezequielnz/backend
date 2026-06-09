@@ -257,55 +257,66 @@ async def create_purchase(
 
         # Actualizar stock de productos SOLO si la compra está entregada
         if estado_value == "entregado":
-            svc = get_supabase_service_client()
-            settings = context.branch_settings or {}
-            inventario_modo = settings.get("inventario_modo", "centralizado")
-            for it in items_preparados:
-                if inventario_modo == "por_sucursal":
-                    inv_resp2 = (
-                        svc
-                        .table("inventario_sucursal")
-                        .select("id, stock_actual")
-                        .eq("producto_id", it["producto_id"])
-                        .eq("sucursal_id", context.branch_id)
-                        .eq("negocio_id", business_id)
-                        .execute()
-                    )
-                    actual = inv_resp2.data[0].get("stock_actual", 0) if inv_resp2.data else 0
-                    nuevo = int(actual) + int(it["cantidad"])
-                    if inv_resp2.data:
-                        svc.table("inventario_sucursal").update({
-                            "stock_actual": nuevo
-                        }).eq("id", inv_resp2.data[0]["id"]).execute()
-                    else:
-                        svc.table("inventario_sucursal").insert({
-                            "negocio_id": business_id,
-                            "sucursal_id": context.branch_id,
-                            "producto_id": it["producto_id"],
-                            "stock_actual": nuevo,
-                        }).execute()
-                    svc.table("productos").update({
-                        "precio_compra": float(it["precio_unitario"]) if it.get("precio_unitario") is not None else None,
-                    }).eq("id", it["producto_id"]).execute()
-                else:
-                    prod_resp2 = (
-                        svc
-                        .table("productos")
-                        .select("id, stock_actual")
-                        .eq("id", it["producto_id"])
-                        .eq("negocio_id", business_id)
-                        .execute()
-                    )
-                    if prod_resp2.data:
-                        actual = prod_resp2.data[0].get("stock_actual", 0) or 0
+            try:
+                print(f"[COMPRAS] Actualizando stock para compra entregada: {compra_id}")
+                svc = get_supabase_service_client()
+                settings = context.branch_settings or {}
+                inventario_modo = settings.get("inventario_modo", "centralizado")
+                print(f"[COMPRAS] inventario_modo resuelto a: {inventario_modo}")
+                for it in items_preparados:
+                    print(f"[COMPRAS] Procesando item: {it['producto_id']} con cantidad {it['cantidad']}")
+                    if inventario_modo == "por_sucursal":
+                        inv_resp2 = (
+                            svc
+                            .table("inventario_sucursal")
+                            .select("id, stock_actual")
+                            .eq("producto_id", it["producto_id"])
+                            .eq("sucursal_id", context.branch_id)
+                            .eq("negocio_id", business_id)
+                            .execute()
+                        )
+                        actual = inv_resp2.data[0].get("stock_actual", 0) if inv_resp2.data else 0
                         nuevo = int(actual) + int(it["cantidad"])
+                        print(f"[COMPRAS] Sucursal - stock actual: {actual}, nuevo: {nuevo}")
+                        if inv_resp2.data:
+                            svc.table("inventario_sucursal").update({
+                                "stock_actual": nuevo
+                            }).eq("producto_id", it["producto_id"]).eq("sucursal_id", context.branch_id).execute()
+                        else:
+                            svc.table("inventario_sucursal").insert({
+                                "negocio_id": business_id,
+                                "sucursal_id": context.branch_id,
+                                "producto_id": it["producto_id"],
+                                "stock_actual": nuevo,
+                            }).execute()
                         svc.table("productos").update({
-                            "stock_actual": nuevo,
                             "precio_compra": float(it["precio_unitario"]) if it.get("precio_unitario") is not None else None,
                         }).eq("id", it["producto_id"]).execute()
-                        svc.table("inventario_negocio").update({
-                            "stock_total": nuevo
-                        }).eq("producto_id", it["producto_id"]).eq("negocio_id", business_id).execute()
+                    else:
+                        prod_resp2 = (
+                            svc
+                            .table("productos")
+                            .select("id, stock_actual")
+                            .eq("id", it["producto_id"])
+                            .eq("negocio_id", business_id)
+                            .execute()
+                        )
+                        if prod_resp2.data:
+                            actual = prod_resp2.data[0].get("stock_actual", 0) or 0
+                            nuevo = int(actual) + int(it["cantidad"])
+                            print(f"[COMPRAS] Centralizado - stock actual: {actual}, nuevo: {nuevo}")
+                            svc.table("productos").update({
+                                "stock_actual": nuevo,
+                                "precio_compra": float(it["precio_unitario"]) if it.get("precio_unitario") is not None else None,
+                            }).eq("id", it["producto_id"]).execute()
+                            svc.table("inventario_negocio").update({
+                                "stock_total": nuevo
+                            }).eq("producto_id", it["producto_id"]).eq("negocio_id", business_id).execute()
+            except Exception as stock_exc:
+                print(f"⚠️ [COMPRAS] Error al actualizar stock: {stock_exc}")
+                # Rollback de la compra y sus detalles
+                client.table("compras").delete().eq("id", compra_id).execute()
+                raise HTTPException(status_code=500, detail=f"Error al actualizar stock: {str(stock_exc)}")
 
         # Registrar gasto en finanzas
         try:
@@ -440,18 +451,20 @@ async def update_purchase(
             items = det_resp.data or []
             if current_estado != "entregado" and new_estado == "entregado":
                 # Incrementar stock y actualizar precio_compra
+                from app.db.supabase_client import get_supabase_service_client
+                svc = get_supabase_service_client()
                 settings = context.branch_settings or {}
                 inventario_modo = settings.get("inventario_modo", "centralizado")
                 for it in items:
                     if inventario_modo == "por_sucursal":
-                        inv_resp2 = client.table("inventario_sucursal").select("stock_actual").eq("producto_id", it["producto_id"]).eq("sucursal_id", context.branch_id).eq("negocio_id", business_id).execute()
+                        inv_resp2 = svc.table("inventario_sucursal").select("stock_actual").eq("producto_id", it["producto_id"]).eq("sucursal_id", context.branch_id).eq("negocio_id", business_id).execute()
                         actual = inv_resp2.data[0].get("stock_actual", 0) if inv_resp2.data else 0
                         nuevo = int(actual) + int(it["cantidad"])
-                        client.table("inventario_sucursal").update({"stock_actual": nuevo}).eq("producto_id", it["producto_id"]).eq("sucursal_id", context.branch_id).execute()
-                        client.table("productos").update({"precio_compra": float(it["precio_unitario"]) if it.get("precio_unitario") is not None else None}).eq("id", it["producto_id"]).eq("negocio_id", business_id).execute()
+                        svc.table("inventario_sucursal").update({"stock_actual": nuevo}).eq("producto_id", it["producto_id"]).eq("sucursal_id", context.branch_id).execute()
+                        svc.table("productos").update({"precio_compra": float(it["precio_unitario"]) if it.get("precio_unitario") is not None else None}).eq("id", it["producto_id"]).eq("negocio_id", business_id).execute()
                     else:
                         prod_resp2 = (
-                            client
+                            svc
                             .table("productos")
                             .select("stock_actual")
                             .eq("id", it["producto_id"])
@@ -461,26 +474,28 @@ async def update_purchase(
                         if prod_resp2.data:
                             actual = prod_resp2.data[0].get("stock_actual", 0) or 0
                             nuevo = int(actual) + int(it["cantidad"])
-                            client.table("productos").update({
+                            svc.table("productos").update({
                                 "stock_actual": nuevo,
                                 "precio_compra": float(it["precio_unitario"]) if it.get("precio_unitario") is not None else None,
                             }).eq("id", it["producto_id"]).eq("negocio_id", business_id).execute()
-                            client.table("inventario_negocio").update({"stock_total": nuevo}).eq("producto_id", it["producto_id"]).eq("negocio_id", business_id).execute()
+                            svc.table("inventario_negocio").update({"stock_total": nuevo}).eq("producto_id", it["producto_id"]).eq("negocio_id", business_id).execute()
             elif current_estado == "entregado" and new_estado != "entregado":
                 # Decrementar stock (sin ir por debajo de 0)
+                from app.db.supabase_client import get_supabase_service_client
+                svc = get_supabase_service_client()
                 settings = context.branch_settings or {}
                 inventario_modo = settings.get("inventario_modo", "centralizado")
                 for it in items:
                     if inventario_modo == "por_sucursal":
-                        inv_resp2 = client.table("inventario_sucursal").select("stock_actual").eq("producto_id", it["producto_id"]).eq("sucursal_id", context.branch_id).eq("negocio_id", business_id).execute()
+                        inv_resp2 = svc.table("inventario_sucursal").select("stock_actual").eq("producto_id", it["producto_id"]).eq("sucursal_id", context.branch_id).eq("negocio_id", business_id).execute()
                         actual = inv_resp2.data[0].get("stock_actual", 0) if inv_resp2.data else 0
                         nuevo = int(actual) - int(it["cantidad"])
                         if nuevo < 0:
                             nuevo = 0
-                        client.table("inventario_sucursal").update({"stock_actual": nuevo}).eq("producto_id", it["producto_id"]).eq("sucursal_id", context.branch_id).execute()
+                        svc.table("inventario_sucursal").update({"stock_actual": nuevo}).eq("producto_id", it["producto_id"]).eq("sucursal_id", context.branch_id).execute()
                     else:
                         prod_resp2 = (
-                            client
+                            svc
                             .table("productos")
                             .select("stock_actual")
                             .eq("id", it["producto_id"])
@@ -492,10 +507,10 @@ async def update_purchase(
                             nuevo = int(actual) - int(it["cantidad"])
                             if nuevo < 0:
                                 nuevo = 0
-                            client.table("productos").update({
+                            svc.table("productos").update({
                                 "stock_actual": nuevo,
                             }).eq("id", it["producto_id"]).eq("negocio_id", business_id).execute()
-                            client.table("inventario_negocio").update({"stock_total": nuevo}).eq("producto_id", it["producto_id"]).eq("negocio_id", business_id).execute()
+                            svc.table("inventario_negocio").update({"stock_total": nuevo}).eq("producto_id", it["producto_id"]).eq("negocio_id", business_id).execute()
 
         # Validar proveedor si cambia
         if update_data.get("proveedor_id"):
@@ -577,19 +592,21 @@ async def delete_purchase(
 
         # Revertir stock solo si estaba entregada
         if estado_actual == "entregado":
+            from app.db.supabase_client import get_supabase_service_client
+            svc = get_supabase_service_client()
             settings = context.branch_settings or {}
             inventario_modo = settings.get("inventario_modo", "centralizado")
             for it in items:
                 if inventario_modo == "por_sucursal":
-                    inv_resp2 = client.table("inventario_sucursal").select("stock_actual").eq("producto_id", it["producto_id"]).eq("sucursal_id", context.branch_id).eq("negocio_id", business_id).execute()
+                    inv_resp2 = svc.table("inventario_sucursal").select("stock_actual").eq("producto_id", it["producto_id"]).eq("sucursal_id", context.branch_id).eq("negocio_id", business_id).execute()
                     actual = inv_resp2.data[0].get("stock_actual", 0) if inv_resp2.data else 0
                     nuevo = int(actual) - int(it["cantidad"])
                     if nuevo < 0:
                         nuevo = 0
-                    client.table("inventario_sucursal").update({"stock_actual": nuevo}).eq("producto_id", it["producto_id"]).eq("sucursal_id", context.branch_id).execute()
+                    svc.table("inventario_sucursal").update({"stock_actual": nuevo}).eq("producto_id", it["producto_id"]).eq("sucursal_id", context.branch_id).execute()
                 else:
                     prod_resp = (
-                        client
+                        svc
                         .table("productos")
                         .select("stock_actual")
                         .eq("id", it["producto_id"])
@@ -601,8 +618,8 @@ async def delete_purchase(
                         nuevo = int(actual) - int(it["cantidad"])
                         if nuevo < 0:
                             nuevo = 0
-                        client.table("productos").update({"stock_actual": nuevo}).eq("id", it["producto_id"]).eq("negocio_id", business_id).execute()
-                        client.table("inventario_negocio").update({"stock_total": nuevo}).eq("producto_id", it["producto_id"]).eq("negocio_id", business_id).execute()
+                        svc.table("productos").update({"stock_actual": nuevo}).eq("id", it["producto_id"]).eq("negocio_id", business_id).execute()
+                        svc.table("inventario_negocio").update({"stock_total": nuevo}).eq("producto_id", it["producto_id"]).eq("negocio_id", business_id).execute()
 
         return {"message": "Compra eliminada correctamente"}
     except HTTPException:
