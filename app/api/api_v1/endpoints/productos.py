@@ -66,10 +66,20 @@ async def read_products(
                 branch_overrides[ps["producto_id"]] = ps
 
         inventory_overrides = {}
-        if inventario_modo == "por_sucursal" and branch_id:
-            inv_resp = supabase.table("inventario_sucursal").select("producto_id, stock_actual").eq("negocio_id", business_id).eq("sucursal_id", branch_id).execute()
+        stock_por_sucursal_map = {}
+        if inventario_modo == "por_sucursal":
+            inv_resp = supabase.table("inventario_sucursal").select("producto_id, sucursal_id, stock_actual").eq("negocio_id", business_id).execute()
             for inv in inv_resp.data or []:
-                inventory_overrides[inv["producto_id"]] = inv
+                pid = inv["producto_id"]
+                sid = inv["sucursal_id"]
+                stock = inv["stock_actual"]
+                
+                if pid not in stock_por_sucursal_map:
+                    stock_por_sucursal_map[pid] = {}
+                stock_por_sucursal_map[pid][sid] = stock
+                
+                if branch_id and sid == branch_id:
+                    inventory_overrides[pid] = inv
 
         # Validate and serialize each product individually to catch validation errors
         validated_products = []
@@ -94,12 +104,15 @@ async def read_products(
                         continue
 
                 # Apply inventory overrides
-                if inventario_modo == "por_sucursal" and branch_id:
-                    inv_override = inventory_overrides.get(item.get('id'))
-                    if inv_override:
-                        item['stock_actual'] = inv_override.get('stock_actual', 0)
-                    else:
-                        item['stock_actual'] = 0
+                if inventario_modo == "por_sucursal":
+                    item['stock_por_sucursal'] = stock_por_sucursal_map.get(item.get('id'), {})
+                    
+                    if branch_id:
+                        inv_override = inventory_overrides.get(item.get('id'))
+                        if inv_override:
+                            item['stock_actual'] = inv_override.get('stock_actual', 0)
+                        else:
+                            item['stock_actual'] = 0
 
                 # Ensure required fields are present and handle None values
                 if not item.get('id'):
