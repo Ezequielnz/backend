@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Any, TypeVar, Generic, Union
+from typing import Dict, List, Optional, Any, TypeVar, Generic, Union, cast
 from pydantic import BaseModel, Field
 from datetime import datetime
 
@@ -30,7 +30,7 @@ class SupabaseModel(BaseModel):
     async def get_all(cls) -> List[Dict[str, Any]]:
         """Get all records."""
         response = get_table(cls.table_name()).select("*").execute()
-        return response.data
+        return cast(List[Dict[str, Any]], response.data or [])
     
     @classmethod
     async def create(cls, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -113,8 +113,8 @@ class Producto(SupabaseModel):
     descripcion: Optional[str] = None
     precio_compra: Optional[float] = None
     precio_venta: float
-    stock_actual: int
-    stock_minimo: Optional[int] = None
+    stock_actual: float
+    stock_minimo: Optional[float] = None
     unidades: Optional[str] = None
     categoria_id: Optional[str] = None
     proveedor_id: Optional[str] = None
@@ -158,7 +158,7 @@ class VentaDetalle(SupabaseModel):
     id: Optional[int] = None
     venta_id: int
     producto_id: int
-    cantidad: int
+    cantidad: float
     precio_unitario: float
     subtotal: float
     descuento: Optional[float] = 0

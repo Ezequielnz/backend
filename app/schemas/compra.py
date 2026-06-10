@@ -6,7 +6,7 @@ from datetime import date
 
 class CompraItem(BaseModel):
     producto_id: str = Field(..., description="ID del producto comprado")
-    cantidad: int = Field(..., gt=0, description="Cantidad comprada")
+    cantidad: float = Field(..., gt=0, description="Cantidad comprada")
     precio_unitario: float = Field(..., gt=0, description="Precio unitario de compra")
 
     @validator("producto_id")

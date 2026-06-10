@@ -47,7 +47,7 @@ def get_user_id_from_token(token: str) -> str:
 # Pydantic models for request/response
 class VentaItemCreate(BaseModel):
     producto_id: str
-    cantidad: int = Field(gt=0, description="Cantidad debe ser mayor a 0")
+    cantidad: float = Field(gt=0, description="Cantidad debe ser mayor a 0")
     precio_unitario: float = Field(gt=0, description="Precio unitario debe ser mayor a 0")
     subtotal: float = Field(gt=0, description="Subtotal debe ser mayor a 0")
 
@@ -86,7 +86,7 @@ class DashboardStats(BaseModel):
 class VentaItem(BaseModel):
     id: str  # producto_id
     tipo: str  # "producto" o "servicio"
-    cantidad: int
+    cantidad: float
     precio: float
 
 class VentaRequest(BaseModel):

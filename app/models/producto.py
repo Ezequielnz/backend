@@ -10,8 +10,8 @@ class Producto(Base):
     descripcion = Column(String, nullable=True)
     precio_compra = Column(Float, nullable=True)
     precio_venta = Column(Float, nullable=False)
-    stock_actual = Column(Integer, default=0)
-    stock_minimo = Column(Integer, default=0)
+    stock_actual = Column(Float, default=0.0)
+    stock_minimo = Column(Float, default=0.0)
     categoria_id = Column(String, nullable=True)  # UUID as string
     proveedor_id = Column(String, nullable=True)  # UUID as string
     negocio_id = Column(String, nullable=True)  # UUID as string
