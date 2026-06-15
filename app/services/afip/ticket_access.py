@@ -14,6 +14,22 @@ import requests
 import urllib3
 from requests.adapters import HTTPAdapter
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
+import urllib3
+import ssl
+
+class CustomSSLAdapter(HTTPAdapter):
+    def __init__(self, ssl_context=None, **kwargs):
+        self.ssl_context = ssl_context
+        super().__init__(**kwargs)
+
+    def init_poolmanager(self, *args, **kwargs):
+        kwargs['ssl_context'] = self.ssl_context
+        return super().init_poolmanager(*args, **kwargs)
+        
+    def proxy_manager_for(self, *args, **kwargs):
+        kwargs['ssl_context'] = self.ssl_context
+        return super().proxy_manager_for(*args, **kwargs)
+
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.serialization import Encoding
 from cryptography.x509 import load_pem_x509_certificate
@@ -160,15 +176,19 @@ async def send_ticket_request(signed_data: str, wsaa_wsdl: str) -> Optional[str]
             
             return mock_response
     
-        # Crear una sesión personalizada con configuración SSL ajustada
-        session = requests.Session()
-        
-        # Configurar la sesión para aceptar certificados con claves DH pequeñas
-        session.mount('https://', HTTPAdapter(max_retries=3))
-        
         # Crear un contexto SSL personalizado
         context = ssl.create_default_context()
         context.set_ciphers('DEFAULT@SECLEVEL=0')  # Permitir cifrados menos seguros
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        
+        # Crear una sesión personalizada con configuración SSL ajustada
+        session = requests.Session()
+        
+        # Configurar la sesión con el adaptador personalizado
+        adapter = CustomSSLAdapter(ssl_context=context, max_retries=3)
+        session.mount('https://', adapter)
+        session.mount('http://', adapter)
         
         # Aplicar el contexto a las peticiones HTTPS
         session.verify = False

@@ -10,6 +10,7 @@ from zeep.transports import Transport
 from zeep.exceptions import Fault
 from typing import Dict, Optional, Tuple, Any, List
 import requests
+from requests.adapters import HTTPAdapter
 import urllib3
 import ssl
 import json
@@ -21,6 +22,19 @@ from app.services.afip.ticket_access import get_access_ticket
 
 # Desactivar advertencias de SSL inseguro (solo en desarrollo)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+class CustomSSLAdapter(HTTPAdapter):
+    def __init__(self, ssl_context=None, **kwargs):
+        self.ssl_context = ssl_context
+        super().__init__(**kwargs)
+
+    def init_poolmanager(self, *args, **kwargs):
+        kwargs['ssl_context'] = self.ssl_context
+        return super().init_poolmanager(*args, **kwargs)
+        
+    def proxy_manager_for(self, *args, **kwargs):
+        kwargs['ssl_context'] = self.ssl_context
+        return super().proxy_manager_for(*args, **kwargs)
 
 def generate_afip_soap_xml(operation: str, params: Dict[str, Any]) -> str:
     """
@@ -168,8 +182,6 @@ async def send_raw_soap_request(wsdl_url: str, operation: str, params: Dict[str,
         
         # Create a session with custom SSL settings
         session = requests.Session()
-        adapter = requests.adapters.HTTPAdapter(max_retries=3)
-        session.mount('https://', adapter)
         
         # Configure SSL
         context = ssl.create_default_context()
@@ -177,7 +189,12 @@ async def send_raw_soap_request(wsdl_url: str, operation: str, params: Dict[str,
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
         
-        # Ignore SSL verification for ARCA's problematic certificates
+        # Create custom session with SSL configuration
+        adapter = CustomSSLAdapter(ssl_context=context, max_retries=3)
+        session.mount('https://', adapter)
+        session.mount('http://', adapter)
+        
+        # Apply context to HTTPS requests
         session.verify = False
         
         # Service URL from WSDL
@@ -333,18 +350,19 @@ async def get_client(service: str, cert_path: Path, key_path: Path, wsaa_wsdl: s
     
     # Create client with custom transport configuration
     try:
-        # Create custom session with SSL configuration
-        session = requests.Session()
-        
-        # Configure SSL for weaker DH key support
-        adapter = requests.adapters.HTTPAdapter(max_retries=3)
-        session.mount('https://', adapter)
-        
         # Create custom SSL context
         context = ssl.create_default_context()
         context.set_ciphers('DEFAULT@SECLEVEL=0')
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
+        
+        # Create custom session with SSL configuration
+        session = requests.Session()
+        
+        # Configure custom SSL adapter
+        adapter = CustomSSLAdapter(ssl_context=context, max_retries=3)
+        session.mount('https://', adapter)
+        session.mount('http://', adapter)
         
         # Apply context to HTTPS requests
         session.verify = False
