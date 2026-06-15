@@ -240,7 +240,14 @@ async def generar_csr(
     
     # 2. Save private key to Supabase Storage
     key_filename = f"{business_id}/clave_privada.key"
+    cert_filename = f"{business_id}/certificado.crt"
     try:
+        # Intenta eliminar archivos existentes para prevenir error de duplicado (ignora si no existen)
+        try:
+            client.storage.from_("certificados_afip").remove([key_filename, cert_filename])
+        except Exception:
+            pass
+
         client.storage.from_("certificados_afip").upload(
             file=key_pem, 
             path=key_filename, 
@@ -252,8 +259,17 @@ async def generar_csr(
     # 3. Update configuracion_fiscal
     existing = client.table("configuracion_fiscal").select("*").eq("negocio_id", business_id).execute()
     if existing.data and len(existing.data) > 0:
-        # Update existing
-        client.table("configuracion_fiscal").update({"key_path": key_filename, "cuit": csr_req.cuit, "razon_social": csr_req.razon_social}).eq("negocio_id", business_id).execute()
+        # Update existing, invalidando el certificado anterior y tokens
+        client.table("configuracion_fiscal").update({
+            "key_path": key_filename, 
+            "cuit": csr_req.cuit, 
+            "razon_social": csr_req.razon_social,
+            "cert_path": None,
+            "wsaa_token": None,
+            "wsaa_sign": None,
+            "wsaa_expiration": None,
+            "wsaa_generation": None
+        }).eq("negocio_id", business_id).execute()
     else:
         # Insert basic config
         client.table("configuracion_fiscal").insert({
