@@ -1,39 +1,32 @@
 import asyncio
+import sys
+sys.path.append('c:\\Users\\Usuario\\Documents\\Workspace\\micro_pymes\\backend')
 from app.db.supabase_client import get_supabase_service_client
 
 async def test_upsert():
     client = get_supabase_service_client()
+    business_id = "232becca-8d7c-44d5-917d-e941e968df96"
     
-    # Get a business and a product
-    prod_resp = client.table("productos").select("id, negocio_id").limit(1).execute()
-    if not prod_resp.data:
-        print("No products found")
-        return
+    # 1. Fetch current
+    res = client.table("configuracion_fiscal").select("*").eq("negocio_id", business_id).execute()
+    print("Current data:", res.data)
     
-    prod = prod_resp.data[0]
-    pid = prod["id"]
-    nid = prod["negocio_id"]
-    
-    # Get a branch
-    branch_resp = client.table("sucursales").select("id").eq("negocio_id", nid).limit(1).execute()
-    if not branch_resp.data:
-        print("No branches found")
+    if not res.data:
+        print("No data found")
         return
         
-    bid = branch_resp.data[0]["id"]
+    config_data = res.data[0]
+    config_data["cert_path"] = f"{business_id}/certificado.crt"
     
-    payload = {
-        "negocio_id": nid,
-        "sucursal_id": bid,
-        "producto_id": pid,
-        "stock_actual": 99.0,
-    }
-    
+    print("Upserting:", config_data)
     try:
-        resp = client.table("inventario_sucursal").upsert(payload, on_conflict="sucursal_id,producto_id").execute()
-        print("Upsert successful:", resp.data)
+        upsert_res = client.table("configuracion_fiscal").upsert(
+            config_data, 
+            on_conflict="negocio_id"
+        ).execute()
+        print("Upsert success:", upsert_res.data)
     except Exception as e:
-        print("Upsert failed:", str(e))
-        
-if __name__ == "__main__":
+        print("Upsert error:", repr(e))
+
+if __name__ == '__main__':
     asyncio.run(test_upsert())
