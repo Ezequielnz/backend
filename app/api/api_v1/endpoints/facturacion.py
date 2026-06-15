@@ -64,81 +64,92 @@ async def upsert_configuracion_fiscal(
     cert_path_db = None
     key_path_db = None
     
-    # Check if a config already exists
-    existing = client.table("configuracion_fiscal").select("*").eq("negocio_id", business_id).execute()
-    if existing.data and len(existing.data) > 0:
-        cert_path_db = existing.data[0].get("cert_path")
-        key_path_db = existing.data[0].get("key_path")
+    try:
+        # Check if a config already exists
+        existing = client.table("configuracion_fiscal").select("*").eq("negocio_id", business_id).execute()
+        if existing.data and len(existing.data) > 0:
+            cert_path_db = existing.data[0].get("cert_path")
+            key_path_db = existing.data[0].get("key_path")
+            
+        bucket = service_client.storage.from_("certificados_afip")
         
-    bucket = service_client.storage.from_("certificados_afip")
-    
-    # Upload Certificate if provided
-    if certificado:
-        cert_data = await certificado.read()
-        cert_filename = f"{business_id}/certificado.crt"
-        try:
-            bucket.upload(
-                file=cert_data, 
-                path=cert_filename, 
-                file_options={"content-type": "application/x-x509-ca-cert"}
-            )
-        except Exception as e:
-            if "Duplicate" in str(e) or "already exists" in str(e) or "400" in str(e):
-                getattr(bucket, "update")(
+        # Upload Certificate if provided
+        if certificado:
+            cert_data = await certificado.read()
+            cert_filename = f"{business_id}/certificado.crt"
+            try:
+                bucket.upload(
                     file=cert_data, 
                     path=cert_filename, 
                     file_options={"content-type": "application/x-x509-ca-cert"}
                 )
-            else:
-                raise HTTPException(status_code=500, detail=f"Error al subir certificado: {str(e)}")
-        cert_path_db = cert_filename
-        
-    # Upload Private Key if provided
-    if clave_privada:
-        key_data = await clave_privada.read()
-        key_filename = f"{business_id}/clave_privada.key"
-        try:
-            bucket.upload(
-                file=key_data, 
-                path=key_filename, 
-                file_options={"content-type": "application/pkcs8"}
-            )
-        except Exception as e:
-            if "Duplicate" in str(e) or "already exists" in str(e) or "400" in str(e):
-                getattr(bucket, "update")(
+            except Exception as e:
+                if "Duplicate" in str(e) or "already exists" in str(e) or "400" in str(e) or "409" in str(e):
+                    try:
+                        getattr(bucket, "update")(
+                            file=cert_data, 
+                            path=cert_filename, 
+                            file_options={"content-type": "application/x-x509-ca-cert"}
+                        )
+                    except Exception as update_err:
+                        raise HTTPException(status_code=500, detail=f"Error al actualizar certificado en bucket: {str(update_err)}")
+                else:
+                    raise HTTPException(status_code=500, detail=f"Error al subir certificado: {str(e)}")
+            cert_path_db = cert_filename
+            
+        # Upload Private Key if provided
+        if clave_privada:
+            key_data = await clave_privada.read()
+            key_filename = f"{business_id}/clave_privada.key"
+            try:
+                bucket.upload(
                     file=key_data, 
                     path=key_filename, 
                     file_options={"content-type": "application/pkcs8"}
                 )
-            else:
-                raise HTTPException(status_code=500, detail=f"Error al subir clave privada: {str(e)}")
-        key_path_db = key_filename
+            except Exception as e:
+                if "Duplicate" in str(e) or "already exists" in str(e) or "400" in str(e) or "409" in str(e):
+                    try:
+                        getattr(bucket, "update")(
+                            file=key_data, 
+                            path=key_filename, 
+                            file_options={"content-type": "application/pkcs8"}
+                        )
+                    except Exception as update_err:
+                        raise HTTPException(status_code=500, detail=f"Error al actualizar clave privada en bucket: {str(update_err)}")
+                else:
+                    raise HTTPException(status_code=500, detail=f"Error al subir clave privada: {str(e)}")
+            key_path_db = key_filename
+            
+        # Upsert data in configuracion_fiscal
+        config_data = {
+            "negocio_id": business_id,
+            "cuit": cuit,
+            "razon_social": razon_social,
+            "punto_venta": punto_venta,
+            "condicion_fiscal": condicion_fiscal,
+            "ambiente": ambiente,
+            "habilitada": habilitada
+        }
         
-    # Upsert data in configuracion_fiscal
-    config_data = {
-        "negocio_id": business_id,
-        "cuit": cuit,
-        "razon_social": razon_social,
-        "punto_venta": punto_venta,
-        "condicion_fiscal": condicion_fiscal,
-        "ambiente": ambiente,
-        "habilitada": habilitada
-    }
-    
-    if cert_path_db:
-        config_data["cert_path"] = cert_path_db
-    if key_path_db:
-        config_data["key_path"] = key_path_db
+        if cert_path_db:
+            config_data["cert_path"] = cert_path_db
+        if key_path_db:
+            config_data["key_path"] = key_path_db
+            
+        response = client.table("configuracion_fiscal").upsert(
+            config_data, 
+            on_conflict="negocio_id"
+        ).execute()
         
-    response = client.table("configuracion_fiscal").upsert(
-        config_data, 
-        on_conflict="negocio_id"
-    ).execute()
-    
-    if not response.data:
-        raise HTTPException(status_code=400, detail="Error al guardar configuración")
-        
-    return response.data[0]
+        if not response.data:
+            raise HTTPException(status_code=400, detail="Error al guardar configuración")
+            
+        return response.data[0]
+    except Exception as general_e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error del servidor detallado: {str(general_e)}")
 
 import tempfile
 from pathlib import Path
@@ -273,7 +284,7 @@ async def generar_csr(
             file_options={"content-type": "application/pkcs8"}
         )
     except Exception as e:
-        if "Duplicate" in str(e) or "already exists" in str(e) or "400" in str(e):
+        if "Duplicate" in str(e) or "already exists" in str(e) or "400" in str(e) or "409" in str(e):
             getattr(bucket, "update")(
                 file=key_pem, 
                 path=key_filename, 
