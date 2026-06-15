@@ -236,7 +236,10 @@ async def check_afip_status(
             return res
             
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error validando conexión con ARCA: {str(e)}")
+            error_msg = str(e)
+            if "PGRST301" in error_msg or "JWT expired" in error_msg:
+                raise HTTPException(status_code=401, detail="Su sesión ha expirado. Por favor, inicie sesión nuevamente.")
+            raise HTTPException(status_code=500, detail=f"Error validando conexión con ARCA: {error_msg}")
 
 @router.post("/generar-csr", response_model=CsrResponse)
 async def generar_csr(

@@ -377,7 +377,10 @@ async def record_sale_branch(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error interno del servidor: {str(e)}")
+        error_msg = str(e)
+        if "PGRST301" in error_msg or "JWT expired" in error_msg:
+            raise HTTPException(status_code=401, detail="Su sesión ha expirado. Por favor, inicie sesión nuevamente.")
+        raise HTTPException(status_code=500, detail=f"Error interno del servidor: {error_msg}")
 
 
 @router.get("/sales")

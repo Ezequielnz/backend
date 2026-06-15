@@ -220,7 +220,7 @@ async def send_ticket_request(signed_data: str, wsaa_wsdl: str) -> Optional[str]
             
             return mock_response
             
-        return None
+        raise Exception(f"WSAA Error: {e}")
 
 async def parse_ticket_response(response: str) -> Dict[str, str]:
     """
@@ -366,7 +366,7 @@ async def get_access_ticket(service: str, cert_path: Path, key_path: Path, wsaa_
         # Sign the request
         signed_data = await sign_tra(tra, cert_path, key_path)
         if not signed_data:
-            return None
+            raise Exception("Failed to sign TRA. Certificate or private key might be invalid or mismatched.")
         
         # Send to WSAA
         response = await send_ticket_request(signed_data, wsaa_wsdl)
@@ -400,4 +400,4 @@ async def get_access_ticket(service: str, cert_path: Path, key_path: Path, wsaa_
         return ticket_data
     except Exception as e:
         print(f"Error getting access ticket: {e}")
-        return None 
+        raise e 
