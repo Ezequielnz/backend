@@ -81,7 +81,7 @@ async def upsert_configuracion_fiscal(
         service_client.storage.from_("certificados_afip").upload(
             file=cert_data, 
             path=cert_filename, 
-            file_options={"upsert": "true", "content-type": "application/x-x509-ca-cert"}  # type: ignore
+            file_options={"content-type": "application/x-x509-ca-cert"}
         )
         cert_path_db = cert_filename
         
@@ -96,7 +96,7 @@ async def upsert_configuracion_fiscal(
         service_client.storage.from_("certificados_afip").upload(
             file=key_data, 
             path=key_filename, 
-            file_options={"upsert": "true", "content-type": "application/pkcs8"}  # type: ignore
+            file_options={"content-type": "application/pkcs8"}
         )
         key_path_db = key_filename
         
@@ -253,16 +253,15 @@ async def generar_csr(
     key_filename = f"{business_id}/clave_privada.key"
     cert_filename = f"{business_id}/certificado.crt"
     try:
-        # Intenta eliminar archivos existentes para prevenir error de duplicado (ignora si no existen)
         try:
             service_client.storage.from_("certificados_afip").remove([key_filename, cert_filename])
         except Exception:
             pass
-
+            
         service_client.storage.from_("certificados_afip").upload(
             file=key_pem, 
             path=key_filename, 
-            file_options={"upsert": "true", "content-type": "application/pkcs8"}  # type: ignore
+            file_options={"content-type": "application/pkcs8"}
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al guardar la clave privada en Storage: {str(e)}")
