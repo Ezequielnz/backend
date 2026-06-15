@@ -173,7 +173,7 @@ async def send_raw_soap_request(wsdl_url: str, operation: str, params: Dict[str,
         
         # Configure SSL
         context = ssl.create_default_context()
-        context.set_ciphers('DEFAULT@SECLEVEL=1')
+        context.set_ciphers('DEFAULT@SECLEVEL=0')
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
         
@@ -342,7 +342,7 @@ async def get_client(service: str, cert_path: Path, key_path: Path, wsaa_wsdl: s
         
         # Create custom SSL context
         context = ssl.create_default_context()
-        context.set_ciphers('DEFAULT@SECLEVEL=1')
+        context.set_ciphers('DEFAULT@SECLEVEL=0')
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
         

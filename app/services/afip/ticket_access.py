@@ -168,7 +168,7 @@ async def send_ticket_request(signed_data: str, wsaa_wsdl: str) -> Optional[str]
         
         # Crear un contexto SSL personalizado
         context = ssl.create_default_context()
-        context.set_ciphers('DEFAULT@SECLEVEL=1')  # Permitir cifrados menos seguros
+        context.set_ciphers('DEFAULT@SECLEVEL=0')  # Permitir cifrados menos seguros
         
         # Aplicar el contexto a las peticiones HTTPS
         session.verify = False
