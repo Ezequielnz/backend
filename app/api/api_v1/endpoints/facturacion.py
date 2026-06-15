@@ -70,19 +70,27 @@ async def upsert_configuracion_fiscal(
         cert_path_db = existing.data[0].get("cert_path")
         key_path_db = existing.data[0].get("key_path")
         
+    bucket = service_client.storage.from_("certificados_afip")
+    
     # Upload Certificate if provided
     if certificado:
         cert_data = await certificado.read()
         cert_filename = f"{business_id}/certificado.crt"
         try:
-            service_client.storage.from_("certificados_afip").remove([cert_filename])
-        except Exception:
-            pass
-        service_client.storage.from_("certificados_afip").upload(
-            file=cert_data, 
-            path=cert_filename, 
-            file_options={"content-type": "application/x-x509-ca-cert"}
-        )
+            bucket.upload(
+                file=cert_data, 
+                path=cert_filename, 
+                file_options={"content-type": "application/x-x509-ca-cert"}
+            )
+        except Exception as e:
+            if "Duplicate" in str(e) or "already exists" in str(e) or "400" in str(e):
+                getattr(bucket, "update")(
+                    file=cert_data, 
+                    path=cert_filename, 
+                    file_options={"content-type": "application/x-x509-ca-cert"}
+                )
+            else:
+                raise HTTPException(status_code=500, detail=f"Error al subir certificado: {str(e)}")
         cert_path_db = cert_filename
         
     # Upload Private Key if provided
@@ -90,14 +98,20 @@ async def upsert_configuracion_fiscal(
         key_data = await clave_privada.read()
         key_filename = f"{business_id}/clave_privada.key"
         try:
-            service_client.storage.from_("certificados_afip").remove([key_filename])
-        except Exception:
-            pass
-        service_client.storage.from_("certificados_afip").upload(
-            file=key_data, 
-            path=key_filename, 
-            file_options={"content-type": "application/pkcs8"}
-        )
+            bucket.upload(
+                file=key_data, 
+                path=key_filename, 
+                file_options={"content-type": "application/pkcs8"}
+            )
+        except Exception as e:
+            if "Duplicate" in str(e) or "already exists" in str(e) or "400" in str(e):
+                getattr(bucket, "update")(
+                    file=key_data, 
+                    path=key_filename, 
+                    file_options={"content-type": "application/pkcs8"}
+                )
+            else:
+                raise HTTPException(status_code=500, detail=f"Error al subir clave privada: {str(e)}")
         key_path_db = key_filename
         
     # Upsert data in configuracion_fiscal
@@ -250,21 +264,23 @@ async def generar_csr(
     
     # 2. Save private key to Supabase Storage
     service_client = get_supabase_service_client()
+    bucket = service_client.storage.from_("certificados_afip")
     key_filename = f"{business_id}/clave_privada.key"
-    cert_filename = f"{business_id}/certificado.crt"
     try:
-        try:
-            service_client.storage.from_("certificados_afip").remove([key_filename, cert_filename])
-        except Exception:
-            pass
-            
-        service_client.storage.from_("certificados_afip").upload(
+        bucket.upload(
             file=key_pem, 
             path=key_filename, 
             file_options={"content-type": "application/pkcs8"}
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error al guardar la clave privada en Storage: {str(e)}")
+        if "Duplicate" in str(e) or "already exists" in str(e) or "400" in str(e):
+            getattr(bucket, "update")(
+                file=key_pem, 
+                path=key_filename, 
+                file_options={"content-type": "application/pkcs8"}
+            )
+        else:
+            raise HTTPException(status_code=500, detail=f"Error al guardar la clave privada en Storage: {str(e)}")
         
     # 3. Update configuracion_fiscal
     existing = client.table("configuracion_fiscal").select("*").eq("negocio_id", business_id).execute()
