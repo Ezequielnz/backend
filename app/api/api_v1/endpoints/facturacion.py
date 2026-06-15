@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Header, UploadFile, File, Form
 from typing import Optional
-from app.db.supabase_client import get_supabase_user_client
+from app.db.supabase_client import get_supabase_user_client, get_supabase_service_client
 from app.core.permissions import check_subscription_access
 from app.schemas.facturacion import ConfiguracionFiscalResponse, AfipStatusResponse, CsrRequest, CsrResponse
 
@@ -59,6 +59,8 @@ async def upsert_configuracion_fiscal(
     """
     client = get_supabase_user_client(authorization)
     
+    service_client = get_supabase_service_client()
+    
     cert_path_db = None
     key_path_db = None
     
@@ -72,7 +74,11 @@ async def upsert_configuracion_fiscal(
     if certificado:
         cert_data = await certificado.read()
         cert_filename = f"{business_id}/certificado.crt"
-        client.storage.from_("certificados_afip").upload(
+        try:
+            service_client.storage.from_("certificados_afip").remove([cert_filename])
+        except Exception:
+            pass
+        service_client.storage.from_("certificados_afip").upload(
             file=cert_data, 
             path=cert_filename, 
             file_options={"upsert": "true", "content-type": "application/x-x509-ca-cert"}  # type: ignore
@@ -83,7 +89,11 @@ async def upsert_configuracion_fiscal(
     if clave_privada:
         key_data = await clave_privada.read()
         key_filename = f"{business_id}/clave_privada.key"
-        client.storage.from_("certificados_afip").upload(
+        try:
+            service_client.storage.from_("certificados_afip").remove([key_filename])
+        except Exception:
+            pass
+        service_client.storage.from_("certificados_afip").upload(
             file=key_data, 
             path=key_filename, 
             file_options={"upsert": "true", "content-type": "application/pkcs8"}  # type: ignore
@@ -239,16 +249,17 @@ async def generar_csr(
     )
     
     # 2. Save private key to Supabase Storage
+    service_client = get_supabase_service_client()
     key_filename = f"{business_id}/clave_privada.key"
     cert_filename = f"{business_id}/certificado.crt"
     try:
         # Intenta eliminar archivos existentes para prevenir error de duplicado (ignora si no existen)
         try:
-            client.storage.from_("certificados_afip").remove([key_filename, cert_filename])
+            service_client.storage.from_("certificados_afip").remove([key_filename, cert_filename])
         except Exception:
             pass
 
-        client.storage.from_("certificados_afip").upload(
+        service_client.storage.from_("certificados_afip").upload(
             file=key_pem, 
             path=key_filename, 
             file_options={"upsert": "true", "content-type": "application/pkcs8"}  # type: ignore
