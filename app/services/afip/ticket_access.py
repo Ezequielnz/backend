@@ -95,16 +95,23 @@ async def create_login_ticket(service: str) -> str:
     Returns:
         XML login ticket request
     """
-    now = datetime.datetime.now()
-    unique_id = now.strftime("%y%m%d%H%M")
+    # Usar timezone explícito de Argentina (UTC-3) para evitar problemas de sincronización
+    tz_ar = datetime.timezone(datetime.timedelta(hours=-3))
+    now = datetime.datetime.now(tz_ar)
+    
+    unique_id = str(int(now.timestamp()))
+    
+    # Restar 5 minutos para tolerar desfasaje del servidor y remover microsegundos
+    gen_time = (now - datetime.timedelta(minutes=5)).replace(microsecond=0).isoformat()
+    exp_time = (now + datetime.timedelta(hours=12)).replace(microsecond=0).isoformat()
     
     # Build the XML
     xml = f"""<?xml version="1.0" encoding="UTF-8"?>
     <loginTicketRequest>
         <header>
             <uniqueId>{unique_id}</uniqueId>
-            <generationTime>{(now - datetime.timedelta(minutes=10)).isoformat()}</generationTime>
-            <expirationTime>{(now + datetime.timedelta(hours=12)).isoformat()}</expirationTime>
+            <generationTime>{gen_time}</generationTime>
+            <expirationTime>{exp_time}</expirationTime>
         </header>
         <service>{service}</service>
     </loginTicketRequest>"""
