@@ -116,9 +116,23 @@ async def procesar_facturacion_afip(client: Any, negocio_id: str, venta_id: str,
             # Llamar ARCA
             res = await create_invoice(invoice_data, cert_path, key_path, wsaa_wsdl, wsfe_wsdl, cuit, "wsfe", client, negocio_id)
             
-            # Guardar factura
-            cae = res.get("FeDetResp", {}).get("FECAEDetResponse", [{}])[0].get("CAE", "")
-            cae_fch_vto = res.get("FeDetResp", {}).get("FECAEDetResponse", [{}])[0].get("CAEFchVto", "")
+            # Extraer CAE del resultado (puede ser SimpleNamespace o dict)
+            def _get_attr(obj, *keys, default=""):
+                """Accede a atributos o keys, soportando tanto SimpleNamespace como dict."""
+                curr = obj
+                for key in keys:
+                    if curr is None:
+                        return default
+                    if isinstance(curr, dict):
+                        curr = curr.get(key)
+                    else:
+                        curr = getattr(curr, key, None)
+                return curr if curr is not None else default
+            
+            det_resp = _get_attr(res, "FeDetResp", "FECAEDetResponse")
+            det0 = det_resp[0] if isinstance(det_resp, list) and det_resp else det_resp
+            cae = _get_attr(det0, "CAE", default="")
+            cae_fch_vto = _get_attr(det0, "CAEFchVto", default="")
             
             factura_data = {
                 "negocio_id": negocio_id,
@@ -157,4 +171,4 @@ async def procesar_facturacion_afip(client: Any, negocio_id: str, venta_id: str,
             
         except Exception as e:
             print(f"Error procesando factura ARCA: {e}")
-            return None
+            raise Exception(f"Error ARCA: {str(e)}")

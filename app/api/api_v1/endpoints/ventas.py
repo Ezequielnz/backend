@@ -340,31 +340,34 @@ async def record_sale_branch(
         mensaje = "Venta registrada exitosamente (branch-scoped)"
         factura_pdf_url = None
         if venta_data.facturar:
-            factura = await procesar_facturacion_afip(
-                client, 
-                business_id, 
-                venta_id, 
-                cliente_id, 
-                total, 
-                items_validados, 
-                sucursal_id=branch_id
-            )
-            if factura:
-                mensaje += " y factura ARCA emitida"
-                pdf_path = factura.get("pdf_url")
-                if pdf_path:
-                    try:
-                        from app.db.supabase_client import get_supabase_service_client
-                        supa = get_supabase_service_client()
-                        signed_url_resp = supa.storage.from_("facturas_pdf").create_signed_url(pdf_path, 86400) # 24 horas
-                        if isinstance(signed_url_resp, dict) and "signedURL" in signed_url_resp:
-                            factura_pdf_url = signed_url_resp["signedURL"]
-                        elif isinstance(signed_url_resp, str):
-                            factura_pdf_url = signed_url_resp
-                    except Exception as e:
-                        print(f"Error al generar signed url para PDF: {e}")
-            else:
-                mensaje += " pero hubo un error al enviar factura a ARCA"
+            try:
+                factura = await procesar_facturacion_afip(
+                    client, 
+                    business_id, 
+                    venta_id, 
+                    cliente_id, 
+                    total, 
+                    items_validados, 
+                    sucursal_id=branch_id
+                )
+                if factura:
+                    mensaje += " y factura ARCA emitida"
+                    pdf_path = factura.get("pdf_url")
+                    if pdf_path:
+                        try:
+                            from app.db.supabase_client import get_supabase_service_client
+                            supa = get_supabase_service_client()
+                            signed_url_resp = supa.storage.from_("facturas_pdf").create_signed_url(pdf_path, 86400) # 24 horas
+                            if isinstance(signed_url_resp, dict) and "signedURL" in signed_url_resp:
+                                factura_pdf_url = signed_url_resp["signedURL"]
+                            elif isinstance(signed_url_resp, str):
+                                factura_pdf_url = signed_url_resp
+                        except Exception as e:
+                            print(f"Error al generar signed url para PDF: {e}")
+                else:
+                    mensaje += " pero hubo un error al enviar factura a ARCA"
+            except Exception as afip_err:
+                mensaje += f" pero hubo un error al enviar factura a ARCA: {str(afip_err)}"
                 
         return VentaResponseSimple(
             id=venta_creada["id"],
