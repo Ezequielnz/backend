@@ -388,10 +388,11 @@ async def get_client(service: str, cert_path: Path, key_path: Path, wsaa_wsdl: s
         
         # Set proper SOAPAction header based on operation
         if hasattr(client.service, '_binding'):
-            operations = client.service._binding.ports[0].binding._operations
+            operations = getattr(client.service._binding, '_operations', {})
             for name, operation in operations.items():
                 # Dynamically set SOAPAction for each operation
-                operation.soap_action = f'http://ar.gov.afip.dif.FEV1/{name}'
+                if hasattr(operation, 'soap_action'):
+                    operation.soap_action = f'http://ar.gov.afip.dif.FEV1/{name}'
         
         auth = {
             "Token": ticket_data["token"],
