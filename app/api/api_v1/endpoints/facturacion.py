@@ -146,10 +146,12 @@ async def upsert_configuracion_fiscal(
             raise HTTPException(status_code=400, detail="Error al guardar configuración")
             
         return response.data[0]
+    except HTTPException:
+        raise
     except Exception as general_e:
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Error del servidor detallado: {str(general_e)}")
+        raise HTTPException(status_code=500, detail=f"Error del servidor detallado: {repr(general_e)}")
 
 import tempfile
 from pathlib import Path
