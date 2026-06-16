@@ -23,11 +23,13 @@ async def procesar_facturacion_afip(client: Any, negocio_id: str, venta_id: str,
     # Extraer datos de cliente
     doc_tipo = 99 # Consumidor Final por defecto
     doc_nro = 0
+    c_condicion = None
     if cliente_id:
-        cliente_resp = client.table("clientes").select("tipo_documento,numero_documento").eq("id", cliente_id).execute()
+        cliente_resp = client.table("clientes").select("tipo_documento,numero_documento,condicion_iva").eq("id", cliente_id).execute()
         if cliente_resp.data:
             c_tipo = cliente_resp.data[0].get("tipo_documento")
             c_num = cliente_resp.data[0].get("numero_documento")
+            c_condicion = cliente_resp.data[0].get("condicion_iva")
             if c_tipo == "CUIT" and c_num:
                 doc_tipo = 80
                 doc_nro = int(c_num.replace("-", ""))
@@ -40,7 +42,8 @@ async def procesar_facturacion_afip(client: Any, negocio_id: str, venta_id: str,
     if condicion == "monotributista":
         cbte_tipo = 11 # Factura C
     else: # Responsable Inscripto
-        if doc_tipo == 80:
+        # Factura A solo si el cliente tiene CUIT y es Responsable Inscripto
+        if doc_tipo == 80 and c_condicion == 'Responsable Inscripto':
             cbte_tipo = 1 # Factura A
         else:
             cbte_tipo = 6 # Factura B

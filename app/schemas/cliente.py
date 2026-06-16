@@ -11,6 +11,7 @@ class ClienteBase(BaseModel):
     email: Optional[str] = Field(None, description="Email del cliente")
     telefono: Optional[str] = Field(None, max_length=20, description="Teléfono del cliente")
     direccion: Optional[str] = Field(None, max_length=200, description="Dirección del cliente")
+    condicion_iva: Optional[str] = Field(None, max_length=100, description="Condición frente al IVA")
 
     @validator('email')
     def validate_email(cls, v):
@@ -34,6 +35,7 @@ class ClienteUpdate(BaseModel):
     email: Optional[str] = Field(None, description="Email del cliente")
     telefono: Optional[str] = Field(None, max_length=20, description="Teléfono del cliente")
     direccion: Optional[str] = Field(None, max_length=200, description="Dirección del cliente")
+    condicion_iva: Optional[str] = Field(None, max_length=100, description="Condición frente al IVA")
 
 class Cliente(ClienteBase):
     """Schema for client response."""

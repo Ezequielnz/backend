@@ -1,0 +1,2 @@
+ALTER TABLE clientes
+ADD COLUMN IF NOT EXISTS condicion_iva VARCHAR(100);

@@ -59,6 +59,7 @@ class Cliente(SupabaseModel):
     email: str
     telefono: str
     direccion: str
+    condicion_iva: Optional[str] = None
     creado_en: Optional[datetime] = None
     actualizado_en: Optional[datetime] = None
     
