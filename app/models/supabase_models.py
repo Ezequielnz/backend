@@ -53,8 +53,7 @@ class SupabaseModel(BaseModel):
 # Client model
 class Cliente(SupabaseModel):
     id: Optional[int] = None
-    nombre: str
-    apellido: str
+    razon_social: str
     documento_tipo: str
     documento_numero: str
     email: str
