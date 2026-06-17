@@ -11,6 +11,20 @@ from app.schemas.importacion import (
     ResumenImportacion,
     ProductoImportacionTemporal,
     ProductoImportacionUpdate,
+    ConfirmacionImportacion)
+from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
+from fastapi.responses import JSONResponse
+
+from app.api.deps import get_current_user_from_request as get_current_user
+from app.api.context import BusinessScopedClientDep, ScopedClientContext
+from app.types.auth import User
+from app.services.importacion_productos import ImportacionProductosService
+from app.schemas.importacion import (
+    ImportacionResultado,
+    ResumenImportacion,
+    ProductoImportacionTemporal,
+    ProductoImportacionUpdate,
     ConfirmacionImportacion,
     ResultadoImportacionFinal
 )
@@ -18,20 +32,21 @@ from app.dependencies import PermissionDependency
 
 router = APIRouter()
 
-@router.post("/upload", response_model=ImportacionResultado,
-            dependencies=[Depends(PermissionDependency("productos", "create"))])
-async def upload_excel(
+@router.post("/parse-excel/{entity_type}", response_model=ImportacionResultado)
+async def parse_excel(
     business_id: str,
+    entity_type: str,
     file: UploadFile = File(...),
     sheet_name: Optional[str] = Form(None),
     current_user: User = Depends(get_current_user),
     scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
 ):
     """
-    Subir y procesar archivo Excel para importación de productos.
+    Subir y procesar archivo Excel de forma genérica para extraer columnas y datos.
+    No guarda en base de datos.
     """
     # Validar tipo de archivo
-    if not file.filename.lower().endswith(('.xlsx', '.xls')):
+    if not file.filename or not file.filename.lower().endswith(('.xlsx', '.xls')):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Solo se permiten archivos Excel (.xlsx, .xls)"
@@ -46,13 +61,22 @@ async def upload_excel(
         )
     
     try:
-        service = ImportacionProductosService(scoped.client)
-        resultado = await service.procesar_archivo_excel(
-            content,
-            business_id,
-            sheet_name
+        from app.services.importacion_excel import ExcelProcessor
+        import uuid
+        processor = ExcelProcessor()
+        excel_data = processor.process_excel_file(content, sheet_name)
+        
+        if not excel_data['success']:
+            raise ValueError(excel_data['error'])
+            
+        return ImportacionResultado(
+            session_id=str(uuid.uuid4()),
+            total_filas=excel_data['total_rows'],
+            columnas_detectadas=excel_data['columns'],
+            mapeo_automatico=excel_data['auto_mapping'],
+            reconocimiento_columnas=excel_data['column_recognition'],
+            data_preview=excel_data['data']  # Incluimos los datos en la respuesta
         )
-        return resultado
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

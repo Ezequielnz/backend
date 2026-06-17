@@ -50,6 +50,7 @@ class ImportacionResultado(BaseModel):
     columnas_detectadas: List[str]
     mapeo_automatico: Dict[str, str]
     reconocimiento_columnas: Dict[str, Any]
+    data_preview: Optional[List[Dict[str, Any]]] = None
 
 class ColumnaMapeada(BaseModel):
     """Información sobre una columna mapeada del Excel."""
