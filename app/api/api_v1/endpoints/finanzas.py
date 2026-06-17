@@ -859,8 +859,8 @@ async def get_cuentas_por_cobrar(
             if item.get("clientes"):
                 client = item["clientes"]
                 cuenta.cliente_nombre = f"{client.get('nombre', '')} {client.get('apellido', '')}".strip()
-            elif item.get("proveedor_nombre"):
-                cuenta.cliente_nombre = item["proveedor_nombre"]
+            elif item.get("proveedor_razon_social"):
+                cuenta.cliente_nombre = item["proveedor_razon_social"]
             
             # Calculate days to expiration
             vencimiento = datetime.fromisoformat(item["fecha_vencimiento"]).date()
@@ -920,8 +920,8 @@ async def get_cuentas_por_pagar(
             if item.get("clientes"):
                 client = item["clientes"]
                 cuenta.cliente_nombre = f"{client.get('nombre', '')} {client.get('apellido', '')}".strip()
-            elif item.get("proveedor_nombre"):
-                cuenta.cliente_nombre = item["proveedor_nombre"]
+            elif item.get("proveedor_razon_social"):
+                cuenta.cliente_nombre = item["proveedor_razon_social"]
             
             # Calculate days to expiration
             vencimiento = datetime.fromisoformat(item["fecha_vencimiento"]).date()
@@ -960,8 +960,8 @@ async def create_cuenta_pendiente(
                     detail="Cliente no encontrado o no pertenece a este negocio"
                 )
         
-        # Validate that either cliente_id or proveedor_nombre is provided
-        if not cuenta_in.cliente_id and not cuenta_in.proveedor_nombre:
+        # Validate that either cliente_id or proveedor_razon_social is provided
+        if not cuenta_in.cliente_id and not cuenta_in.proveedor_razon_social:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Debe especificar un cliente o nombre de proveedor"

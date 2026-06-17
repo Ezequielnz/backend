@@ -32,7 +32,7 @@ class CategoriaFinanciera(CategoriaFinancieraBase):
 class MovimientoFinancieroBase(BaseModel):
     tipo: str = Field(..., pattern="^(ingreso|egreso)$")
     categoria_id: Optional[str] = None
-    monto: Decimal = Field(..., gt=0)
+    monto: Decimal = Field(..., gt=0)  # type: ignore
     fecha: date
     metodo_pago: str = Field(..., min_length=1, max_length=50)
     descripcion: Optional[str] = None
@@ -45,7 +45,7 @@ class MovimientoFinancieroCreate(MovimientoFinancieroBase):
 
 class MovimientoFinancieroUpdate(BaseModel):
     categoria_id: Optional[str] = None
-    monto: Optional[Decimal] = Field(None, gt=0)
+    monto: Optional[Decimal] = Field(None, gt=0)  # type: ignore
     fecha: Optional[date] = None
     metodo_pago: Optional[str] = Field(None, min_length=1, max_length=50)
     descripcion: Optional[str] = None
@@ -66,8 +66,8 @@ class MovimientoFinanciero(MovimientoFinancieroBase):
 class CuentaPendienteBase(BaseModel):
     tipo: str = Field(..., pattern="^(por_cobrar|por_pagar)$")
     cliente_id: Optional[str] = None
-    proveedor_nombre: Optional[str] = Field(None, max_length=200)
-    monto: Decimal = Field(..., gt=0)
+    proveedor_razon_social: Optional[str] = Field(None, max_length=200)
+    monto: Decimal = Field(..., gt=0)  # type: ignore
     fecha_vencimiento: date
     fecha_emision: date = Field(default_factory=lambda: date.today())
     estado: str = Field(default="pendiente", pattern="^(pendiente|pagado|vencido)$")
@@ -80,8 +80,8 @@ class CuentaPendienteCreate(CuentaPendienteBase):
 
 class CuentaPendienteUpdate(BaseModel):
     cliente_id: Optional[str] = None
-    proveedor_nombre: Optional[str] = Field(None, max_length=200)
-    monto: Optional[Decimal] = Field(None, gt=0)
+    proveedor_razon_social: Optional[str] = Field(None, max_length=200)
+    monto: Optional[Decimal] = Field(None, gt=0)  # type: ignore
     fecha_vencimiento: Optional[date] = None
     estado: Optional[str] = Field(None, pattern="^(pendiente|pagado|vencido)$")
     descripcion: Optional[str] = Field(None, min_length=1)

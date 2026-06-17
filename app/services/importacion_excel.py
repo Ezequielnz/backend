@@ -29,6 +29,29 @@ class ColumnRecognizer:
             'categoria': [
                 'categoria', 'category', 'tipo', 'type', 'grupo', 'group',
                 'clasificacion', 'classification', 'seccion', 'section'
+            ],
+            'razon_social': [
+                'razon_social', 'razon social', 'nombre', 'apellido', 'nombre y apellido',
+                'cliente', 'proveedor', 'company', 'empresa', 'business'
+            ],
+            'documento_numero': [
+                'cuit', 'cuil', 'dni', 'documento', 'nro_doc', 'numero documento',
+                'documento_numero', 'identificacion', 'id_number'
+            ],
+            'documento_tipo': [
+                'tipo_doc', 'tipo documento', 'documento_tipo', 'doc_type'
+            ],
+            'email': [
+                'email', 'correo', 'mail', 'correo_electronico', 'correo electronico'
+            ],
+            'telefono': [
+                'telefono', 'tel', 'celular', 'cel', 'phone', 'movil', 'whatsapp', 'contacto'
+            ],
+            'direccion': [
+                'direccion', 'domicilio', 'address', 'calle', 'ubicacion'
+            ],
+            'condicion_iva': [
+                'condicion_iva', 'iva', 'condicion', 'situacion_iva', 'responsabilidad_iva', 'tax_status'
             ]
         }
     
@@ -116,11 +139,14 @@ class ExcelProcessor:
     
     def read_excel_file(self, file_content: bytes, sheet_name: Optional[str] = None) -> pd.DataFrame:
         """Lee un archivo Excel y retorna un DataFrame."""
+        # Si sheet_name es None, leemos la primera hoja por defecto
+        actual_sheet = sheet_name if sheet_name is not None else 0
         try:
+            
             # Intentar con openpyxl primero (para .xlsx)
             df = pd.read_excel(
                 BytesIO(file_content),
-                sheet_name=sheet_name,
+                sheet_name=actual_sheet,
                 engine='openpyxl'
             )
         except Exception as e:
@@ -128,7 +154,7 @@ class ExcelProcessor:
                 # Intentar con xlrd para archivos .xls
                 df = pd.read_excel(
                     BytesIO(file_content),
-                    sheet_name=sheet_name,
+                    sheet_name=actual_sheet,
                     engine='xlrd'
                 )
             except Exception as e2:
@@ -141,12 +167,12 @@ class ExcelProcessor:
         try:
             # Intentar con openpyxl
             excel_file = pd.ExcelFile(BytesIO(file_content), engine='openpyxl')
-            return excel_file.sheet_names
+            return [str(name) for name in excel_file.sheet_names]
         except Exception:
             try:
                 # Intentar con xlrd
                 excel_file = pd.ExcelFile(BytesIO(file_content), engine='xlrd')
-                return excel_file.sheet_names
+                return [str(name) for name in excel_file.sheet_names]
             except Exception as e:
                 raise ValueError(f"No se pudo leer el archivo Excel: {str(e)}")
     
@@ -184,7 +210,7 @@ class ExcelProcessor:
                     try:
                         float(str(value).replace(',', '.'))
                     except (ValueError, TypeError):
-                        column_errors.append(f"Fila {idx + 2}: '{value}' no es un precio válido")
+                        column_errors.append(f"Fila {int(str(idx)) + 2}: '{value}' no es un precio válido")
             
             elif field_type == 'stock':
                 # Validar que sean números enteros
@@ -194,7 +220,7 @@ class ExcelProcessor:
                     try:
                         int(float(str(value)))
                     except (ValueError, TypeError):
-                        column_errors.append(f"Fila {idx + 2}: '{value}' no es una cantidad válida")
+                        column_errors.append(f"Fila {int(str(idx)) + 2}: '{value}' no es una cantidad válida")
             
             if column_errors:
                 errors[excel_column] = column_errors
@@ -234,7 +260,7 @@ class ExcelProcessor:
             
             # Solo agregar productos que tengan al menos un nombre
             if product.get('nombre'):
-                product['fila_excel'] = idx + 2  # +2 porque Excel empieza en 1 y hay header
+                product['fila_excel'] = int(str(idx)) + 2  # +2 porque Excel empieza en 1 y hay header
                 products.append(product)
         
         return products

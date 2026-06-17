@@ -158,12 +158,12 @@ async def create_purchase(
 
 
         # Validar proveedor si viene
-        proveedor_nombre: Optional[str] = getattr(compra_in, "proveedor_nombre", None)
+        proveedor_razon_social: Optional[str] = getattr(compra_in, "proveedor_razon_social", None)
         if compra_in.proveedor_id:
             prov_resp = (
                 client
                 .table("proveedores")
-                .select("id, nombre")
+                .select("id, razon_social")
                 .eq("id", compra_in.proveedor_id)
                 .eq("negocio_id", business_id)
                 .execute()
@@ -171,7 +171,7 @@ async def create_purchase(
             if not prov_resp.data:
                 raise HTTPException(status_code=404, detail="Proveedor no encontrado o no pertenece a este negocio")
             else:
-                proveedor_nombre = prov_resp.data[0].get("nombre")
+                proveedor_razon_social = prov_resp.data[0].get("razon_social")
 
         # Validar productos y preparar items
         items_preparados: List[dict] = []
@@ -363,7 +363,7 @@ async def create_purchase(
                 "monto": float(total),
                 "fecha": fecha_value,
                 "metodo_pago": "compra",
-                "descripcion": f"Compra {('a ' + proveedor_nombre) if proveedor_nombre else ''}".strip(),
+                "descripcion": f"Compra {('a ' + proveedor_razon_social) if proveedor_razon_social else ''}".strip(),
                 "observaciones": compra_in.observaciones or f"Compra {compra_id}",
                 "cliente_id": None,
                 "venta_id": None,
@@ -417,8 +417,8 @@ async def update_purchase(
         # Normalizar fecha_entrega a string ISO si viene como date
         if "fecha_entrega" in update_data and isinstance(update_data["fecha_entrega"], date):
             update_data["fecha_entrega"] = update_data["fecha_entrega"].isoformat()
-        # Omitir campos no existentes en DB, como 'proveedor_nombre'
-        update_data.pop("proveedor_nombre", None)
+        # Omitir campos no existentes en DB, como 'proveedor_razon_social'
+        update_data.pop("proveedor_razon_social", None)
 
         # Normalizar estado si viene y obtener estado actual para decidir ajuste de stock
         if "estado" in update_data and isinstance(update_data["estado"], str):

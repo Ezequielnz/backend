@@ -36,7 +36,7 @@ async def read_proveedores(
     try:
         query = client.table("proveedores").select("*").eq("negocio_id", business_id)
         if q:
-            query = query.ilike("nombre", f"%{q}%")
+            query = query.ilike("razon_social", f"%{q}%")
         if offset or limit:
             query = query.range(offset, offset + limit - 1)
         resp = query.execute()

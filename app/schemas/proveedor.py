@@ -4,8 +4,10 @@ from pydantic import BaseModel, Field, EmailStr
 
 
 class ProveedorBase(BaseModel):
-    nombre: str = Field(..., description="Nombre del proveedor")
-    cuit_cuil: Optional[str] = Field(None, description="CUIT/CUIL del proveedor")
+    razon_social: str = Field(..., description="Razón social o nombre del proveedor")
+    documento_tipo: Optional[str] = Field("CUIT", description="Tipo de documento (CUIT, DNI, etc.)")
+    documento_numero: Optional[str] = Field(None, description="Número de documento (CUIT/CUIL/DNI)")
+    condicion_iva: Optional[str] = Field(None, description="Condición frente al IVA")
     email: Optional[EmailStr] = Field(None, description="Email del proveedor")
     telefono: Optional[str] = Field(None, description="Teléfono del proveedor")
     direccion: Optional[str] = Field(None, description="Dirección del proveedor")
@@ -22,8 +24,10 @@ class ProveedorCreate(ProveedorBase):
 
 
 class ProveedorUpdate(BaseModel):
-    nombre: Optional[str] = None
-    cuit_cuil: Optional[str] = None
+    razon_social: Optional[str] = None
+    documento_tipo: Optional[str] = None
+    documento_numero: Optional[str] = None
+    condicion_iva: Optional[str] = None
     email: Optional[EmailStr] = None
     telefono: Optional[str] = None
     direccion: Optional[str] = None

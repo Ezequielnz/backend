@@ -18,7 +18,7 @@ class CompraItem(BaseModel):
 
 class CompraCreate(BaseModel):
     proveedor_id: Optional[str] = Field(None, description="ID del proveedor")
-    proveedor_nombre: Optional[str] = Field(None, description="Nombre del proveedor si no hay ID")
+    proveedor_razon_social: Optional[str] = Field(None, description="Razón social del proveedor si no hay ID")
     fecha: Optional[date] = Field(None, description="Fecha de la compra")
     metodo_pago: Optional[str] = Field(None, description="Método de pago de la compra")
     estado: Optional[str] = Field(None, description="Estado de entrega de la compra ('entregado'|'no_entregado')")
@@ -26,9 +26,9 @@ class CompraCreate(BaseModel):
     observaciones: Optional[str] = Field(None, max_length=500)
     items: List[CompraItem] = Field(...)
 
-    @validator("proveedor_nombre")
-    def validate_proveedor_nombre(cls, v, values):
-        # Allow either proveedor_id or proveedor_nombre or none (depending on DB constraints)
+    @validator("proveedor_razon_social")
+    def validate_proveedor_razon_social(cls, v, values):
+        # Allow either proveedor_id or proveedor_razon_social or none (depending on DB constraints)
         return v
 
     @validator("items")
@@ -40,7 +40,7 @@ class CompraCreate(BaseModel):
 
 class CompraUpdate(BaseModel):
     proveedor_id: Optional[str] = None
-    proveedor_nombre: Optional[str] = None
+    proveedor_razon_social: Optional[str] = None
     fecha: Optional[date] = None
     fecha_entrega: Optional[date] = None
     estado: Optional[str] = None
