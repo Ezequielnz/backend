@@ -46,31 +46,27 @@ async def get_dashboard_summary(
     inventario_modo = config_data.get("inventario_modo", "centralizado")
     
     # ARCA Check
-    arca_resp = supabase.table("configuracion_fiscal").select("certificado_vencimiento").eq("negocio_id", business_id).execute()
+    arca_resp = supabase.table("configuracion_fiscal").select("habilitada, cert_path").eq("negocio_id", business_id).execute()
     if arca_resp.data:
-        vencimiento = arca_resp.data[0].get("certificado_vencimiento")
-        if vencimiento:
-            try:
-                venc_date = datetime.fromisoformat(vencimiento.replace('Z', '+00:00'))
-                if venc_date < now:
-                    alerts.append(AlertItem(
-                        id="arca_expired",
-                        type="arca",
-                        message="Tu certificado ARCA está vencido. No podrás emitir facturas.",
-                        action_url="/configuracion-fiscal"
-                    ))
-                    status_indicator = "critical"
-            except ValueError:
-                pass
-        else:
+        config = arca_resp.data[0]
+        if not config.get("habilitada") or not config.get("cert_path"):
             alerts.append(AlertItem(
                 id="arca_missing",
                 type="arca",
-                message="No tienes configurado el certificado ARCA para facturación electrónica.",
+                message="No tienes configurado el certificado ARCA o la facturación está deshabilitada.",
                 action_url="/configuracion-fiscal"
             ))
             if status_indicator == "healthy":
                 status_indicator = "attention"
+    else:
+        alerts.append(AlertItem(
+            id="arca_missing",
+            type="arca",
+            message="No tienes configurado el certificado ARCA para facturación electrónica.",
+            action_url="/configuracion-fiscal"
+        ))
+        if status_indicator == "healthy":
+            status_indicator = "attention"
     
     # -------------------------------------------------------------------------
     # 2. Sales Trend (Last 7 Days) & Top Products (Last 30 Days)
