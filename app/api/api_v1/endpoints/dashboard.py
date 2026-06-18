@@ -4,7 +4,7 @@ from datetime import datetime, date, timedelta
 import logging
 
 from app.api.context import BusinessScopedClientDep, ScopedClientContext
-from app.dependencies import PermissionDependency
+
 from app.schemas.dashboard import (
     DashboardSummaryResponse, AlertItem, TodaySummary, 
     TrendPoint, TopProduct, LowStockProduct, InventoryHealth
@@ -14,9 +14,7 @@ from app.services.config_cache import get_negocio_config
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-@router.get("/summary", response_model=DashboardSummaryResponse,
-    dependencies=[Depends(PermissionDependency("dashboard", "ver"))]
-)
+@router.get("/summary", response_model=DashboardSummaryResponse)
 async def get_dashboard_summary(
     business_id: str,
     request: Request,
