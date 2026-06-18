@@ -77,75 +77,73 @@ async def get_dashboard_summary(
     # -------------------------------------------------------------------------
     # 2. Sales Trend (Last 7 Days) & Top Products (Last 30 Days)
     # -------------------------------------------------------------------------
-    query_ventas = supabase.table("ventas").select("id, total, fecha, venta_detalle(producto_id, cantidad, subtotal)").eq("negocio_id", business_id).gte("fecha", f"{thirty_days_ago_str}T00:00:00")
-    if branch_id:
-        query_ventas = query_ventas.eq("sucursal_id", branch_id)
-        
-    ventas_resp = query_ventas.execute()
-    all_ventas = ventas_resp.data or []
+    # Fetch Top Products via RPC
+    top_selling = []
+    top_prod_resp = supabase.rpc(
+        "get_dashboard_top_products",
+        {"p_negocio_id": business_id, "p_sucursal_id": branch_id, "p_start_date": thirty_days_ago_str}
+    ).execute()
     
-    # Process Sales
-    sales_trend_dict = { (now - timedelta(days=i)).strftime('%Y-%m-%d'): 0.0 for i in range(7) }
-    today_sales_amount = 0.0
-    today_sales_count = 0
-    product_sales = {} # product_id -> {"quantity": 0, "revenue": 0.0}
-    recent_sales_count = 0
-    
-    for venta in all_ventas:
-        fecha_venta_str = venta["fecha"].split("T")[0]
-        monto = float(venta["total"])
-        
-        # Today's Sales
-        if fecha_venta_str == today_str:
-            today_sales_amount += monto
-            today_sales_count += 1
-            
-        # Sales Trend (Last 7 Days)
-        if fecha_venta_str in sales_trend_dict:
-            sales_trend_dict[fecha_venta_str] += monto
-            
-        # Recent sales check for status
-        if fecha_venta_str >= three_days_ago_str:
-            recent_sales_count += 1
-            
-        # Top Products (all ventas in last 30 days)
-        for detalle in venta.get("venta_detalle", []):
-            pid = detalle.get("producto_id")
-            if pid:
-                if pid not in product_sales:
-                    product_sales[pid] = {"quantity": 0, "revenue": 0.0}
-                product_sales[pid]["quantity"] += int(detalle.get("cantidad", 0))
-                product_sales[pid]["revenue"] += float(detalle.get("subtotal", 0))
+    for tp in (top_prod_resp.data or []):
+        top_selling.append(TopProduct(
+            id=tp["producto_id"],
+            name=tp["nombre"],
+            quantity=int(tp["total_cantidad"]),
+            revenue=float(tp["total_ingresos"])
+        ))
 
-    if recent_sales_count == 0 and status_indicator == "healthy":
+    # Fetch Sales Trend via RPC
+    trend_resp = supabase.rpc(
+        "get_dashboard_sales_trend",
+        {"p_negocio_id": business_id, "p_sucursal_id": branch_id, "p_start_date": seven_days_ago_str}
+    ).execute()
+    
+    trend_data = trend_resp.data or []
+    # Fill missing days with 0
+    sales_trend_dict = { (now - timedelta(days=i)).strftime('%Y-%m-%d'): 0.0 for i in range(7) }
+    for t in trend_data:
+        sales_trend_dict[t["sale_date"]] = float(t["daily_total"])
+    sales_trend = [TrendPoint(date=k, amount=v) for k, v in sorted(sales_trend_dict.items())]
+
+    # Check recent sales (last 3 days)
+    recent_sales_resp = supabase.table("ventas").select("id").eq("negocio_id", business_id).gte("fecha", f"{three_days_ago_str}T00:00:00").limit(1).execute()
+    if not recent_sales_resp.data and status_indicator == "healthy":
         alerts.append(AlertItem(
             id="no_sales",
             type="sales",
             message="No has registrado ventas en los últimos 3 días.",
             action_url="/pos"
         ))
-        # Decide if this is attention or critical
         status_indicator = "attention"
         
-    sales_trend = [TrendPoint(date=k, amount=v) for k, v in sorted(sales_trend_dict.items())]
+    # Today's Sales via RPC
+    today_sales_resp = supabase.rpc(
+        "get_dashboard_sales_today",
+        {"p_negocio_id": business_id, "p_sucursal_id": branch_id, "p_target_date": today_str}
+    ).execute()
+    
+    today_sales_amount = 0.0
+    today_sales_count = 0
+    if today_sales_resp.data:
+        today_sales_amount = float(today_sales_resp.data[0].get("total_sales") or 0.0)
+        today_sales_count = int(today_sales_resp.data[0].get("sales_count") or 0)
 
     # -------------------------------------------------------------------------
     # 3. Cash Position (Today's Cash Flow)
     # -------------------------------------------------------------------------
-    query_movs = supabase.table("movimientos_financieros").select("tipo, monto").eq("negocio_id", business_id).gte("fecha", today_str).lte("fecha", today_str)
-    if branch_id:
-        query_movs = query_movs.eq("sucursal_id", branch_id)
-        
-    movs_resp = query_movs.execute()
+    cash_flow_resp = supabase.rpc(
+        "get_dashboard_cash_flow_today",
+        {"p_negocio_id": business_id, "p_sucursal_id": branch_id, "p_target_date": today_str}
+    ).execute()
     
     ingresos = today_sales_amount # Start with sales
     egresos = 0.0
     
-    for mov in (movs_resp.data or []):
+    for mov in (cash_flow_resp.data or []):
         if mov["tipo"] == "ingreso":
-            ingresos += float(mov["monto"])
+            ingresos += float(mov["total"])
         else:
-            egresos += float(mov["monto"])
+            egresos += float(mov["total"])
             
     cash_position = ingresos - egresos
     
@@ -197,23 +195,6 @@ async def get_dashboard_summary(
             message=f"Tienes {len(low_stock_items)} producto(s) con stock por debajo del mínimo.",
             action_url="/productos"
         ))
-
-    # Get names for Top Products
-    top_selling = []
-    if product_sales:
-        top_pids = sorted(product_sales.keys(), key=lambda k: product_sales[k]["quantity"], reverse=True)[:5]
-        
-        if top_pids:
-            top_prod_resp = supabase.table("productos").select("id, nombre").in_("id", top_pids).execute()
-            prod_names = {p["id"]: p.get("nombre", "Desconocido") for p in (top_prod_resp.data or [])}
-            
-            for pid in top_pids:
-                top_selling.append(TopProduct(
-                    id=pid,
-                    name=prod_names.get(pid, "Desconocido"),
-                    quantity=product_sales[pid]["quantity"],
-                    revenue=product_sales[pid]["revenue"]
-                ))
     
     # -------------------------------------------------------------------------
     # 5. Pending Tasks
