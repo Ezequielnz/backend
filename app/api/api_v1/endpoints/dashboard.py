@@ -187,7 +187,7 @@ async def get_dashboard_summary(
             id="low_stock",
             type="stock",
             message=f"Tienes {len(low_stock_items)} producto(s) con stock por debajo del mínimo.",
-            action_url="/productos"
+            action_url="/products-and-services"
         ))
     
     # -------------------------------------------------------------------------
@@ -202,7 +202,7 @@ async def get_dashboard_summary(
             id="pending_tasks",
             type="task",
             message=f"Tienes {pending_tasks_count} tarea(s) pendiente(s) o en progreso.",
-            action_url="/tareas"
+            action_url="/tasks"
         ))
 
     # Compile Final Response
