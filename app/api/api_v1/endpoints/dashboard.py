@@ -54,7 +54,7 @@ async def get_dashboard_summary(
                 id="arca_missing",
                 type="arca",
                 message="No tienes configurado el certificado ARCA o la facturación está deshabilitada.",
-                action_url="/configuracion-fiscal"
+                action_url="/settings/facturacion"
             ))
             if status_indicator == "healthy":
                 status_indicator = "attention"
@@ -63,7 +63,7 @@ async def get_dashboard_summary(
             id="arca_missing",
             type="arca",
             message="No tienes configurado el certificado ARCA para facturación electrónica.",
-            action_url="/configuracion-fiscal"
+            action_url="/settings/facturacion"
         ))
         if status_indicator == "healthy":
             status_indicator = "attention"
