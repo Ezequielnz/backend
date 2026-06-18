@@ -1,234 +1,131 @@
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
-from fastapi.responses import JSONResponse
+import uuid
 
 from app.api.deps import get_current_user_from_request as get_current_user
 from app.api.context import BusinessScopedClientDep, ScopedClientContext
 from app.types.auth import User
-from app.services.importacion_productos import ImportacionProductosService
-from app.schemas.importacion import (
-    ImportacionResultado,
-    ResumenImportacion,
-    ProductoImportacionTemporal,
-    ProductoImportacionUpdate,
-    ConfirmacionImportacion)
-from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
-from fastapi.responses import JSONResponse
-
-from app.api.deps import get_current_user_from_request as get_current_user
-from app.api.context import BusinessScopedClientDep, ScopedClientContext
-from app.types.auth import User
-from app.services.importacion_productos import ImportacionProductosService
-from app.schemas.importacion import (
-    ImportacionResultado,
-    ResumenImportacion,
-    ProductoImportacionTemporal,
-    ProductoImportacionUpdate,
-    ConfirmacionImportacion,
-    ResultadoImportacionFinal
-)
-from app.dependencies import PermissionDependency
+from app.services.ai_import_parser import AiImportParser
+from pydantic import BaseModel
 
 router = APIRouter()
+parser_service = AiImportParser()
 
-@router.post("/parse-excel/{entity_type}", response_model=ImportacionResultado)
-async def parse_excel(
+class ImportacionResultadoStateless(BaseModel):
+    success: bool
+    data_preview: List[Dict[str, Any]]
+    mapeo_automatico: Dict[str, str]
+    total_filas: int
+    source: str
+    session_id: str
+
+class BulkUpsertPayload(BaseModel):
+    data: List[Dict[str, Any]]
+    tipo_precio: Optional[str] = "costo"  # Sólo para productos
+
+@router.post("/parse-file/{entity_type}", response_model=ImportacionResultadoStateless)
+async def parse_file(
     business_id: str,
     entity_type: str,
     file: UploadFile = File(...),
-    sheet_name: Optional[str] = Form(None),
     current_user: User = Depends(get_current_user),
     scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
 ):
     """
-    Subir y procesar archivo Excel de forma genérica para extraer columnas y datos.
-    No guarda en base de datos.
+    Sube un archivo (PDF o Excel) y devuelve los datos estructurados por IA.
+    Es completamente stateless.
     """
-    # Validar tipo de archivo
-    if not file.filename or not file.filename.lower().endswith(('.xlsx', '.xls')):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Solo se permiten archivos Excel (.xlsx, .xls)"
-        )
-    
-    # Validar tamaño del archivo (máximo 10MB)
+    if entity_type not in ["productos", "clientes", "proveedores"]:
+        raise HTTPException(status_code=400, detail="entity_type inválido")
+
     content = await file.read()
-    if len(content) > 10 * 1024 * 1024:  # 10MB
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="El archivo es demasiado grande. Máximo 10MB permitido."
-        )
-    
-    try:
-        from app.services.importacion_excel import ExcelProcessor
-        import uuid
-        processor = ExcelProcessor()
-        excel_data = processor.process_excel_file(content, sheet_name)
-        
-        if not excel_data['success']:
-            raise ValueError(excel_data['error'])
-            
-        return ImportacionResultado(
-            session_id=str(uuid.uuid4()),
-            total_filas=excel_data['total_rows'],
-            columnas_detectadas=excel_data['columns'],
-            mapeo_automatico=excel_data['auto_mapping'],
-            reconocimiento_columnas=excel_data['column_recognition'],
-            data_preview=excel_data['data']  # Incluimos los datos en la respuesta
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error procesando archivo: {str(e)}"
-        )
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="El archivo excede 10MB")
 
-@router.get("/sheets/{session_id}")
-async def get_sheets(
-    session_id: str,
+    filename = file.filename.lower() if file.filename else ""
+    try:
+        if filename.endswith('.pdf'):
+            result = parser_service.parse_pdf(content, entity_type)
+        elif filename.endswith(('.xls', '.xlsx')):
+            result = parser_service.parse_excel(content, entity_type)
+        else:
+            raise HTTPException(status_code=400, detail="Formato no soportado (.pdf, .xlsx, .xls)")
+
+        result['session_id'] = str(uuid.uuid4()) # Dummy session ID for frontend compatibility if needed
+        return ImportacionResultadoStateless(**result)
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/bulk-upsert/{entity_type}")
+async def bulk_upsert(
     business_id: str,
+    entity_type: str,
+    payload: BulkUpsertPayload,
     current_user: User = Depends(get_current_user),
     scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
 ):
     """
-    Obtener nombres de hojas del archivo Excel subido.
+    Recibe la data curada del frontend y hace upsert inteligente.
     """
-    try:
-        service = ImportacionProductosService(scoped.client)
-        sheets = await service.obtener_hojas_excel(session_id, business_id)
-        return {"sheets": sheets}
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error obteniendo hojas: {str(e)}"
-        )
+    if entity_type not in ["productos", "clientes", "proveedores"]:
+        raise HTTPException(status_code=400, detail="entity_type inválido")
 
-@router.get("/preview/{session_id}", response_model=ResumenImportacion)
-async def get_preview(
-    session_id: str,
-    business_id: str,
-    current_user: User = Depends(get_current_user),
-    scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
-):
-    """
-    Obtener vista previa de los productos a importar.
-    """
-    try:
-        service = ImportacionProductosService(scoped.client)
-        preview = await service.obtener_preview(session_id, business_id)
-        return preview
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error obteniendo preview: {str(e)}"
-        )
+    client = scoped.client
+    data = payload.data
+    if not data:
+        return {"success": True, "upserted": 0, "errors": []}
 
-@router.post("/mapping/{session_id}")
-async def update_mapping(
-    session_id: str,
-    mapping: dict,
-    business_id: str,
-    current_user: User = Depends(get_current_user),
-    scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
-):
-    """
-    Actualizar el mapeo de columnas Excel a campos de producto.
-    """
-    try:
-        service = ImportacionProductosService(scoped.client)
-        resultado = await service.actualizar_mapeo(
-            session_id, 
-            business_id, 
-            mapping
-        )
-        return resultado
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error actualizando mapeo: {str(e)}"
-        )
+    # Asignar business_id a todos
+    for item in data:
+        item['business_id'] = business_id
 
-@router.put("/products/{session_id}")
-async def update_products(
-    session_id: str,
-    productos: List[ProductoImportacionUpdate],
-    business_id: str,
-    current_user: User = Depends(get_current_user),
-    scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
-):
-    """
-    Actualizar productos antes de la importación final.
-    """
     try:
-        service = ImportacionProductosService(scoped.client)
-        # Convert Pydantic models to plain dicts because the service expects List[Dict[str, Any]]
-        productos_payload = [p.model_dump() for p in productos]
-        resultado = await service.actualizar_productos_temporales(
-            session_id,
-            business_id,
-            productos_payload
-        )
-        return resultado
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error actualizando productos: {str(e)}"
-        )
+        if entity_type == "productos":
+            # Upsert para productos. Clave: codigo + business_id
+            # Si no hay código, asignar UUID
+            for item in data:
+                if not item.get("codigo"):
+                    # El prompt pedía buscar por nombre si no hay código. 
+                    # Lo hacemos buscando en BD
+                    existing = client.table("productos").select("id, codigo").eq("business_id", business_id).ilike("nombre", item.get("nombre", "")).execute()
+                    if existing.data:
+                        item["codigo"] = existing.data[0].get("codigo")
+                    else:
+                        item["codigo"] = str(uuid.uuid4())[:8].upper() # Generar código corto
+                
+                # Manejar tipo de precio
+                if payload.tipo_precio == "costo" and "precio" in item:
+                    item["precio_compra"] = item.pop("precio")
+                    # Calcular precio venta sugerido (ej: +30%)
+                    item["precio_venta"] = item["precio_compra"] * 1.3
+                elif payload.tipo_precio == "venta" and "precio" in item:
+                    item["precio_venta"] = item.pop("precio")
 
-@router.post("/confirm/{session_id}", response_model=ResultadoImportacionFinal)
-async def confirm_import(
-    session_id: str,
-    confirmacion: ConfirmacionImportacion,
-    business_id: str,
-    current_user: User = Depends(get_current_user),
-    scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
-):
-    """
-    Confirmar e importar productos definitivamente.
-    """
-    try:
-        service = ImportacionProductosService(scoped.client)
-        resultado = await service.confirmar_importacion(
-            session_id,
-            business_id,
-            confirmacion
-        )
-        return resultado
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error confirmando importación: {str(e)}"
-        )
+            res = client.table("productos").upsert(data, on_conflict="business_id,codigo").execute()
+            return {"success": True, "upserted": len(data)}
 
-@router.delete("/cancel/{session_id}")
-async def cancel_import(
-    session_id: str,
-    business_id: str,
-    current_user: User = Depends(get_current_user),
-    scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
-):
-    """
-    Cancelar proceso de importación.
-    """
-    try:
-        service = ImportacionProductosService(scoped.client)
-        await service.cancelar_importacion(session_id, business_id)
-        return {"message": "Importación cancelada exitosamente"}
+        elif entity_type in ["clientes", "proveedores"]:
+            # Upsert para clientes/proveedores. Clave: documento_numero + business_id
+            for item in data:
+                if not item.get("documento_numero"):
+                    # Buscar por razon social
+                    existing = client.table(entity_type).select("id, documento_numero").eq("business_id", business_id).ilike("razon_social", item.get("razon_social", "")).execute()
+                    if existing.data and existing.data[0].get("documento_numero"):
+                        item["documento_numero"] = existing.data[0].get("documento_numero")
+                    else:
+                        item["documento_numero"] = f"GEN-{str(uuid.uuid4())[:8].upper()}"
+
+            res = client.table(entity_type).upsert(data, on_conflict="business_id,documento_numero").execute()
+            return {"success": True, "upserted": len(data)}
+
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error cancelando importación: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/status")
 async def get_import_status():
-    """
-    Obtener estado del sistema de importación.
-    """
     return {
-        "message": "Sistema de importación funcionando correctamente",
+        "message": "AI Import System Active",
         "status": "active",
-        "supported_formats": [".xlsx", ".xls"]
-    } 
-
-
+        "supported_formats": [".xlsx", ".xls", ".pdf"]
+    }

@@ -5,7 +5,6 @@ Tareas de mantenimiento para limpieza automática de datos.
 import asyncio
 import logging
 from datetime import datetime
-from app.services.importacion_productos import ImportacionProductosService
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -15,7 +14,7 @@ class MaintenanceTasks:
     """Tareas de mantenimiento del sistema."""
     
     def __init__(self):
-        self.importacion_service = ImportacionProductosService()
+        pass
     
     async def limpiar_datos_temporales(self) -> None:
         """
@@ -24,13 +23,8 @@ class MaintenanceTasks:
         """
         try:
             logger.info("Iniciando limpieza de datos temporales...")
-            
-            registros_eliminados = await self.importacion_service.limpiar_importaciones_antiguas()
-            
-            if registros_eliminados > 0:
-                logger.info(f"✅ Limpieza completada: {registros_eliminados} registros eliminados")
-            else:
-                logger.info("✅ No hay datos temporales antiguos para limpiar")
+            # No hay datos temporales que limpiar actualmente
+            logger.info("✅ No hay datos temporales antiguos para limpiar")
                 
         except Exception as e:
             logger.error(f"❌ Error en limpieza de datos temporales: {str(e)}")
