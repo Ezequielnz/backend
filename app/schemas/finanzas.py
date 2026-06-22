@@ -102,11 +102,17 @@ class CuentaPendiente(CuentaPendienteBase):
 
 # Dashboard Schemas
 class ResumenFinanciero(BaseModel):
-    ingresos_mes: float
-    egresos_mes: float
-    saldo_actual: float
-    ingresos_mes_anterior: float
-    egresos_mes_anterior: float
+    # Campos que espera el frontend (FinanceStats interface)
+    total_ingresos: float = 0.0
+    total_egresos: float = 0.0
+    balance: float = 0.0
+    cuentas_pendientes: float = 0.0
+    # Campos de compatibilidad para otros usos
+    ingresos_mes: float = 0.0
+    egresos_mes: float = 0.0
+    saldo_actual: float = 0.0
+    ingresos_mes_anterior: float = 0.0
+    egresos_mes_anterior: float = 0.0
 
 class FlujoCajaDiario(BaseModel):
     fecha: date

@@ -669,6 +669,45 @@ async def get_resumen_financiero(
         logger.info(f"📊 Movimientos actuales: {len(movimientos_response.data or [])}")
         logger.info(f"💰 Ventas actuales: {len(ventas_response.data or [])}")
 
+        # Query current month purchases (compras) as egresos
+        query_comp = supabase.table("compras") \
+            .select("total") \
+            .eq("negocio_id", business_id) \
+            .gte("fecha", start_str) \
+            .lte("fecha", end_str + "T23:59:59+00:00")
+        if scoped.context.branch_id:
+            query_comp = query_comp.eq("sucursal_id", scoped.context.branch_id)
+        try:
+            compras_response = query_comp.execute()
+            compras_data = compras_response.data or []
+        except Exception:
+            compras_data = []
+
+        # Query previous month purchases
+        query_comp_prev = supabase.table("compras") \
+            .select("total") \
+            .eq("negocio_id", business_id) \
+            .gte("fecha", prev_start_str) \
+            .lte("fecha", prev_end_str + "T23:59:59+00:00")
+        if scoped.context.branch_id:
+            query_comp_prev = query_comp_prev.eq("sucursal_id", scoped.context.branch_id)
+        try:
+            compras_prev_response = query_comp_prev.execute()
+            compras_prev_data = compras_prev_response.data or []
+        except Exception:
+            compras_prev_data = []
+
+        # Query pending accounts total (cuentas por cobrar y pagar pendientes)
+        query_cuentas = supabase.table("cuentas_pendientes") \
+            .select("monto, tipo") \
+            .eq("negocio_id", business_id) \
+            .eq("estado", "pendiente")
+        try:
+            cuentas_response = query_cuentas.execute()
+            cuentas_data = cuentas_response.data or []
+        except Exception:
+            cuentas_data = []
+
         # Calculate totals for current month
         ingresos_movimientos = sum(
             float(mov["monto"]) for mov in (movimientos_response.data or [])
@@ -677,12 +716,16 @@ async def get_resumen_financiero(
         ingresos_ventas = sum(
             float(venta["total"]) for venta in (ventas_response.data or [])
         )
-        ingresos_mes = ingresos_movimientos + ingresos_ventas
-        
-        egresos_mes = sum(
+        total_ingresos = ingresos_movimientos + ingresos_ventas
+
+        egresos_movimientos = sum(
             float(mov["monto"]) for mov in (movimientos_response.data or [])
             if mov["tipo"] == "egreso"
         )
+        egresos_compras = sum(
+            float(comp["total"]) for comp in compras_data
+        )
+        total_egresos = egresos_movimientos + egresos_compras
 
         # Calculate totals for previous month
         ingresos_movimientos_anterior = sum(
@@ -693,22 +736,37 @@ async def get_resumen_financiero(
             float(venta["total"]) for venta in (ventas_prev_response.data or [])
         )
         ingresos_mes_anterior = ingresos_movimientos_anterior + ingresos_ventas_anterior
-        
-        egresos_mes_anterior = sum(
+
+        egresos_movimientos_anterior = sum(
             float(mov["monto"]) for mov in (movimientos_prev_response.data or [])
             if mov["tipo"] == "egreso"
         )
+        egresos_compras_anterior = sum(
+            float(comp["total"]) for comp in compras_prev_data
+        )
+        egresos_mes_anterior = egresos_movimientos_anterior + egresos_compras_anterior
 
-        saldo_actual = ingresos_mes - egresos_mes
+        balance = total_ingresos - total_egresos
 
-        logger.info(f"💰 Resumen: Ingresos={ingresos_mes}, Egresos={egresos_mes}, Saldo={saldo_actual}")
+        # Calculate pending accounts total
+        cuentas_pendientes_total = sum(
+            float(c["monto"]) for c in cuentas_data
+        )
+
+        logger.info(f"💰 Resumen: Ingresos={total_ingresos}, Egresos={total_egresos}, Balance={balance}, Cuentas={cuentas_pendientes_total}")
 
         resumen_data = {
-            "ingresos_mes": float(ingresos_mes),
-            "egresos_mes": float(egresos_mes),
-            "saldo_actual": float(saldo_actual),
+            # Campos que espera el frontend (FinanceStats interface)
+            "total_ingresos": float(total_ingresos),
+            "total_egresos": float(total_egresos),
+            "balance": float(balance),
+            "cuentas_pendientes": float(cuentas_pendientes_total),
+            # Campos adicionales para comparación con mes anterior
+            "ingresos_mes": float(total_ingresos),
+            "egresos_mes": float(total_egresos),
+            "saldo_actual": float(balance),
             "ingresos_mes_anterior": float(ingresos_mes_anterior),
-            "egresos_mes_anterior": float(egresos_mes_anterior)
+            "egresos_mes_anterior": float(egresos_mes_anterior),
         }
         
         return JSONResponse(status_code=200, content=resumen_data)
@@ -776,6 +834,34 @@ async def get_flujo_caja_mensual(
             
             monto = Decimal(str(venta["total"]))
             daily_data[fecha]["ingresos"] += monto
+
+        # Get all purchases for the month and process as egresos
+        try:
+            query_compras = (
+                supabase.table("compras")
+                .select("fecha, total")
+                .eq("negocio_id", business_id)
+                .gte("fecha", month_start.isoformat())
+                .lte("fecha", month_end.isoformat() + "T23:59:59+00:00")
+                .order("fecha")
+            )
+            if scoped.context.branch_id:
+                query_compras = query_compras.eq("sucursal_id", scoped.context.branch_id)
+            compras_result = query_compras.execute()
+            for compra in compras_result.data if compras_result.data else []:
+                raw_fecha = compra["fecha"]
+                if isinstance(raw_fecha, str):
+                    fecha = datetime.fromisoformat(raw_fecha.split("T")[0]).date()
+                elif isinstance(raw_fecha, datetime):
+                    fecha = raw_fecha.date()
+                else:
+                    fecha = raw_fecha
+                if fecha not in daily_data:
+                    daily_data[fecha] = {"ingresos": Decimal("0"), "egresos": Decimal("0")}
+                monto = Decimal(str(compra["total"]))
+                daily_data[fecha]["egresos"] += monto
+        except Exception as comp_err:
+            logger.warning(f"Could not load compras for flujo-caja: {comp_err}")
         
         # Generate daily flow with accumulated balance - only for dates with movements
         flujo_diario = []
