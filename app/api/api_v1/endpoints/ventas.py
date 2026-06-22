@@ -287,53 +287,84 @@ async def record_sale_branch(
         
         settings = context.branch_settings or {}
         inventario_modo = settings.get("inventario_modo", "centralizado")
+        logger.info(
+            "[record_sale_branch] Actualizando stock venta_id=%s, modo=%s, branch=%s",
+            venta_id, inventario_modo, branch_id
+        )
         
         for item in venta_data.items:
             if item.tipo == "producto":
-                if inventario_modo == "por_sucursal":
-                    # Actualizar en inventario_sucursal usando service_client
-                    inv_resp = (
-                        svc_client.table("inventario_sucursal")
-                        .select("id, stock_actual")
-                        .eq("producto_id", item.id)
-                        .eq("sucursal_id", branch_id)
-                        .eq("negocio_id", business_id)
-                        .execute()
-                    )
-                    if inv_resp.data:
-                        stock_actual = inv_resp.data[0].get("stock_actual", 0)
-                        nuevo_stock = max(0, stock_actual - item.cantidad)
-                        svc_client.table("inventario_sucursal").update({
-                            "stock_actual": nuevo_stock
-                        }).eq("id", inv_resp.data[0]["id"]).execute()
+                try:
+                    cantidad_vendida = float(item.cantidad)
+                    if inventario_modo == "por_sucursal":
+                        # Actualizar en inventario_sucursal usando service_client
+                        inv_resp = (
+                            svc_client.table("inventario_sucursal")
+                            .select("id, stock_actual")
+                            .eq("producto_id", item.id)
+                            .eq("sucursal_id", branch_id)
+                            .eq("negocio_id", business_id)
+                            .execute()
+                        )
+                        if inv_resp.data:
+                            stock_actual = float(inv_resp.data[0].get("stock_actual") or 0)
+                            nuevo_stock = max(0.0, stock_actual - cantidad_vendida)
+                            logger.info(
+                                "[stock] producto=%s, stock_actual=%.4f, vendido=%.4f, nuevo_stock=%.4f",
+                                item.id, stock_actual, cantidad_vendida, nuevo_stock
+                            )
+                            svc_client.table("inventario_sucursal").update({
+                                "stock_actual": nuevo_stock
+                            }).eq("id", inv_resp.data[0]["id"]).execute()
+                        else:
+                            # No existe registro en inventario_sucursal — crearlo con stock 0
+                            # (la venta ya se procesó; el stock negativo no se permite)
+                            logger.warning(
+                                "[stock] No existe registro inventario_sucursal para producto=%s sucursal=%s. Creando con stock=0.",
+                                item.id, branch_id
+                            )
+                            svc_client.table("inventario_sucursal").insert({
+                                "negocio_id": business_id,
+                                "sucursal_id": branch_id,
+                                "producto_id": item.id,
+                                "stock_actual": 0,
+                            }).execute()
                     else:
-                        # Record doesn't exist yet, create it with negative stock avoided
-                        svc_client.table("inventario_sucursal").insert({
-                            "negocio_id": business_id,
-                            "sucursal_id": branch_id,
-                            "producto_id": item.id,
-                            "stock_actual": 0,
-                        }).execute()
-                else:
-                    # Modo centralizado: actualizar productos.stock_actual
-                    producto_response = (
-                        svc_client.table("productos")
-                        .select("id, stock_actual")
-                        .eq("id", item.id)
-                        .eq("negocio_id", business_id)
-                        .execute()
+                        # Modo centralizado: actualizar productos.stock_actual
+                        producto_response = (
+                            svc_client.table("productos")
+                            .select("id, stock_actual")
+                            .eq("id", item.id)
+                            .eq("negocio_id", business_id)
+                            .execute()
+                        )
+                        if producto_response.data:
+                            stock_actual = float(producto_response.data[0].get("stock_actual") or 0)
+                            nuevo_stock = max(0.0, stock_actual - cantidad_vendida)
+                            logger.info(
+                                "[stock] producto=%s, stock_actual=%.4f, vendido=%.4f, nuevo_stock=%.4f",
+                                item.id, stock_actual, cantidad_vendida, nuevo_stock
+                            )
+                            svc_client.table("productos").update({
+                                "stock_actual": nuevo_stock
+                            }).eq("id", item.id).execute()
+                            
+                            # Mantener inventario_negocio sincronizado
+                            svc_client.table("inventario_negocio").update({
+                                "stock_total": nuevo_stock
+                            }).eq("producto_id", item.id).eq("negocio_id", business_id).execute()
+                        else:
+                            logger.warning(
+                                "[stock] Producto %s no encontrado para actualizar stock centralizado.",
+                                item.id
+                            )
+                except Exception as stock_err:
+                    # Stock update failure must NOT abort the response — the sale is already
+                    # committed. Log the error for manual review instead of crashing.
+                    logger.error(
+                        "[stock] Error al actualizar stock para producto=%s venta=%s: %s",
+                        item.id, venta_id, str(stock_err), exc_info=True
                     )
-                    if producto_response.data:
-                        stock_actual = producto_response.data[0].get("stock_actual", 0)
-                        nuevo_stock = max(0, stock_actual - item.cantidad)
-                        svc_client.table("productos").update({
-                            "stock_actual": nuevo_stock
-                        }).eq("id", item.id).execute()
-                        
-                        # Mantener inventario_negocio sincronizado
-                        svc_client.table("inventario_negocio").update({
-                            "stock_total": nuevo_stock
-                        }).eq("producto_id", item.id).eq("negocio_id", business_id).execute()
 
         venta_creada = venta_response.data[0]
         
@@ -381,7 +412,15 @@ async def record_sale_branch(
         raise
     except Exception as e:
         error_msg = str(e)
-        if "PGRST301" in error_msg or "JWT expired" in error_msg:
+        logger.error("[record_sale_branch] Unhandled exception: %s", error_msg, exc_info=True)
+        # Only raise 401 for genuine Supabase JWT expiry errors (not DB/RLS errors that
+        # may coincidentally reference JWT in their message).
+        # PGRST301 = 'JWT expired' returned directly from PostgREST authentication layer.
+        is_jwt_error = (
+            ("PGRST301" in error_msg and "JWT" in error_msg)
+            or error_msg.strip().lower() == "jwt expired"
+        )
+        if is_jwt_error:
             raise HTTPException(status_code=401, detail="Su sesión ha expirado. Por favor, inicie sesión nuevamente.")
         raise HTTPException(status_code=500, detail=f"Error interno del servidor: {error_msg}")
 
@@ -595,7 +634,7 @@ async def get_reporte_ventas(
                     nombre = nombre or "Servicio"
                 else:
                     continue
-                cantidad = int(d.get("cantidad") or 0)
+                cantidad = float(d.get("cantidad") or 0)
                 subtotal = float(d.get("subtotal") or 0)
                 if subtotal == 0:
                     precio_unitario = float(d.get("precio_unitario") or 0)

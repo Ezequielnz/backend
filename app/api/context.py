@@ -95,17 +95,29 @@ async def BusinessBranchContextDep(request: Request, business_id: str, branch_id
                 else:
                     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User not assigned to this branch")
 
-    # Retrieve branch settings (negocio_configuracion)
-    settings_response = (
-        client.table("negocio_configuracion")
-        .select(
-            "negocio_id, inventario_modo, servicios_modo, catalogo_producto_modo, permite_transferencias, transferencia_auto_confirma, default_branch_id, metadata, created_at, updated_at"
+    # Retrieve branch settings (negocio_configuracion) using service client to bypass RLS.
+    # The user-scoped token may not have SELECT permission on this table due to RLS policies,
+    # which causes a 401 from Supabase that incorrectly triggers auth error handling upstream.
+    try:
+        from app.db.supabase_client import get_supabase_service_client
+        svc = get_supabase_service_client()
+        settings_response = (
+            svc.table("negocio_configuracion")
+            .select(
+                "negocio_id, inventario_modo, servicios_modo, catalogo_producto_modo, permite_transferencias, transferencia_auto_confirma, default_branch_id, metadata, created_at, updated_at"
+            )
+            .eq("negocio_id", business_id)
+            .limit(1)
+            .execute()
         )
-        .eq("negocio_id", business_id)
-        .limit(1)
-        .execute()
-    )
-    branch_settings = settings_response.data[0] if settings_response.data else None
+        branch_settings = settings_response.data[0] if settings_response.data else None
+    except Exception as cfg_err:
+        # Non-fatal: if settings can't be loaded, use None and log the issue
+        import logging
+        logging.getLogger(__name__).warning(
+            "Could not load negocio_configuracion for business %s: %s", business_id, cfg_err
+        )
+        branch_settings = None
 
     # Set context into request.state for downstream usage
     setattr(request.state, "company_id", business_id)
