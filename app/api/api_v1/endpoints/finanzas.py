@@ -585,6 +585,8 @@ async def get_resumen_financiero(
     business_id: str,
     mes: Optional[int] = Query(None, ge=1, le=12),
     anio: Optional[int] = Query(None, ge=2020),
+    fecha_desde: Optional[date] = Query(None),
+    fecha_hasta: Optional[date] = Query(None),
     scoped: ScopedClientContext = Depends(BusinessScopedClientDep),
 ) -> Any:
     """Get financial summary for a business."""
@@ -602,27 +604,39 @@ async def get_resumen_financiero(
         except Exception:
             now = datetime.now()
         
-        target_mes = mes if mes is not None else now.month
-        target_anio = anio if anio is not None else now.year
-        
-        logger.info(f"📊 Consultando datos financieros para {target_mes}/{target_anio}")
-        
-        # Date ranges using date-only strings for consistent comparisons
-        import calendar as _cal
-        start_str = f"{target_anio}-{target_mes:02d}-01"
-        last_day = _cal.monthrange(target_anio, target_mes)[1]
-        end_str = f"{target_anio}-{target_mes:02d}-{last_day:02d}"
-        
-        # Previous month
-        if target_mes == 1:
-            prev_mes = 12
-            prev_anio = target_anio - 1
+        if fecha_desde and fecha_hasta:
+            start_str = fecha_desde.isoformat()
+            end_str = fecha_hasta.isoformat()
+            # Calculate previous period of the same length
+            from datetime import timedelta
+            delta = fecha_hasta - fecha_desde + timedelta(days=1)
+            prev_start_date = fecha_desde - delta
+            prev_end_date = fecha_desde - timedelta(days=1)
+            prev_start_str = prev_start_date.isoformat()
+            prev_end_str = prev_end_date.isoformat()
+            logger.info(f"📊 Consultando datos financieros por rango: {start_str} -> {end_str}")
         else:
-            prev_mes = target_mes - 1
-            prev_anio = target_anio
-        prev_start_str = f"{prev_anio}-{prev_mes:02d}-01"
-        prev_last_day = _cal.monthrange(prev_anio, prev_mes)[1]
-        prev_end_str = f"{prev_anio}-{prev_mes:02d}-{prev_last_day:02d}"
+            target_mes = mes if mes is not None else now.month
+            target_anio = anio if anio is not None else now.year
+            
+            logger.info(f"📊 Consultando datos financieros para {target_mes}/{target_anio}")
+            
+            # Date ranges using date-only strings for consistent comparisons
+            import calendar as _cal
+            start_str = f"{target_anio}-{target_mes:02d}-01"
+            last_day = _cal.monthrange(target_anio, target_mes)[1]
+            end_str = f"{target_anio}-{target_mes:02d}-{last_day:02d}"
+            
+            # Previous month
+            if target_mes == 1:
+                prev_mes = 12
+                prev_anio = target_anio - 1
+            else:
+                prev_mes = target_mes - 1
+                prev_anio = target_anio
+            prev_start_str = f"{prev_anio}-{prev_mes:02d}-01"
+            prev_last_day = _cal.monthrange(prev_anio, prev_mes)[1]
+            prev_end_str = f"{prev_anio}-{prev_mes:02d}-{prev_last_day:02d}"
 
         logger.info(f"📅 Rango actual: {start_str} → {end_str}")
 
