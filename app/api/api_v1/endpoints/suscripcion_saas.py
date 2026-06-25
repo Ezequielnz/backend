@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks, status
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
-from app.db.supabase import get_db
+from app.db.supabase_client import get_supabase_service_client as get_db
 from app.core.security import get_current_user
 from app.models.user import User
 from app.services.mercadopago_service import mp_service
