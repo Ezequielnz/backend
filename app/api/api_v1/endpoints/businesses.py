@@ -635,12 +635,9 @@ async def create_business_branch(business_id: str, payload: BranchCreate, reques
         "activo": payload.activo,
         "is_main": payload.is_main,
     }
-
-    service_supabase = get_supabase_service_client()
-
     try:
         response = (
-            service_supabase.table("sucursales")
+            user_supabase.table("sucursales")
             .insert(insert_data)
             .execute()
         )
@@ -662,7 +659,7 @@ async def create_business_branch(business_id: str, payload: BranchCreate, reques
     # Ensure the creator (owner/admin) has access to the new branch.
     try:
         assignment = (
-            service_supabase.table("usuarios_sucursales")
+            user_supabase.table("usuarios_sucursales")
             .select("id")
             .eq("usuario_id", user_id_str)
             .eq("negocio_id", business_id)
@@ -671,7 +668,7 @@ async def create_business_branch(business_id: str, payload: BranchCreate, reques
             .execute()
         )
         if not assignment.data:
-            service_supabase.table("usuarios_sucursales").insert(
+            user_supabase.table("usuarios_sucursales").insert(
                 {
                     "usuario_id": str(user.id),
                     "negocio_id": business_id,
