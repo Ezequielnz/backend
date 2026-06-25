@@ -648,7 +648,7 @@ async def create_business_branch(business_id: str, payload: BranchCreate, reques
         logger.exception("Failed to create branch for business %s", business_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="No se pudo crear la sucursal; intente nuevamente.",
+            detail=f"No se pudo crear la sucursal; intente nuevamente. Detalles: {str(exc)}",
         ) from exc
 
     if not response.data:
