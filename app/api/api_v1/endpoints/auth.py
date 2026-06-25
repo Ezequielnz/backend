@@ -219,11 +219,27 @@ async def signup(user_data: UserSignUp) -> Any:
             # Verificar si es un usuario exento
             is_exempt = user_data.email in settings.EXEMPT_EMAILS
             
+            # Verificar si hay código de referido
+            referred_by_user_id = None
+            referrer_type = None
+            
+            if user_data.referral_code:
+                # Buscar al referente
+                ref_user = supabase.table("usuarios").select("id, es_contador").eq("referral_code", user_data.referral_code).execute()
+                if ref_user.data:
+                    referred_by_user_id = ref_user.data[0]["id"]
+                    referrer_type = "contador" if ref_user.data[0].get("es_contador") else "operixml"
+                    print(f"Usuario referido por {referred_by_user_id} ({referrer_type})")
+
             update_data = {
                 "subscription_status": "trial",
                 "trial_end": trial_end,
                 "is_exempt": is_exempt
             }
+            
+            if referred_by_user_id and referrer_type:
+                update_data["referred_by_user_id"] = referred_by_user_id
+                update_data["referrer_type"] = referrer_type
             
             print(f"Configurando suscripción para {user_data.email}: {update_data}")
             

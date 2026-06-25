@@ -106,11 +106,13 @@ async def auth_middleware(request: Request, call_next):
         f"{settings.API_V1_STR}/auth/resend-confirmation",
         f"{settings.API_V1_STR}/auth/confirm",
         f"{settings.API_V1_STR}/auth/verify-email",
+        f"{settings.API_V1_STR}/saas/webhook",
     ]
     
     # Rutas que empiezan con estos prefijos (solo auth)
     public_routes_prefix = [
         f"{settings.API_V1_STR}/auth/check-confirmation/",
+        f"{settings.API_V1_STR}/saas/validate-referral/",
     ]
     
     # Verificar coincidencia exacta

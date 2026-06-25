@@ -117,6 +117,15 @@ class Settings(BaseSettings):
     DB_PORT: str = os.getenv("DB_PORT", "5432")
     DB_NAME: str = os.getenv("DB_NAME", "postgres")
     
+    # Mercado Pago Configuration
+    MP_ACCESS_TOKEN: str = os.getenv("MP_ACCESS_TOKEN", "")
+    MP_PUBLIC_KEY: str = os.getenv("MP_PUBLIC_KEY", "")
+    MP_PLAN_ID: str = os.getenv("MP_PLAN_ID", "")
+    MP_WEBHOOK_SECRET: str = os.getenv("MP_WEBHOOK_SECRET", "")
+    MP_PLAN_PRICE: float = float(os.getenv("MP_PLAN_PRICE", "35000"))
+    MP_PLAN_CURRENCY: str = os.getenv("MP_PLAN_CURRENCY", "ARS")
+    BACKEND_URL: str = os.getenv("BACKEND_URL", "http://localhost:8000")
+    
     # Database URL - Para desarrollo, usar SQLite si no hay variable de entorno
     @property
     def DATABASE_URL(self) -> str:

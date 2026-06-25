@@ -87,15 +87,19 @@ class BranchSettingsService:
     # Public API
     # --------------------------------------------------------------------- #
     def fetch(self, ensure_exists: bool = True) -> Optional[BranchSettings]:
-        response = self._select_query().execute()
-        data = response.data[0] if response.data else None
-
-        if data is None and ensure_exists:
-            self._ensure_default_record()
+        try:
             response = self._select_query().execute()
             data = response.data[0] if response.data else None
 
-        return self._hydrate(data)
+            if data is None and ensure_exists:
+                self._ensure_default_record()
+                response = self._select_query().execute()
+                data = response.data[0] if response.data else None
+
+            return self._hydrate(data)
+        except Exception as e:
+            logger.error(f"Error fetching branch settings for {self._business_id}: {e}")
+            return None
 
     def update(self, payload: BranchSettingsUpdate) -> BranchSettings:
         current = self.fetch(ensure_exists=True)

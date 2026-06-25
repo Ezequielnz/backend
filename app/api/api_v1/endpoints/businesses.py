@@ -630,7 +630,7 @@ async def create_business_branch(business_id: str, payload: BranchCreate, reques
         "id": branch_id,
         "negocio_id": business_id,
         "nombre": payload.nombre,
-        "codigo": payload.codigo,
+        "codigo": payload.codigo or str(uuid4())[:8].upper(),
         "direccion": payload.direccion,
         "activo": payload.activo,
         "is_main": payload.is_main,

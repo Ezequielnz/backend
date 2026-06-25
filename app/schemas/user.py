@@ -16,6 +16,7 @@ class UserSignUp(BaseModel):
     password: str = Field(..., min_length=8)
     nombre: str = Field(..., min_length=1)
     apellido: str = Field(..., min_length=1)
+    referral_code: Optional[str] = None
 
 class SignUpResponse(BaseModel):
     message: str
