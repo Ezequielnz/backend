@@ -18,12 +18,21 @@ async def check_subscription(
     """
     try:
         # Get user details directly from DB to get the latest subscription status
-        response = db.table("usuarios").select("subscription_status, trial_end, is_exempt").eq("id", current_user.id).single().execute()
+        # current_user puede ser un dict (UserData) o un objeto Pydantic (User)
+        user_id = current_user.get("id") if isinstance(current_user, dict) else getattr(current_user, "id", None)
+        
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Usuario no identificado")
+            
+        # Usamos limit(1) en lugar de single() para evitar que lance una excepción si no hay filas
+        response = db.table("usuarios").select("subscription_status, trial_end, is_exempt").eq("id", user_id).limit(1).execute()
         
         if not response.data:
-            raise HTTPException(status_code=404, detail="User not found")
+            # Si el usuario no existe en la tabla, lo dejamos pasar temporalmente (o podrías decidir qué hacer)
+            logger.warning(f"Usuario {user_id} no encontrado en tabla usuarios.")
+            return current_user
             
-        user_data = response.data
+        user_data = response.data[0]
         
         # 1. Exempt users can bypass the paywall
         if user_data.get("is_exempt") is True:
@@ -54,14 +63,14 @@ async def check_subscription(
                 pass # If parsing fails, fall through to block access
                 
         # If we reach here, the user is neither exempt, active, nor in an active trial
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail={
-                "code": "PAYWALL_REQUIRED",
-                "message": "Tu período de prueba ha finalizado o tu suscripción está inactiva.",
-                "subscription_status": subscription_status
-            }
+        # Según el requerimiento: "no debe de salir un error si el cliente no pagó."
+        # Como aún se está probando el sistema, permitimos el acceso pero registramos una advertencia
+        logger.warning(
+            f"Usuario {user_id} requiere pago (estado: {subscription_status}), "
+            "pero se permite acceso temporal por fase de pruebas."
         )
+        # Devolver el current_user para no bloquear las llamadas a la API
+        return current_user
         
     except HTTPException:
         raise
