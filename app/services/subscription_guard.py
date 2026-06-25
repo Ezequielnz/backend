@@ -1,7 +1,7 @@
 from fastapi import Request, Depends, HTTPException, status
-from app.db.supabase import get_db
-from app.core.security import get_current_user
-from app.models.user import User
+from app.db.supabase_client import get_supabase_service_client as get_db
+from app.api.deps import get_current_user
+from app.types.auth import User
 from datetime import datetime, timezone
 import logging
 
