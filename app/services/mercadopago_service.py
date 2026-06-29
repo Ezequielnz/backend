@@ -11,16 +11,26 @@ class MercadoPagoService:
     def __init__(self):
         token = (settings.MP_ACCESS_TOKEN or "").strip()
         self.headers = {
-            "Authorization": f"Bearer {token}",
             "Content-Type": "application/json"
         }
+        if token:
+            self.headers["Authorization"] = f"Bearer {token}"
         self.client = httpx.AsyncClient(base_url=self.BASE_URL, headers=self.headers, timeout=10.0)
+
+    def _verify_token(self):
+        token = (settings.MP_ACCESS_TOKEN or "").strip()
+        if not token:
+            raise ValueError(
+                "El token de acceso de Mercado Pago (MP_ACCESS_TOKEN) no está configurado "
+                "en las variables de entorno de Render. Por favor, asocie sus credenciales de Mercado Pago."
+            )
 
     async def get_or_create_plan(self) -> str:
         """
         Creates or retrieves the main subscription plan in Mercado Pago.
         Ideally this is called once. The ID should be saved in settings.MP_PLAN_ID.
         """
+        self._verify_token()
         if settings.MP_PLAN_ID:
             return settings.MP_PLAN_ID
             
@@ -54,6 +64,7 @@ class MercadoPagoService:
         Generates a checkout link for the user.
         If free_months > 1, we create an ad-hoc preapproval instead of using the base plan.
         """
+        self._verify_token()
         payload = {
             "reason": f"Plan {settings.PROJECT_NAME} - Suscripción Mensual",
             "external_reference": str(user_id),
@@ -82,30 +93,35 @@ class MercadoPagoService:
 
     async def get_preapproval_status(self, preapproval_id: str) -> Dict[str, Any]:
         """Consults the status of a subscription."""
+        self._verify_token()
         response = await self.client.get(f"/preapproval/{preapproval_id}")
         response.raise_for_status()
         return response.json()
 
     async def pause_preapproval(self, preapproval_id: str) -> bool:
         """Pauses a subscription."""
+        self._verify_token()
         payload = {"status": "paused"}
         response = await self.client.put(f"/preapproval/{preapproval_id}", json=payload)
         return response.status_code == 200
         
     async def activate_preapproval(self, preapproval_id: str) -> bool:
         """Re-activates a paused subscription."""
+        self._verify_token()
         payload = {"status": "authorized"}
         response = await self.client.put(f"/preapproval/{preapproval_id}", json=payload)
         return response.status_code == 200
 
     async def cancel_preapproval(self, preapproval_id: str) -> bool:
         """Cancels a subscription."""
+        self._verify_token()
         payload = {"status": "cancelled"}
         response = await self.client.put(f"/preapproval/{preapproval_id}", json=payload)
         return response.status_code == 200
         
     async def get_payment_info(self, payment_id: str) -> Dict[str, Any]:
         """Gets detailed info about a specific payment to verify webhooks."""
+        self._verify_token()
         response = await self.client.get(f"/v1/payments/{payment_id}")
         response.raise_for_status()
         return response.json()
@@ -114,6 +130,7 @@ class MercadoPagoService:
         """
         Transfers money to a CVU using MP money_transfers API.
         """
+        self._verify_token()
         # We need idempotency key for transfers
         headers = dict(self.headers)
         headers["X-Idempotency-Key"] = f"transfer_{external_reference}"
