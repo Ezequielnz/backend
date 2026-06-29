@@ -25,6 +25,21 @@ class MercadoPagoService:
                 "en las variables de entorno de Render. Por favor, asocie sus credenciales de Mercado Pago."
             )
 
+    def _check_response_status(self, response: httpx.Response):
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            try:
+                err_data = response.json()
+                detail = err_data.get("message") or str(err_data)
+                if "cause" in err_data and isinstance(err_data["cause"], list):
+                    causes = [c.get("description") for c in err_data["cause"] if c.get("description")]
+                    if causes:
+                        detail += f" ({', '.join(causes)})"
+            except Exception:
+                detail = response.text
+            raise ValueError(f"Error de Mercado Pago ({response.status_code}): {detail}")
+
     async def get_or_create_plan(self) -> str:
         """
         Creates or retrieves the main subscription plan in Mercado Pago.
@@ -54,7 +69,7 @@ class MercadoPagoService:
         }
         
         response = await self.client.post("/preapproval_plan", json=payload)
-        response.raise_for_status()
+        self._check_response_status(response)
         data = response.json()
         logger.info(f"Creado plan MP: {data['id']}")
         return data["id"]
@@ -84,7 +99,7 @@ class MercadoPagoService:
         }
         
         response = await self.client.post("/preapproval", json=payload)
-        response.raise_for_status()
+        self._check_response_status(response)
         data = response.json()
         return {
             "init_point": data["init_point"],
@@ -95,7 +110,7 @@ class MercadoPagoService:
         """Consults the status of a subscription."""
         self._verify_token()
         response = await self.client.get(f"/preapproval/{preapproval_id}")
-        response.raise_for_status()
+        self._check_response_status(response)
         return response.json()
 
     async def pause_preapproval(self, preapproval_id: str) -> bool:
@@ -123,7 +138,7 @@ class MercadoPagoService:
         """Gets detailed info about a specific payment to verify webhooks."""
         self._verify_token()
         response = await self.client.get(f"/v1/payments/{payment_id}")
-        response.raise_for_status()
+        self._check_response_status(response)
         return response.json()
 
     async def transfer_commission(self, amount: float, receptor_cvu: str, description: str, external_reference: str) -> Dict[str, Any]:
@@ -147,7 +162,7 @@ class MercadoPagoService:
         # Note: B2B transfers might require special scopes or different API depending on account setup.
         # This uses the standard money_transfer API
         response = await self.client.post("/v1/money_transfers", json=payload, headers=headers)
-        response.raise_for_status()
+        self._check_response_status(response)
         return response.json()
         
     async def close(self):
