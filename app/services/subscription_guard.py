@@ -33,44 +33,59 @@ async def check_subscription(
             return current_user
             
         user_data = response.data[0]
+        is_exempt = user_data.get("is_exempt") is True
         
         # 1. Exempt users can bypass the paywall
-        if user_data.get("is_exempt") is True:
+        if is_exempt:
             return current_user
             
         subscription_status = user_data.get("subscription_status")
         trial_end_str = user_data.get("trial_end")
         
-        # 2. Check active subscription
+        # 2. Check and handle trial expiration
+        if subscription_status == 'trial' and trial_end_str:
+            try:
+                # Handle Z timezone indicator
+                clean_trial_end = trial_end_str
+                if clean_trial_end.endswith('Z'):
+                    clean_trial_end = clean_trial_end[:-1] + '+00:00'
+                trial_end = datetime.fromisoformat(clean_trial_end)
+                now = datetime.now(timezone.utc)
+                
+                if trial_end <= now:
+                    # Update DB to trial_expired
+                    try:
+                        db.table("usuarios").update({"subscription_status": "trial_expired"}).eq("id", user_id).execute()
+                        logger.info(f"Usuario {user_id} trial expiró. Estado actualizado en DB a trial_expired.")
+                        subscription_status = "trial_expired"
+                    except Exception as db_err:
+                        logger.error(f"Error actualizando estado de trial expirado en DB para usuario {user_id}: {db_err}")
+            except ValueError as e:
+                logger.error(f"Error parsing trial_end date: {e} for user {user_id}")
+        
+        # 3. Check active subscription
         if subscription_status == 'active':
             return current_user
             
-        # 3. Check active trial
+        # 4. Check active trial
         if subscription_status == 'trial' and trial_end_str:
-            # Parse trial_end string to datetime aware
-            # Supabase returns ISO format string like '2023-10-27T10:00:00+00:00'
             try:
-                # Handle Z timezone indicator
-                if trial_end_str.endswith('Z'):
-                    trial_end_str = trial_end_str[:-1] + '+00:00'
-                trial_end = datetime.fromisoformat(trial_end_str)
+                clean_trial_end = trial_end_str
+                if clean_trial_end.endswith('Z'):
+                    clean_trial_end = clean_trial_end[:-1] + '+00:00'
+                trial_end = datetime.fromisoformat(clean_trial_end)
                 now = datetime.now(timezone.utc)
-                
                 if trial_end > now:
                     return current_user
-            except ValueError as e:
-                logger.error(f"Error parsing trial_end date: {e} for user {current_user.id}")
-                pass # If parsing fails, fall through to block access
+            except Exception:
+                pass
                 
         # If we reach here, the user is neither exempt, active, nor in an active trial
-        # Según el requerimiento: "no debe de salir un error si el cliente no pagó."
-        # Como aún se está probando el sistema, permitimos el acceso pero registramos una advertencia
-        logger.warning(
-            f"Usuario {user_id} requiere pago (estado: {subscription_status}), "
-            "pero se permite acceso temporal por fase de pruebas."
+        logger.warning(f"Acceso denegado: Usuario {user_id} requiere pago (estado: {subscription_status}).")
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="Suscripción requerida"
         )
-        # Devolver el current_user para no bloquear las llamadas a la API
-        return current_user
         
     except HTTPException:
         raise

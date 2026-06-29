@@ -69,7 +69,24 @@ async def get_subscription_status(
 ):
     """Returns the current subscription status from our DB."""
     res = db.table("usuarios").select("subscription_status, trial_end, is_exempt, free_months_pending").eq("id", current_user.id).single().execute()
-    return res.data
+    data = res.data
+    
+    if data and data.get("subscription_status") == 'trial' and data.get("trial_end"):
+        try:
+            trial_end_str = data["trial_end"]
+            if trial_end_str.endswith('Z'):
+                trial_end_str = trial_end_str[:-1] + '+00:00'
+            trial_end = datetime.fromisoformat(trial_end_str)
+            now = datetime.now(timezone.utc)
+            
+            if trial_end <= now:
+                # Update DB to trial_expired
+                db.table("usuarios").update({"subscription_status": "trial_expired"}).eq("id", current_user.id).execute()
+                data["subscription_status"] = "trial_expired"
+        except Exception as e:
+            logger.error(f"Error checking trial expiration in /status: {e}")
+            
+    return data
 
 def verify_mp_signature(request: Request, payload: bytes) -> bool:
     """Verifies the webhook signature from Mercado Pago."""

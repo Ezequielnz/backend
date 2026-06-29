@@ -243,12 +243,13 @@ async def signup(user_data: UserSignUp) -> Any:
             
             print(f"Configurando suscripción para {user_data.email}: {update_data}")
             
+            service_db = get_supabase_service_client()
             max_retries = 5
             for attempt in range(max_retries):
                 try:
-                    # Intentamos actualizar. Si el usuario no existe aún en public.usuarios,
-                    # response.data estará vacío.
-                    response = supabase.table("usuarios").update(update_data).eq("id", user_id).execute()
+                    # Intentamos actualizar usando el cliente de servicio para omitir RLS.
+                    # Si el usuario no existe aún en public.usuarios, response.data estará vacío.
+                    response = service_db.table("usuarios").update(update_data).eq("id", user_id).execute()
                     
                     if response.data and len(response.data) > 0:
                         print(f"Suscripción configurada correctamente en intento {attempt + 1}")
@@ -349,6 +350,23 @@ async def read_users_me(request: Request) -> Any:
         
         user_data = response.data[0]
         print(f"Datos de usuario encontrados: {user_data.keys()}")
+        
+        # Check trial expiration and update status in database
+        if user_data.get("subscription_status") == 'trial' and user_data.get("trial_end"):
+            try:
+                trial_end_str = user_data["trial_end"]
+                if trial_end_str.endswith('Z'):
+                    trial_end_str = trial_end_str[:-1] + '+00:00'
+                trial_end = datetime.fromisoformat(trial_end_str)
+                now = datetime.now(timezone.utc)
+                
+                if trial_end <= now:
+                    service_db = get_supabase_service_client()
+                    service_db.table("usuarios").update({"subscription_status": "trial_expired"}).eq("id", user_id).execute()
+                    print(f"Usuario {user_id} trial expiró. Estado actualizado en DB a trial_expired (desde /me).")
+                    user_data["subscription_status"] = "trial_expired"
+            except Exception as e:
+                print(f"Error checking trial expiration in /me: {e}")
         
         # Asegurar que permisos sea una lista si es None
         if user_data.get("permisos") is None:
