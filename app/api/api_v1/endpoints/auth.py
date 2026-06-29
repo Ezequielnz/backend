@@ -225,10 +225,10 @@ async def signup(user_data: UserSignUp) -> Any:
             
             if user_data.referral_code:
                 # Buscar al referente
-                ref_user = supabase.table("usuarios").select("id, es_contador").eq("referral_code", user_data.referral_code).execute()
+                ref_user = supabase.table("usuarios").select("id").eq("referral_code", user_data.referral_code).execute()
                 if ref_user.data:
                     referred_by_user_id = ref_user.data[0]["id"]
-                    referrer_type = "contador" if ref_user.data[0].get("es_contador") else "operixml"
+                    referrer_type = "operixml"
                     print(f"Usuario referido por {referred_by_user_id} ({referrer_type})")
 
             update_data = {
@@ -625,7 +625,8 @@ async def check_email_confirmation(email: str) -> Any:
     """
     try:
         # 1. Obtener ID del usuario desde tabla pública
-        supabase = get_supabase_client()
+        from app.db.supabase_client import get_supabase_service_client
+        supabase = get_supabase_service_client()
         user_query = supabase.table("usuarios").select("id").eq("email", email).execute()
         
         if not user_query.data:

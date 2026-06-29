@@ -283,13 +283,13 @@ async def mercadopago_webhook(
 async def get_referral_code(current_user: Any = Depends(get_current_user), db = Depends(get_db)):
     """Returns the user's referral code and their status."""
     user_id = current_user.get("id") if isinstance(current_user, dict) else getattr(current_user, "id", None)
-    res = db.table("usuarios").select("referral_code, es_contador, free_months_pending, total_comision_ganada").eq("id", user_id).single().execute()
+    res = db.table("usuarios").select("referral_code, free_months_pending, total_comision_ganada").eq("id", user_id).single().execute()
     return res.data
 
 @router.get("/validate-referral/{code}")
 async def validate_referral_code(code: str, db = Depends(get_db)):
     """Validates if a referral code exists before registration."""
-    res = db.table("usuarios").select("id, nombre, es_contador").eq("referral_code", code).execute()
+    res = db.table("usuarios").select("id, nombre").eq("referral_code", code).execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="Código inválido")
     
@@ -297,5 +297,13 @@ async def validate_referral_code(code: str, db = Depends(get_db)):
     return {
         "valid": True,
         "referrer_name": user.get("nombre"),
-        "type": "contador" if user.get("es_contador") else "operixml"
+        "type": "operixml"
     }
+
+@router.get("/referrals")
+async def get_my_referrals(current_user: Any = Depends(get_current_user), db = Depends(get_db)):
+    """Returns the list of users referred by the current user."""
+    user_id = current_user.get("id") if isinstance(current_user, dict) else getattr(current_user, "id", None)
+    res = db.table("usuarios").select("nombre, apellido, email, subscription_status, created_at").eq("referred_by_user_id", user_id).execute()
+    return res.data
+
