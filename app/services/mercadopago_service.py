@@ -9,8 +9,9 @@ class MercadoPagoService:
     BASE_URL = "https://api.mercadopago.com"
     
     def __init__(self):
+        token = (settings.MP_ACCESS_TOKEN or "").strip()
         self.headers = {
-            "Authorization": f"Bearer {settings.MP_ACCESS_TOKEN}",
+            "Authorization": f"Bearer {token}",
             "Content-Type": "application/json"
         }
         self.client = httpx.AsyncClient(base_url=self.BASE_URL, headers=self.headers, timeout=10.0)

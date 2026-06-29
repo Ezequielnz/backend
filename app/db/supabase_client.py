@@ -148,12 +148,21 @@ def get_supabase_user_client(user_token: str) -> Client:
          raise ValueError("SUPABASE_URL o SUPABASE_ANON_KEY no están configurados")
     
     # Asegurar que el token esté limpio (sin 'Bearer ' al inicio)
-    clean_token = user_token
-    if clean_token and clean_token.startswith('Bearer '):
-        clean_token = clean_token[7:]
+    clean_token = user_token.strip() if user_token else ""
+    if clean_token.startswith('Bearer '):
+        clean_token = clean_token[7:].strip()
     
     print(f"Token procesado (primeros 10 chars): {clean_token[:10] if clean_token else 'None'}...")
     
+    if not clean_token or clean_token == "undefined":
+        print("[AVISO] Token de usuario vacío o 'undefined', omitiendo configuración de autenticación.")
+        try:
+            client = create_client(url, anon_key)
+            return client
+        except Exception as e:
+            print(f"[ERROR] Error al crear cliente Supabase Base sin token: {str(e)}")
+            raise
+            
     try:
         # Create client with anon key
         client = create_client(url, anon_key)

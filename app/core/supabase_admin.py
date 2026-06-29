@@ -10,8 +10,7 @@ from app.core.config import settings
 class SupabaseAdmin:
     def __init__(self):
         self.project_url = settings.SUPABASE_URL
-        # Usar service role key si está disponible, sino usar la key normal
-        self.service_role_key = settings.SUPABASE_SERVICE_ROLE_KEY or settings.SUPABASE_KEY
+        self.service_role_key = (settings.SUPABASE_SERVICE_ROLE_KEY or settings.SUPABASE_KEY or "").strip()
         self.headers = {
             "Authorization": f"Bearer {self.service_role_key}",
             "Content-Type": "application/json",
