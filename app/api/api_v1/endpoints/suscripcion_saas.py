@@ -24,13 +24,16 @@ class WebhookResponse(BaseModel):
 @router.post("/checkout")
 async def create_checkout(
     request: CheckoutRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: Any = Depends(get_current_user),
     db = Depends(get_db)
 ):
     """Generates the MP checkout link. Takes into account referrals."""
     try:
+        user_id = current_user.get("id") if isinstance(current_user, dict) else getattr(current_user, "id", None)
+        user_email = current_user.get("email") if isinstance(current_user, dict) else getattr(current_user, "email", None)
+        
         # Check user details in DB
-        user_res = db.table("usuarios").select("*").eq("id", current_user.id).single().execute()
+        user_res = db.table("usuarios").select("*").eq("id", user_id).single().execute()
         user_data = user_res.data
         
         if not user_data:
@@ -43,15 +46,17 @@ async def create_checkout(
             
         # Create preapproval in MP
         mp_response = await mp_service.create_preapproval_link(
-            user_id=current_user.id,
-            user_email=current_user.email,
+            # pyrefly: ignore [bad-argument-type]
+            user_id=user_id,
+            # pyrefly: ignore [bad-argument-type]
+            user_email=user_email,
             free_months=free_months
         )
         
         # Save preapproval_id in DB to track it
         db.table("usuarios").update({
             "mp_preapproval_id": mp_response["preapproval_id"]
-        }).eq("id", current_user.id).execute()
+        }).eq("id", user_id).execute()
         
         return {
             "init_point": mp_response["init_point"],
@@ -64,11 +69,12 @@ async def create_checkout(
 
 @router.get("/status")
 async def get_subscription_status(
-    current_user: User = Depends(get_current_user),
+    current_user: Any = Depends(get_current_user),
     db = Depends(get_db)
 ):
     """Returns the current subscription status from our DB."""
-    res = db.table("usuarios").select("subscription_status, trial_end, is_exempt, free_months_pending").eq("id", current_user.id).single().execute()
+    user_id = current_user.get("id") if isinstance(current_user, dict) else getattr(current_user, "id", None)
+    res = db.table("usuarios").select("subscription_status, trial_end, is_exempt, free_months_pending").eq("id", user_id).single().execute()
     data = res.data
     
     if data and data.get("subscription_status") == 'trial' and data.get("trial_end"):
@@ -81,7 +87,7 @@ async def get_subscription_status(
             
             if trial_end <= now:
                 # Update DB to trial_expired
-                db.table("usuarios").update({"subscription_status": "trial_expired"}).eq("id", current_user.id).execute()
+                db.table("usuarios").update({"subscription_status": "trial_expired"}).eq("id", user_id).execute()
                 data["subscription_status"] = "trial_expired"
         except Exception as e:
             logger.error(f"Error checking trial expiration in /status: {e}")
@@ -274,9 +280,10 @@ async def mercadopago_webhook(
     return {"status": "success"}
 
 @router.get("/referral-code")
-async def get_referral_code(current_user: User = Depends(get_current_user), db = Depends(get_db)):
+async def get_referral_code(current_user: Any = Depends(get_current_user), db = Depends(get_db)):
     """Returns the user's referral code and their status."""
-    res = db.table("usuarios").select("referral_code, es_contador, free_months_pending, total_comision_ganada").eq("id", current_user.id).single().execute()
+    user_id = current_user.get("id") if isinstance(current_user, dict) else getattr(current_user, "id", None)
+    res = db.table("usuarios").select("referral_code, es_contador, free_months_pending, total_comision_ganada").eq("id", user_id).single().execute()
     return res.data
 
 @router.get("/validate-referral/{code}")
