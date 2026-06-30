@@ -50,6 +50,8 @@ async def check_subscription(
                 if clean_trial_end.endswith('Z'):
                     clean_trial_end = clean_trial_end[:-1] + '+00:00'
                 trial_end = datetime.fromisoformat(clean_trial_end)
+                if trial_end.tzinfo is None:
+                    trial_end = trial_end.replace(tzinfo=timezone.utc)
                 now = datetime.now(timezone.utc)
                 
                 if trial_end <= now:
@@ -60,7 +62,7 @@ async def check_subscription(
                         subscription_status = "trial_expired"
                     except Exception as db_err:
                         logger.error(f"Error actualizando estado de trial expirado en DB para usuario {user_id}: {db_err}")
-            except ValueError as e:
+            except Exception as e:
                 logger.error(f"Error parsing trial_end date: {e} for user {user_id}")
         
         # 3. Check active subscription
@@ -74,6 +76,8 @@ async def check_subscription(
                 if clean_trial_end.endswith('Z'):
                     clean_trial_end = clean_trial_end[:-1] + '+00:00'
                 trial_end = datetime.fromisoformat(clean_trial_end)
+                if trial_end.tzinfo is None:
+                    trial_end = trial_end.replace(tzinfo=timezone.utc)
                 now = datetime.now(timezone.utc)
                 if trial_end > now:
                     return current_user
