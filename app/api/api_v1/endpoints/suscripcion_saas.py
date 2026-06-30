@@ -307,3 +307,49 @@ async def get_my_referrals(current_user: Any = Depends(get_current_user), db = D
     res = db.table("usuarios").select("nombre, apellido, email, subscription_status, created_at").eq("referred_by_user_id", user_id).execute()
     return res.data
 
+
+@router.post("/cancel")
+async def cancel_subscription(
+    current_user: Any = Depends(get_current_user),
+    db = Depends(get_db)
+):
+    """
+    Cancels the user's Mercado Pago preapproval subscription and marks their
+    account as 'cancelled' in the database.
+    """
+    user_id = current_user.get("id") if isinstance(current_user, dict) else getattr(current_user, "id", None)
+
+    try:
+        # Get the user's preapproval ID from DB
+        user_res = db.table("usuarios").select("mp_preapproval_id, subscription_status").eq("id", user_id).single().execute()
+        user_data = user_res.data
+
+        if not user_data:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+        preapproval_id = user_data.get("mp_preapproval_id")
+
+        # Attempt to cancel in Mercado Pago if there is an active preapproval
+        if preapproval_id:
+            try:
+                await mp_service.cancel_preapproval(preapproval_id)
+                logger.info(f"Preapproval {preapproval_id} cancelled in Mercado Pago for user {user_id}")
+            except Exception as mp_err:
+                # Log the error but continue — still mark as cancelled in our DB
+                logger.error(f"Error cancelling preapproval {preapproval_id} in MP: {mp_err}")
+
+        # Update user status in DB
+        db.table("usuarios").update({
+            "subscription_status": "cancelled",
+            "mp_preapproval_id": None
+        }).eq("id", user_id).execute()
+
+        logger.info(f"User {user_id} subscription marked as cancelled.")
+        return {"message": "Suscripción cancelada exitosamente."}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error cancelling subscription for user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Error al cancelar la suscripción.")
+

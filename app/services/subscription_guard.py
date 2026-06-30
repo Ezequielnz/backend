@@ -85,10 +85,14 @@ async def check_subscription(
                 pass
                 
         # If we reach here, the user is neither exempt, active, nor in an active trial
-        logger.warning(f"Acceso denegado: Usuario {user_id} requiere pago (estado: {subscription_status}).")
+        # Allow read-only access so they can view the dashboard and see the notification banner
+        if request.method in ("GET", "OPTIONS"):
+            return current_user
+
+        logger.warning(f"Acceso denegado: Usuario {user_id} requiere pago (estado: {subscription_status}). Method: {request.method}")
         raise HTTPException(
             status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail="Suscripción requerida"
+            detail="Suscripción requerida para realizar acciones. Por favor regularice su pago."
         )
         
     except HTTPException:
