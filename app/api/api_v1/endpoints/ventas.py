@@ -281,83 +281,49 @@ async def record_sale_branch(
             raise HTTPException(status_code=500, detail="Error al crear los detalles de venta")
 
         # Actualizar stock de productos según configuración
-        # Use service_client to bypass RLS for stock updates (owner may not have RLS update permission)
+        # Usa función RPC con SECURITY DEFINER para bypass de RLS atómico en ambos modos.
         from app.db.supabase_client import get_supabase_service_client
         svc_client = get_supabase_service_client()
-        
+
         settings = context.branch_settings or {}
         inventario_modo = settings.get("inventario_modo", "centralizado")
         logger.info(
             "[record_sale_branch] Actualizando stock venta_id=%s, modo=%s, branch=%s",
             venta_id, inventario_modo, branch_id
         )
-        
+
         for item in venta_data.items:
             if item.tipo == "producto":
                 try:
                     cantidad_vendida = float(item.cantidad)
-                    if inventario_modo == "por_sucursal":
-                        # Actualizar en inventario_sucursal usando service_client
-                        inv_resp = (
-                            svc_client.table("inventario_sucursal")
-                            .select("id, stock_actual")
-                            .eq("producto_id", item.id)
-                            .eq("sucursal_id", branch_id)
-                            .eq("negocio_id", business_id)
-                            .execute()
+                    # Usar RPC con SECURITY DEFINER: opera atómicamente y bypasa RLS
+                    # para ambos modos de inventario (centralizado y por_sucursal).
+                    rpc_resp = svc_client.rpc(
+                        "deduct_stock_on_sale",
+                        {
+                            "p_producto_id": item.id,
+                            "p_negocio_id": business_id,
+                            "p_cantidad": cantidad_vendida,
+                            "p_inventario_modo": inventario_modo,
+                            "p_sucursal_id": branch_id,
+                        }
+                    ).execute()
+                    if rpc_resp.data:
+                        result = rpc_resp.data[0]
+                        logger.info(
+                            "[stock] RPC deduct_stock_on_sale producto=%s: success=%s, %s",
+                            item.id, result.get("success"), result.get("mensaje")
                         )
-                        if inv_resp.data:
-                            stock_actual = float(inv_resp.data[0].get("stock_actual") or 0)
-                            nuevo_stock = max(0.0, stock_actual - cantidad_vendida)
-                            logger.info(
-                                "[stock] producto=%s, stock_actual=%.4f, vendido=%.4f, nuevo_stock=%.4f",
-                                item.id, stock_actual, cantidad_vendida, nuevo_stock
-                            )
-                            svc_client.table("inventario_sucursal").update({
-                                "stock_actual": nuevo_stock
-                            }).eq("id", inv_resp.data[0]["id"]).execute()
-                        else:
-                            # No existe registro en inventario_sucursal — crearlo con stock 0
-                            # (la venta ya se procesó; el stock negativo no se permite)
+                        if not result.get("success"):
                             logger.warning(
-                                "[stock] No existe registro inventario_sucursal para producto=%s sucursal=%s. Creando con stock=0.",
-                                item.id, branch_id
+                                "[stock] RPC no pudo descontar stock producto=%s venta=%s: %s",
+                                item.id, venta_id, result.get("mensaje")
                             )
-                            svc_client.table("inventario_sucursal").insert({
-                                "negocio_id": business_id,
-                                "sucursal_id": branch_id,
-                                "producto_id": item.id,
-                                "stock_actual": 0,
-                            }).execute()
                     else:
-                        # Modo centralizado: actualizar productos.stock_actual
-                        producto_response = (
-                            svc_client.table("productos")
-                            .select("id, stock_actual")
-                            .eq("id", item.id)
-                            .eq("negocio_id", business_id)
-                            .execute()
+                        logger.warning(
+                            "[stock] RPC deduct_stock_on_sale sin datos para producto=%s venta=%s",
+                            item.id, venta_id
                         )
-                        if producto_response.data:
-                            stock_actual = float(producto_response.data[0].get("stock_actual") or 0)
-                            nuevo_stock = max(0.0, stock_actual - cantidad_vendida)
-                            logger.info(
-                                "[stock] producto=%s, stock_actual=%.4f, vendido=%.4f, nuevo_stock=%.4f",
-                                item.id, stock_actual, cantidad_vendida, nuevo_stock
-                            )
-                            svc_client.table("productos").update({
-                                "stock_actual": nuevo_stock
-                            }).eq("id", item.id).execute()
-                            
-                            # Mantener inventario_negocio sincronizado
-                            svc_client.table("inventario_negocio").update({
-                                "stock_total": nuevo_stock
-                            }).eq("producto_id", item.id).eq("negocio_id", business_id).execute()
-                        else:
-                            logger.warning(
-                                "[stock] Producto %s no encontrado para actualizar stock centralizado.",
-                                item.id
-                            )
                 except Exception as stock_err:
                     # Stock update failure must NOT abort the response — the sale is already
                     # committed. Log the error for manual review instead of crashing.
