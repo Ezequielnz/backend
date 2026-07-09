@@ -191,7 +191,7 @@ async def create_purchase(
             total += subtotal
             items_preparados.append({
                 "producto_id": it.producto_id,
-                "cantidad": int(it.cantidad),
+                "cantidad": float(it.cantidad),
                 "precio_unitario": float(it.precio_unitario),
                 "subtotal": subtotal,
             })
@@ -276,7 +276,7 @@ async def create_purchase(
                             .execute()
                         )
                         actual = inv_resp2.data[0].get("stock_actual", 0) if inv_resp2.data else 0
-                        nuevo = int(actual) + int(it["cantidad"])
+                        nuevo = float(actual) + float(it["cantidad"])
                         print(f"[COMPRAS] Sucursal - stock actual: {actual}, nuevo: {nuevo}")
                         if inv_resp2.data:
                             svc.table("inventario_sucursal").update({
@@ -303,7 +303,7 @@ async def create_purchase(
                         )
                         if prod_resp2.data:
                             actual = prod_resp2.data[0].get("stock_actual", 0) or 0
-                            nuevo = int(actual) + int(it["cantidad"])
+                            nuevo = float(actual) + float(it["cantidad"])
                             print(f"[COMPRAS] Centralizado - stock actual: {actual}, nuevo: {nuevo}")
                             svc.table("productos").update({
                                 "stock_actual": nuevo,
@@ -459,7 +459,7 @@ async def update_purchase(
                     if inventario_modo == "por_sucursal":
                         inv_resp2 = svc.table("inventario_sucursal").select("stock_actual").eq("producto_id", it["producto_id"]).eq("sucursal_id", context.branch_id).eq("negocio_id", business_id).execute()
                         actual = inv_resp2.data[0].get("stock_actual", 0) if inv_resp2.data else 0
-                        nuevo = int(actual) + int(it["cantidad"])
+                        nuevo = float(actual) + float(it["cantidad"])
                         svc.table("inventario_sucursal").update({"stock_actual": nuevo}).eq("producto_id", it["producto_id"]).eq("sucursal_id", context.branch_id).execute()
                         svc.table("productos").update({"precio_compra": float(it["precio_unitario"]) if it.get("precio_unitario") is not None else None}).eq("id", it["producto_id"]).eq("negocio_id", business_id).execute()
                     else:
@@ -473,7 +473,7 @@ async def update_purchase(
                         )
                         if prod_resp2.data:
                             actual = prod_resp2.data[0].get("stock_actual", 0) or 0
-                            nuevo = int(actual) + int(it["cantidad"])
+                            nuevo = float(actual) + float(it["cantidad"])
                             svc.table("productos").update({
                                 "stock_actual": nuevo,
                                 "precio_compra": float(it["precio_unitario"]) if it.get("precio_unitario") is not None else None,
@@ -489,7 +489,7 @@ async def update_purchase(
                     if inventario_modo == "por_sucursal":
                         inv_resp2 = svc.table("inventario_sucursal").select("stock_actual").eq("producto_id", it["producto_id"]).eq("sucursal_id", context.branch_id).eq("negocio_id", business_id).execute()
                         actual = inv_resp2.data[0].get("stock_actual", 0) if inv_resp2.data else 0
-                        nuevo = int(actual) - int(it["cantidad"])
+                        nuevo = float(actual) - float(it["cantidad"])
                         if nuevo < 0:
                             nuevo = 0
                         svc.table("inventario_sucursal").update({"stock_actual": nuevo}).eq("producto_id", it["producto_id"]).eq("sucursal_id", context.branch_id).execute()
@@ -504,7 +504,7 @@ async def update_purchase(
                         )
                         if prod_resp2.data:
                             actual = prod_resp2.data[0].get("stock_actual", 0) or 0
-                            nuevo = int(actual) - int(it["cantidad"])
+                            nuevo = float(actual) - float(it["cantidad"])
                             if nuevo < 0:
                                 nuevo = 0
                             svc.table("productos").update({
@@ -600,7 +600,7 @@ async def delete_purchase(
                 if inventario_modo == "por_sucursal":
                     inv_resp2 = svc.table("inventario_sucursal").select("stock_actual").eq("producto_id", it["producto_id"]).eq("sucursal_id", context.branch_id).eq("negocio_id", business_id).execute()
                     actual = inv_resp2.data[0].get("stock_actual", 0) if inv_resp2.data else 0
-                    nuevo = int(actual) - int(it["cantidad"])
+                    nuevo = float(actual) - float(it["cantidad"])
                     if nuevo < 0:
                         nuevo = 0
                     svc.table("inventario_sucursal").update({"stock_actual": nuevo}).eq("producto_id", it["producto_id"]).eq("sucursal_id", context.branch_id).execute()
@@ -615,7 +615,7 @@ async def delete_purchase(
                     )
                     if prod_resp.data:
                         actual = prod_resp.data[0].get("stock_actual", 0) or 0
-                        nuevo = int(actual) - int(it["cantidad"])
+                        nuevo = float(actual) - float(it["cantidad"])
                         if nuevo < 0:
                             nuevo = 0
                         svc.table("productos").update({"stock_actual": nuevo}).eq("id", it["producto_id"]).eq("negocio_id", business_id).execute()
