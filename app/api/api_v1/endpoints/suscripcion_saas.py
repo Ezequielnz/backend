@@ -74,8 +74,39 @@ async def get_subscription_status(
 ):
     """Returns the current subscription status from our DB."""
     user_id = current_user.get("id") if isinstance(current_user, dict) else getattr(current_user, "id", None)
-    res = db.table("usuarios").select("subscription_status, trial_end, is_exempt, free_months_pending").eq("id", user_id).single().execute()
-    data = res.data
+    user_email = current_user.get("email") if isinstance(current_user, dict) else getattr(current_user, "email", None)
+    
+    # 1. Fast-path settings exemption check
+    if user_email and user_email in getattr(settings, "EXEMPT_EMAILS", []):
+        return {
+            "subscription_status": "active",
+            "trial_end": None,
+            "is_exempt": True,
+            "free_months_pending": 0
+        }
+        
+    # 2. Query DB safely
+    try:
+        # Use execute() and check data to avoid exceptions raised by single() when no rows exist
+        res = db.table("usuarios").select("subscription_status, trial_end, is_exempt, free_months_pending").eq("id", user_id).limit(1).execute()
+        if not res.data:
+            logger.warning(f"Usuario {user_id} no encontrado en tabla usuarios al consultar status.")
+            return {
+                "subscription_status": "trial",
+                "trial_end": None,
+                "is_exempt": False,
+                "free_months_pending": 0
+            }
+        data = res.data[0]
+    except Exception as e:
+        logger.error(f"Error fetching subscription status from DB for user {user_id}: {e}")
+        return {
+            "subscription_status": "trial",
+            "trial_end": None,
+            "is_exempt": False,
+            "free_months_pending": 0,
+            "db_error": True
+        }
     
     if data and data.get("subscription_status") == 'trial' and data.get("trial_end"):
         try:
@@ -87,8 +118,12 @@ async def get_subscription_status(
             
             if trial_end <= now:
                 # Update DB to trial_expired
-                db.table("usuarios").update({"subscription_status": "trial_expired"}).eq("id", user_id).execute()
-                data["subscription_status"] = "trial_expired"
+                try:
+                    db.table("usuarios").update({"subscription_status": "trial_expired"}).eq("id", user_id).execute()
+                    data["subscription_status"] = "trial_expired"
+                except Exception as update_err:
+                    logger.error(f"Error updating trial expiration in DB: {update_err}")
+                    data["subscription_status"] = "trial_expired"
         except Exception as e:
             logger.error(f"Error checking trial expiration in /status: {e}")
             

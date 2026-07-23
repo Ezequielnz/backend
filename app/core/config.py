@@ -18,8 +18,29 @@ class Settings(BaseSettings):
     EXEMPT_EMAILS: list[str] = [
         "admin1@example.com", 
         "admin2@example.com", 
-        "admin3@example.com"
+        "admin3@example.com",
+        "ezequieln085@gmail.com",
+        "d4nunezzz@gmail.com"
     ]
+
+    @field_validator("EXEMPT_EMAILS", mode="before")
+    @classmethod
+    def assemble_exempt_emails(cls, v: object) -> list[str]:
+        if isinstance(v, str):
+            s = v.strip()
+            if not s:
+                return []
+            if s.startswith("[") and s.endswith("]"):
+                try:
+                    parsed_obj = json.loads(s)
+                    if isinstance(parsed_obj, list):
+                        return [str(i).strip() for i in parsed_obj]
+                except Exception:
+                    return [i.strip() for i in s.strip("[]").split(",") if i.strip()]
+            return [i.strip() for i in s.split(",") if i.strip()]
+        elif isinstance(v, list):
+            return [str(i).strip() for i in v]
+        return []
     
     # CORS configuration
     # Añadir http://localhost:5173 para aceptar peticiones del frontend de Vite
